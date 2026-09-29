@@ -20,3 +20,13 @@ spring:
       hibernate:
         format_sql: true
 
+jwt:
+  secret: ${JWT_SECRET:c2VjcmV0LWtleS1mb3ItZWR1Z3JhcGgtcmFnLWFwcGxpY2F0aW9uLTIwMjQtdXNlLWZvci1qd3QtdG9rZW4tc2lnbmluZw==}
+  access-token:
+    expiration: 3600000    # 1 hour in milliseconds
+  refresh-token:
+    expiration: 604800000  # 7 days in milliseconds
+
+server:
+  port: ${SERVER_PORT:8080}
+

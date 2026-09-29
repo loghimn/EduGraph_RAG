@@ -1,4 +1,4 @@
-package fu.se184610.coreservice;
+package fu.coreservice;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
