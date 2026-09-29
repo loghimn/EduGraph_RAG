@@ -10,7 +10,7 @@ import fu.coreservice.entity.UserSession;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.repository.UserSessionRepository;
 import jakarta.servlet.http.HttpServletRequest;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -21,8 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
+@Slf4j
 @Service
-@RequiredArgsConstructor
 public class AuthService {
 
     private final UserRepository userRepository;
@@ -31,6 +31,17 @@ public class AuthService {
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
     private final UserDetailsService userDetailsService;
+
+    public AuthService(UserRepository userRepository, UserSessionRepository userSessionRepository,
+                       PasswordEncoder passwordEncoder, JwtService jwtService,
+                       AuthenticationManager authenticationManager, UserDetailsService userDetailsService) {
+        this.userRepository = userRepository;
+        this.userSessionRepository = userSessionRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtService = jwtService;
+        this.authenticationManager = authenticationManager;
+        this.userDetailsService = userDetailsService;
+    }
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
@@ -53,6 +64,13 @@ public class AuthService {
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
         String accessToken = jwtService.generateAccessToken(userDetails);
         String refreshToken = jwtService.generateRefreshToken(userDetails);
+
+        UserSession session = UserSession.builder()
+                .user(user)
+                .refreshToken(refreshToken)
+                .expiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000))
+                .build();
+        userSessionRepository.save(session);
 
         return buildAuthResponse(accessToken, refreshToken);
     }

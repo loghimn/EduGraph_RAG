@@ -4,16 +4,25 @@ import fu.coreservice.dto.AuthResponse;
 import fu.coreservice.dto.LoginRequest;
 import fu.coreservice.dto.RefreshTokenRequest;
 import fu.coreservice.dto.RegisterRequest;
+import fu.coreservice.dto.UserInfoResponse;
+import fu.coreservice.entity.User;
+import fu.coreservice.repository.UserRepository;
 import fu.coreservice.service.AuthService;
+import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+
+import java.io.IOException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -23,6 +32,33 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final UserRepository userRepository;
+
+    // ── Google OAuth2 Login (Swagger Authorize button) ─────────────────
+
+    /**
+     * Proxy endpoint for Swagger's OAuth2 Authorize button.
+     * Stores a flag in HTTP session so OAuth2LoginSuccessHandler knows
+     * to redirect back to Swagger's oauth2-redirect.html with JWT.
+     */
+    @Hidden
+    @GetMapping("/google/authorize")
+    public void googleAuthorizeProxy(
+            @RequestParam(value = "state", required = false) String state,
+            @RequestParam(value = "redirect_uri", required = false) String redirectUri,
+            HttpServletRequest request,
+            HttpServletResponse response) throws IOException {
+
+        // Store Swagger's state + redirect_uri in session
+        request.getSession().setAttribute("fromSwagger", true);
+        request.getSession().setAttribute("swagger_state", state);
+        request.getSession().setAttribute("swagger_redirect_uri", redirectUri);
+
+        // Redirect to Spring Security's built-in OAuth2 login flow
+        response.sendRedirect("/oauth2/authorization/google");
+    }
+
+    // ── Standard JWT endpoints ─────────────────────────────────────────
 
     @Operation(
             summary = "Register a new account",
@@ -98,5 +134,37 @@ public class AuthController {
         authService.logoutAllSessions(userId);
         return ResponseEntity.ok("All sessions logged out successfully");
     }
+
+    @Operation(
+            summary = "Get current user info",
+            description = "Returns the profile of the currently authenticated user. "
+                    + "Requires Bearer token in Authorization header.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "User info returned"),
+                    @ApiResponse(responseCode = "401", description = "Not authenticated")
+            }
+    )
+    @GetMapping("/me")
+    public ResponseEntity<UserInfoResponse> getCurrentUser(
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        if (userDetails == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        User user = userRepository.findByEmail(userDetails.getUsername())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        UserInfoResponse response = UserInfoResponse.builder()
+                .userId(user.getUserId())
+                .email(user.getEmail())
+                .username(user.getUsername())
+                .role(user.getRole())
+                .isActive(user.getIsActive())
+                .build();
+
+        return ResponseEntity.ok(response);
+    }
+
 }
 
