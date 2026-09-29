@@ -1,6 +1,5 @@
 package fu.coreservice.dto;
 
-import fu.coreservice.entity.UserRole;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -18,8 +17,5 @@ public class AuthResponse {
     private String refreshToken;
     private String tokenType;
     private Long expiresIn;
-    private Long userId;
-    private String email;
-    private String username;
-    private UserRole role;
 }
+

@@ -27,6 +27,14 @@ jwt:
   refresh-token:
     expiration: 604800000  # 7 days in milliseconds
 
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
 server:
   port: ${SERVER_PORT:8080}
 

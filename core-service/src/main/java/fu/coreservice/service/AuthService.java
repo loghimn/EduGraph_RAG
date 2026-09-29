@@ -54,7 +54,7 @@ public class AuthService {
         String accessToken = jwtService.generateAccessToken(userDetails);
         String refreshToken = jwtService.generateRefreshToken(userDetails);
 
-        return buildAuthResponse(accessToken, refreshToken, user);
+        return buildAuthResponse(accessToken, refreshToken);
     }
 
     public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
@@ -82,7 +82,7 @@ public class AuthService {
                 .build();
         userSessionRepository.save(session);
 
-        return buildAuthResponse(accessToken, refreshToken, user);
+        return buildAuthResponse(accessToken, refreshToken);
     }
 
     @Transactional
@@ -105,7 +105,7 @@ public class AuthService {
         session.setExpiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000));
         userSessionRepository.save(session);
 
-        return buildAuthResponse(newAccessToken, newRefreshToken, user);
+        return buildAuthResponse(newAccessToken, newRefreshToken);
     }
 
     @Transactional
@@ -122,16 +122,12 @@ public class AuthService {
         userSessionRepository.deleteAllByUser(user);
     }
 
-    private AuthResponse buildAuthResponse(String accessToken, String refreshToken, User user) {
+    private AuthResponse buildAuthResponse(String accessToken, String refreshToken) {
         return AuthResponse.builder()
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
                 .tokenType("Bearer")
                 .expiresIn(jwtService.getAccessTokenExpiration() / 1000)
-                .userId(user.getUserId())
-                .email(user.getEmail())
-                .username(user.getUsername())
-                .role(user.getRole())
                 .build();
     }
 
