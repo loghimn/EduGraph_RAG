@@ -56,8 +56,8 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
 
         // Generate JWT tokens
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String accessToken = jwtService.generateAccessToken(userDetails);
-        String refreshToken = jwtService.generateRefreshToken(userDetails);
+        String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
+        String refreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
 
         // Save session (with ipAddress + userAgent for consistency with AuthService.login)
         UserSession session = UserSession.builder()

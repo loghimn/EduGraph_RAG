@@ -62,8 +62,8 @@ public class AuthService {
 
         user = userRepository.save(user);
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String accessToken = jwtService.generateAccessToken(userDetails);
-        String refreshToken = jwtService.generateRefreshToken(userDetails);
+        String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
+        String refreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
 
         UserSession session = UserSession.builder()
                 .user(user)
@@ -88,8 +88,8 @@ public class AuthService {
         }
 
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String accessToken = jwtService.generateAccessToken(userDetails);
-        String refreshToken = jwtService.generateRefreshToken(userDetails);
+        String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
+        String refreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
 
         UserSession session = UserSession.builder()
                 .user(user)
@@ -116,8 +116,8 @@ public class AuthService {
 
         User user = session.getUser();
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String newAccessToken = jwtService.generateAccessToken(userDetails);
-        String newRefreshToken = jwtService.generateRefreshToken(userDetails);
+        String newAccessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
+        String newRefreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
 
         session.setRefreshToken(newRefreshToken);
         session.setExpiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000));

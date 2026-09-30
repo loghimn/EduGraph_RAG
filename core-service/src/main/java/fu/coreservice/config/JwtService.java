@@ -34,18 +34,31 @@ public class JwtService {
         return extractClaim(token, Claims::getExpiration);
     }
 
+    public Long extractUserId(String token) {
+        return extractClaim(token, claims -> claims.get("userId", Long.class));
+    }
+
+    public String extractRole(String token) {
+        return extractClaim(token, claims -> claims.get("role", String.class));
+    }
+
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
         final Claims claims = extractAllClaims(token);
         return claimsResolver.apply(claims);
     }
 
-    public String generateAccessToken(UserDetails userDetails) {
+    public String generateAccessToken(UserDetails userDetails, Long userId, String role) {
         Map<String, Object> extraClaims = new HashMap<>();
+        extraClaims.put("userId", userId);
+        extraClaims.put("role", role);
         return generateToken(extraClaims, userDetails, accessTokenExpiration);
     }
 
-    public String generateRefreshToken(UserDetails userDetails) {
-        return generateToken(new HashMap<>(), userDetails, refreshTokenExpiration);
+    public String generateRefreshToken(UserDetails userDetails, Long userId, String role) {
+        Map<String, Object> extraClaims = new HashMap<>();
+        extraClaims.put("userId", userId);
+        extraClaims.put("role", role);
+        return generateToken(extraClaims, userDetails, refreshTokenExpiration);
     }
 
     private String generateToken(Map<String, Object> extraClaims, UserDetails userDetails, long expiration) {
