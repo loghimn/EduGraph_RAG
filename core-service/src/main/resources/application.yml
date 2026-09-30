@@ -1,6 +1,8 @@
 spring:
   application:
     name: ${SPRING_NAME}
+  profiles:
+    active: dev
 
   datasource:
     url: ${DB_URL}
@@ -19,4 +21,46 @@ spring:
     properties:
       hibernate:
         format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
 
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - email
+              - profile
+        provider:
+          google:
+            authorization-uri: https://accounts.google.com/o/oauth2/v2/auth
+            token-uri: https://oauth2.googleapis.com/token
+            user-info-uri: https://www.googleapis.com/oauth2/v3/userinfo
+            jwk-set-uri: https://www.googleapis.com/oauth2/v3/certs
+            user-name-attribute: email
+
+jwt:
+  secret: ${JWT_SECRET:c2VjcmV0LWtleS1mb3ItZWR1Z3JhcGgtcmFnLWFwcGxpY2F0aW9uLTIwMjQtdXNlLWZvci1qd3QtdG9rZW4tc2lnbmluZw==}
+  access-token:
+    expiration: 3600000    # 1 hour in milliseconds
+  refresh-token:
+    expiration: 604800000  # 7 days in milliseconds
+
+app:
+  oauth2:
+    frontend-success-url: ${FRONTEND_SUCCESS_URL:http://localhost:5173/auth/callback}
+    frontend-failure-url: ${FRONTEND_FAILURE_URL:http://localhost:5173/auth/error}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+    oauth2-redirect-url: http://localhost:8080/swagger-ui/oauth2-redirect.html
+  api-docs:
+    path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8080}
