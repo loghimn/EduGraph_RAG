@@ -1,4 +1,4 @@
-package fu.coreservice.dto;
+package fu.coreservice.dto.auth;
 
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -10,11 +10,8 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-public class LoginRequest {
+public class RefreshTokenRequest {
 
-    @NotBlank(message = "Email is required")
-    private String email;
-
-    @NotBlank(message = "Password is required")
-    private String password;
+    @NotBlank(message = "Refresh token is required")
+    private String refreshToken;
 }

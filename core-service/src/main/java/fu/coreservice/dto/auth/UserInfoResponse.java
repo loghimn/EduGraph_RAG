@@ -1,4 +1,4 @@
-package fu.coreservice.dto;
+package fu.coreservice.dto.auth;
 
 import fu.coreservice.entity.UserRole;
 import lombok.AllArgsConstructor;

@@ -1,17 +1,15 @@
 package fu.coreservice.controller;
 
+import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.AuthResponse;
-import fu.coreservice.dto.LoginRequest;
-import fu.coreservice.dto.RefreshTokenRequest;
-import fu.coreservice.dto.RegisterRequest;
-import fu.coreservice.dto.UserInfoResponse;
-import fu.coreservice.entity.User;
-import fu.coreservice.repository.UserRepository;
+import fu.coreservice.dto.auth.LoginRequest;
+import fu.coreservice.dto.auth.RefreshTokenRequest;
+import fu.coreservice.dto.auth.RegisterRequest;
+import fu.coreservice.dto.auth.UserInfoResponse;
 import fu.coreservice.service.AuthService;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -32,10 +30,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
-    private final UserRepository userRepository;
-
     // ── Google OAuth2 Login (Swagger Authorize button) ─────────────────
-
     /**
      * Proxy endpoint for Swagger's OAuth2 Authorize button.
      * Stores a flag in HTTP session so OAuth2LoginSuccessHandler knows
@@ -64,75 +59,103 @@ public class AuthController {
             summary = "Register a new account",
             description = "Create a new user account with email, username, password, and role",
             responses = {
-                    @ApiResponse(responseCode = "201", description = "Account created successfully"),
-                    @ApiResponse(responseCode = "400", description = "Email/username already exists or invalid input")
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Account created successfully"),
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Email/username already exists or invalid input")
             }
     )
     @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
+    public ResponseEntity<ApiResponse<AuthResponse>> register(@Valid @RequestBody RegisterRequest request) {
         AuthResponse response = authService.register(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return ResponseEntity.status(HttpStatus.CREATED).body(
+                ApiResponse.<AuthResponse>builder()
+                        .success(true)
+                        .message("Account created successfully")
+                        .data(response)
+                        .build()
+        );
     }
 
     @Operation(
             summary = "Login",
             description = "Authenticate with email and password, returns access & refresh tokens",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "Login successful"),
-                    @ApiResponse(responseCode = "401", description = "Invalid credentials")
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Login successful"),
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Invalid credentials")
             }
     )
     @PostMapping("/login")
-    public ResponseEntity<AuthResponse> login(
+    public ResponseEntity<ApiResponse<AuthResponse>> login(
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest
     ) {
         AuthResponse response = authService.login(request, httpRequest);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(
+                ApiResponse.<AuthResponse>builder()
+                        .success(true)
+                        .message("Login successful")
+                        .data(response)
+                        .build()
+        );
     }
 
     @Operation(
             summary = "Refresh access token",
             description = "Use a valid refresh token to get a new access token + refresh token",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "Token refreshed successfully"),
-                    @ApiResponse(responseCode = "400", description = "Invalid or expired refresh token")
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Token refreshed successfully"),
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid or expired refresh token")
             }
     )
     @PostMapping("/refresh")
-    public ResponseEntity<AuthResponse> refreshToken(
+    public ResponseEntity<ApiResponse<AuthResponse>> refreshToken(
             @Valid @RequestBody RefreshTokenRequest request
     ) {
         AuthResponse response = authService.refreshAccessToken(request);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(
+                ApiResponse.<AuthResponse>builder()
+                        .success(true)
+                        .message("Token refreshed successfully")
+                        .data(response)
+                        .build()
+        );
     }
 
     @Operation(
             summary = "Logout",
             description = "Invalidate the current session by deleting the refresh token",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "Logged out successfully")
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Logged out successfully")
             }
     )
     @PostMapping("/logout")
-    public ResponseEntity<String> logout(@RequestBody RefreshTokenRequest request) {
+    public ResponseEntity<ApiResponse<Void>> logout(@RequestBody RefreshTokenRequest request) {
         authService.logout(request.getRefreshToken());
-        return ResponseEntity.ok("Logged out successfully");
+        return ResponseEntity.ok(
+                ApiResponse.<Void>builder()
+                        .success(true)
+                        .message("Logged out successfully")
+                        .build()
+        );
     }
 
     @Operation(
             summary = "Logout all sessions",
             description = "Invalidate all sessions for a given user ID",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "All sessions logged out")
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "All sessions logged out")
             }
     )
     @PostMapping("/logout-all")
-    public ResponseEntity<String> logoutAll(
+    public ResponseEntity<ApiResponse<Void>> logoutAll(
             @Parameter(description = "User ID to logout all sessions") @RequestParam Long userId
     ) {
         authService.logoutAllSessions(userId);
-        return ResponseEntity.ok("All sessions logged out successfully");
+        return ResponseEntity.ok(
+                ApiResponse.<Void>builder()
+                        .success(true)
+                        .message("All sessions logged out successfully")
+                        .build()
+        );
     }
 
     @Operation(
@@ -140,30 +163,31 @@ public class AuthController {
             description = "Returns the profile of the currently authenticated user. "
                     + "Requires Bearer token in Authorization header.",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "User info returned"),
-                    @ApiResponse(responseCode = "401", description = "Not authenticated")
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "User info returned"),
+                    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Not authenticated")
             }
     )
     @GetMapping("/me")
-    public ResponseEntity<UserInfoResponse> getCurrentUser(
+    public ResponseEntity<ApiResponse<UserInfoResponse>> getCurrentUser(
             @AuthenticationPrincipal UserDetails userDetails
     ) {
         if (userDetails == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                    ApiResponse.<UserInfoResponse>builder()
+                            .success(false)
+                            .message("Not authenticated")
+                            .build()
+            );
         }
 
-        User user = userRepository.findByEmail(userDetails.getUsername())
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        UserInfoResponse response = UserInfoResponse.builder()
-                .userId(user.getUserId())
-                .email(user.getEmail())
-                .username(user.getUsername())
-                .role(user.getRole())
-                .isActive(user.getIsActive())
-                .build();
-
-        return ResponseEntity.ok(response);
+        UserInfoResponse response = authService.getCurrentUser(userDetails.getUsername());
+        return ResponseEntity.ok(
+                ApiResponse.<UserInfoResponse>builder()
+                        .success(true)
+                        .message("Success")
+                        .data(response)
+                        .build()
+        );
     }
 
 }
