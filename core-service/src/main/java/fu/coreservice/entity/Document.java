@@ -20,34 +20,35 @@ public class Document {
     @Column(name = "document_id")
     private Long documentId;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "course_id", nullable = false)
+    @ManyToOne
+    @JoinColumn(name = "course_id")
     private Course course;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "uploaded_by", nullable = false)
-    private User uploadedBy;
+    @ManyToOne
+    @JoinColumn(name = "upload_by")
+    private User user;
 
-    @Column(name = "file_name", nullable = false, length = 255)
+    @Column(name = "file_name")
     private String fileName;
 
-    @Column(name = "file_type", nullable = false, length = 20)
+    @Column(name = "file_type")
     private String fileType;
 
-    @Column(name = "file_url_path", nullable = false)
+    @Column(name = "file_url_path")
     private String fileUrlPath;
 
     @Column(name = "file_size_kb")
-    private Integer fileSizeKb;
+    private Long fileSizeKb;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "upload_status", nullable = false)
-    private DocStatus uploadStatus;
+    @Column(name = "doc_status", nullable = false)
+    private UploadStatus docStatus;
 
     @CreationTimestamp
-    @Column(name = "uploaded_at", updatable = false)
-    private LocalDateTime uploadedAt;
+    @Column(name = "upload_at", updatable = false)
+    private LocalDateTime uploadAt;
 
-    @Column(name = "parsed_at")
-    private LocalDateTime parsedAt;
+    @Column(name = "parse_at", updatable = false)
+    private LocalDateTime parseAt;
+
 }

@@ -7,6 +7,7 @@ import fu.coreservice.dto.courseEnrollment.CourseLearnerResponse;
 import fu.coreservice.service.CourseEnrollmentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -17,7 +18,10 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/courses/enrollment")
-@SecurityRequirement(name = "bearerAuth")
+@SecurityRequirements({
+        @SecurityRequirement(name = "bearerAuth"),
+        @SecurityRequirement(name = "googleOAuth2")
+})
 @RequiredArgsConstructor
 public class CourseEnrollmentController {
 

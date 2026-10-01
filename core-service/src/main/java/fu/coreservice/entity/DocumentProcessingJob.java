@@ -19,10 +19,10 @@ public class DocumentProcessingJob {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "job_id")
-    private Long jobId;
+    private Long documentProcessingJobId;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "document_id", nullable = false)
+    @ManyToOne
+    @JoinColumn(name = "document_id")
     private Document document;
 
     @Enumerated(EnumType.STRING)
@@ -30,21 +30,21 @@ public class DocumentProcessingJob {
     private JobType jobType;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false)
-    @Builder.Default
-    private JobStatus status = JobStatus.QUEUED;
+    @Column(name = "job_status")
+    private JobStatus jobStatus;
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
     @Column(name = "execution_time_ms")
-    private Integer executionTimeMs;
+    private Long executionTimeMs;
 
     @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
-    private LocalDateTime createdAt;
+    @Column(name = "create_at", updatable = false)
+    private LocalDateTime createAt;
 
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
 }
