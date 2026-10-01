@@ -4,6 +4,11 @@ spring:
   profiles:
     active: dev
 
+  servlet:
+    multipart:
+      max-file-size: 40MB
+      max-request-size: 41MB
+
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -52,6 +57,10 @@ app:
   oauth2:
     frontend-success-url: ${FRONTEND_SUCCESS_URL:http://localhost:5173/auth/callback}
     frontend-failure-url: ${FRONTEND_FAILURE_URL:http://localhost:5173/auth/error}
+  supabase:
+    url: ${SUPABASE_URL}
+    secret-key: ${SUPABASE_SECRET_KEY}
+    bucket-name: ${SUPABASE_STORAGE_BUCKET:course-materials}
 
 springdoc:
   swagger-ui:
