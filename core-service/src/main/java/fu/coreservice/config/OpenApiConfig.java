@@ -15,45 +15,66 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class OpenApiConfig {
 
+//    @Bean
+//    public OpenAPI openAPI() {
+//        String bearerAuthName = "bearerAuth";
+//        String googleOAuth2Name = "googleOAuth2";
+//
+//        OAuthFlow googleAuthFlow = new OAuthFlow()
+//                .authorizationUrl("http://localhost:8080/api/auth/google/authorize")
+//                .scopes(new Scopes()
+//                        .addString("email", "Access your email")
+//                        .addString("profile", "Access your profile"));
+//
+//        SecurityScheme bearerAuthScheme = new SecurityScheme()
+//                .name(bearerAuthName)
+//                .type(SecurityScheme.Type.HTTP)
+//                .scheme("bearer")
+//                .bearerFormat("JWT")
+//                .description("Paste your JWT access token here. "
+//                        + "Get token from: POST /api/auth/login");
+//
+//        SecurityScheme googleOAuth2Scheme = new SecurityScheme()
+//                .name(googleOAuth2Name)
+//                .type(SecurityScheme.Type.OAUTH2)
+//                .description("Google login — leave client_id empty, just click Authorize")
+//                .flows(new OAuthFlows()
+//                        .implicit(googleAuthFlow));
+//
+//        return new OpenAPI()
+//                .info(new Info()
+//                        .title("EduGraph RAG - Authentication API")
+//                        .description("API Documentation for EduGraph RAG Authentication System")
+//                        .version("1.0.0")
+//                        .contact(new Contact()
+//                                .name("EduGraph Team")
+//                                .email("team@edugraph.com")))
+//                .addSecurityItem(new SecurityRequirement()
+//                        .addList(bearerAuthName)
+//                        .addList(googleOAuth2Name))
+//                .components(new Components()
+//                        .addSecuritySchemes(bearerAuthName, bearerAuthScheme)
+//                        .addSecuritySchemes(googleOAuth2Name, googleOAuth2Scheme));
+//    }
+
     @Bean
     public OpenAPI openAPI() {
-        String bearerAuthName = "bearerAuth";
-        String googleOAuth2Name = "googleOAuth2";
 
-        OAuthFlow googleAuthFlow = new OAuthFlow()
-                .authorizationUrl("http://localhost:8080/api/auth/google/authorize")
-                .scopes(new Scopes()
-                        .addString("email", "Access your email")
-                        .addString("profile", "Access your profile"));
-
-        SecurityScheme bearerAuthScheme = new SecurityScheme()
-                .name(bearerAuthName)
+        SecurityScheme bearerAuth = new SecurityScheme()
+                .name("bearerAuth")
                 .type(SecurityScheme.Type.HTTP)
                 .scheme("bearer")
                 .bearerFormat("JWT")
-                .description("Paste your JWT access token here. "
-                        + "Get token from: POST /api/auth/login");
-
-        SecurityScheme googleOAuth2Scheme = new SecurityScheme()
-                .name(googleOAuth2Name)
-                .type(SecurityScheme.Type.OAUTH2)
-                .description("Google login — leave client_id empty, just click Authorize")
-                .flows(new OAuthFlows()
-                        .implicit(googleAuthFlow));
+                .description("Paste JWT access token here");
 
         return new OpenAPI()
                 .info(new Info()
-                        .title("EduGraph RAG - Authentication API")
-                        .description("API Documentation for EduGraph RAG Authentication System")
-                        .version("1.0.0")
-                        .contact(new Contact()
-                                .name("EduGraph Team")
-                                .email("team@edugraph.com")))
-                .addSecurityItem(new SecurityRequirement()
-                        .addList(bearerAuthName)
-                        .addList(googleOAuth2Name))
+                        .title("EduGraph RAG API")
+                        .version("1.0"))
                 .components(new Components()
-                        .addSecuritySchemes(bearerAuthName, bearerAuthScheme)
-                        .addSecuritySchemes(googleOAuth2Name, googleOAuth2Scheme));
+                        .addSecuritySchemes(
+                                "bearerAuth",
+                                bearerAuth
+                        ));
     }
 }

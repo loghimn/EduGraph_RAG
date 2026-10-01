@@ -1,4 +1,4 @@
-package fu.coreservice.service.imp;
+package fu.coreservice.service.impl;
 
 import fu.coreservice.config.JwtService;
 import fu.coreservice.dto.AuthResponse;
