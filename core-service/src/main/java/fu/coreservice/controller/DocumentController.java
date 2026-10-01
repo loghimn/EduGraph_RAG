@@ -11,6 +11,8 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
@@ -65,9 +67,12 @@ public class DocumentController {
             @PathVariable Long courseId,
 
             @RequestParam(defaultValue = "0")
+            @Min(0)
             int page,
 
             @RequestParam(defaultValue = "10")
+            @Min(1)
+            @Max(100)
             int size,
 
             @RequestParam(required = false)

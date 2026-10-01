@@ -13,11 +13,11 @@ import fu.coreservice.service.SupabaseStorageService;
 import fu.coreservice.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springdoc.core.service.SecurityService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -133,8 +133,8 @@ public class DocumentServiceImpl implements DocumentService {
     @Override
     @Transactional(readOnly = true)
     public DocumentDownloadResponse downloadDocument(Long courseId, Long documentId) {
-        courseRepository.findById(courseId)
-                .orElseThrow(() -> new RuntimeException("Course not found with id: " + courseId));
+
+        getCourseOwnedByCurrentInstructor(courseId);
 
         Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId, courseId)
                 .orElseThrow(() -> new RuntimeException("Document not found with id: " + documentId));
@@ -161,5 +161,21 @@ public class DocumentServiceImpl implements DocumentService {
                 .uploadAt(document.getUploadAt())
                 .parseAt(document.getParseAt())
                 .build();
+    }
+
+    private void getCourseOwnedByCurrentInstructor(Long courseId) {
+
+        String email = SecurityUtils.getCurrentUserEmail();
+
+        User currentUser = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new RuntimeException("Course not found with id: " + courseId));
+
+        if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
+            throw new AccessDeniedException("You do not have permission to access this course");
+        }
+
     }
 }

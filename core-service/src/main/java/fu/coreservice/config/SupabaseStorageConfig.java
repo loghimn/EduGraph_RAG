@@ -6,6 +6,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.boot.restclient.RestTemplateBuilder;
+
+import java.time.Duration;
 
 @Configuration
 @ConfigurationProperties(prefix = "app.supabase")
@@ -18,8 +21,11 @@ public class SupabaseStorageConfig {
     private String bucketName;
 
     @Bean
-    public RestTemplate supabaseRestTemplate() {
-        return new RestTemplate();
+    public RestTemplate supabaseRestTemplate(RestTemplateBuilder builder) {
+        return builder
+                .connectTimeout(Duration.ofSeconds(5))
+                .readTimeout(Duration.ofSeconds(60))
+                .build();
     }
 
     public String getUploadUrl(String filePath) {
