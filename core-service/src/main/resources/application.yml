@@ -47,7 +47,8 @@ spring:
             user-name-attribute: email
 
 jwt:
-  secret: ${JWT_SECRET:c2VjcmV0LWtleS1mb3ItZWR1Z3JhcGgtcmFnLWFwcGxpY2F0aW9uLTIwMjQtdXNlLWZvci1qd3QtdG9rZW4tc2lnbmluZw==}
+  # Bắt buộc cung cấp qua env (core-service/env hoặc environment variable) — không có default.
+  secret: ${JWT_SECRET}
   access-token:
     expiration: 3600000    # 1 hour in milliseconds
   refresh-token:
@@ -72,4 +73,4 @@ springdoc:
     path: /v3/api-docs
 
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:8081}

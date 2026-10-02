@@ -1,15 +1,15 @@
-package fu.coreservice;
+package fu.gatewayservice;
 
 import io.github.cdimascio.dotenv.Dotenv;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class CoreServiceApplication {
+public class GatewayServiceApplication {
 
     public static void main(String[] args) {
         loadDotEnv();
-        SpringApplication.run(CoreServiceApplication.class, args);
+        SpringApplication.run(GatewayServiceApplication.class, args);
     }
 
     /**
