@@ -35,6 +35,9 @@ spring:
           google:
             client-id: ${GOOGLE_CLIENT_ID}
             client-secret: ${GOOGLE_CLIENT_SECRET}
+            # PHẢI khớp "Authorized redirect URIs" trong Google Cloud Console.
+            # Mặc định trỏ qua gateway (8080); set GOOGLE_REDIRECT_URI để override.
+            redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/login/oauth2/code/google}
             scope:
               - email
               - profile
@@ -74,3 +77,5 @@ springdoc:
 
 server:
   port: ${SERVER_PORT:8081}
+  # Tôn trọng X-Forwarded-* từ gateway để OAuth2 baseUrl/redirect_uri = gateway (8080)
+  forward-headers-strategy: framework
