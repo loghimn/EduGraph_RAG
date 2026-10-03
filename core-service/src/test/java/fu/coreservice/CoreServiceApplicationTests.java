@@ -1,4 +1,4 @@
-package fu.se184610.coreservice;
+package fu.coreservice;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
