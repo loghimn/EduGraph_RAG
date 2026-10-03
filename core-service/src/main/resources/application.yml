@@ -1,6 +1,7 @@
 spring:
   application:
     name: ${SPRING_NAME}
+  # Env file được nạp qua Dotenv trong CoreServiceApplication.main() (file `env` cùng thư mục)
   profiles:
     active: dev
 

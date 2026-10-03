@@ -8,6 +8,11 @@ import org.springframework.web.filter.CorsFilter;
 
 import java.util.List;
 
+/**
+ * CORS cho core-service khi được truy cập trực tiếp (Swagger UI, frontend dev).
+ * Khi đi qua gateway, gateway cũng thêm CORS — CorsHeaderDedupWebFilter ở gateway
+ * sẽ deduplicate để browser không nhận 2 giá trị Access-Control-Allow-Origin.
+ */
 @Configuration
 public class CorsConfig {
 

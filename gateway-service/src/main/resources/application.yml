@@ -11,6 +11,7 @@ server:
 spring:
   application:
     name: ${SPRING_APPLICATION_NAME:gateway-service}
+  # Env file được nạp qua Dotenv trong GatewayServiceApplication.main() (file `env` cùng thư mục)
   cloud:
     gateway:
       server:
