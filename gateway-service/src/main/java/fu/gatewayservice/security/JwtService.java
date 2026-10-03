@@ -19,6 +19,13 @@ import javax.crypto.SecretKey;
 @Component
 public class JwtService {
 
+    /**
+     * Claim that distinguishes access tokens from refresh tokens.
+     * Must match core-service JwtService.TOKEN_TYPE_CLAIM.
+     */
+    public static final String TOKEN_TYPE_CLAIM = "tokenType";
+    public static final String TOKEN_TYPE_ACCESS = "access";
+
     private static final Logger log = LoggerFactory.getLogger(JwtService.class);
 
     private final SecretKey secretKey;
@@ -43,17 +50,22 @@ public class JwtService {
 
     /**
      * @return true if the token is a well-formed, unexpired HS256 JWT
+     * carrying {@code tokenType=access}. Refresh tokens are rejected.
      */
     public boolean isValid(String token) {
         if (token == null || token.isBlank()) {
             return false;
         }
         try {
-            parseClaims(token);
-            return true;
+            Claims claims = parseClaims(token);
+            return isAccessToken(claims);
         } catch (JwtException | IllegalArgumentException e) {
             return false;
         }
+    }
+
+    private boolean isAccessToken(Claims claims) {
+        return TOKEN_TYPE_ACCESS.equals(claims.get(TOKEN_TYPE_CLAIM, String.class));
     }
 
     /**
