@@ -2,31 +2,51 @@ package fu.gatewayservice.dto;
 
 import java.nio.charset.StandardCharsets;
 
-/**
- * Gateway error body aligned with core-service ApiResponse shape
- * ({@code success=false}, {@code message}, {@code data=null}).
- * Serialized manually to avoid Jackson 2 vs 3 package differences in Boot 4.
- */
-public record ErrorResponse(boolean success, String message, Object data) {
+public record ErrorResponse(
+        boolean success,
+        String errorCode,
+        String message,
+        Object data
+) {
 
     public static ErrorResponse of(String message) {
-        return new ErrorResponse(false, message, null);
+        return new ErrorResponse(false, null, message, null);
+    }
+
+    public static ErrorResponse of(String errorCode, String message) {
+        return new ErrorResponse(false, errorCode, message, null);
     }
 
     public byte[] toJsonBytes() {
-        return toJson(message).getBytes(StandardCharsets.UTF_8);
+        return toJson(errorCode, message).getBytes(StandardCharsets.UTF_8);
     }
 
     public static byte[] errorJson(String message) {
-        return toJson(message).getBytes(StandardCharsets.UTF_8);
+        return of(message).toJsonBytes();
     }
 
-    private static String toJson(String message) {
-        String escaped = String.valueOf(message)
+    public static byte[] errorJson(String errorCode, String message) {
+        return of(errorCode, message).toJsonBytes();
+    }
+
+    private static String toJson(String errorCode, String message) {
+
+        String escapedCode = String.valueOf(errorCode)
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", " ")
                 .replace("\r", " ");
-        return "{\"success\":false,\"message\":\"" + escaped + "\",\"data\":null}";
+
+        String escapedMessage = String.valueOf(message)
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", " ");
+
+        return "{\"success\":false,\"errorCode\":\""
+                + escapedCode
+                + "\",\"message\":\""
+                + escapedMessage
+                + "\",\"data\":null}";
     }
 }

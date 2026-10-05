@@ -1,5 +1,8 @@
 package fu.coreservice.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import fu.coreservice.dto.ApiResponse;
+import fu.coreservice.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -32,6 +35,7 @@ public class SecurityConfig {
     private final OAuth2LoginSuccessHandler oAuth2LoginSuccessHandler;
     private final OAuth2LoginFailureHandler oAuth2LoginFailureHandler;
     private final PasswordEncoder passwordEncoder;
+    private final ObjectMapper objectMapper;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -54,12 +58,22 @@ public class SecurityConfig {
                 )
                 .exceptionHandling(exceptions -> exceptions
                         .defaultAuthenticationEntryPointFor((request, response, authException) -> {
-                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+
+                            ErrorCode errorCode = ErrorCode.UNAUTHORIZED;
+
+                            response.setStatus(errorCode.getHttpStatus().value());
                             response.setContentType("application/json");
                             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-                            response.getWriter().write(
-                                    "{\"success\":false,\"message\":\"Not authenticated\",\"data\":null}"
-                            );
+
+                            ApiResponse<Void> body = ApiResponse.<Void>builder()
+                                    .success(false)
+                                    .errorCode(errorCode.getCode())
+                                    .message(errorCode.getMessage())
+                                    .data(null)
+                                    .build();
+
+                            objectMapper.writeValue(response.getOutputStream(), body);
+
                         }, request -> request.getServletPath().startsWith("/api/"))
                 )
                 .sessionManagement(session -> session
