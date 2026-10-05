@@ -1,7 +1,7 @@
 package fu.coreservice.controller;
 
 import fu.coreservice.dto.ApiResponse;
-import fu.coreservice.dto.AuthResponse;
+import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;
 import fu.coreservice.dto.auth.RegisterRequest;

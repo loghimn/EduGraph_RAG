@@ -3,6 +3,7 @@ package fu.coreservice.exception;
 import fu.coreservice.dto.ApiResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.validation.FieldError;
@@ -16,48 +17,87 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<ApiResponse<Void>> handleRuntimeException(RuntimeException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
-                ApiResponse.<Void>builder()
-                        .success(false)
-                        .message(ex.getMessage())
-                        .build()
-        );
-    }
-
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ApiResponse<Void>> handleBadCredentials(BadCredentialsException ex) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+        ErrorCode errorCode = ErrorCode.INVALID_CREDENTIALS;
+
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(
                 ApiResponse.<Void>builder()
                         .success(false)
-                        .message("Invalid email or password")
+                        .errorCode(errorCode.getCode())
+                        .message(errorCode.getMessage())
                         .build()
-        );
+                );
     }
 
     @ExceptionHandler(DisabledException.class)
     public ResponseEntity<ApiResponse<Void>> handleDisabled(DisabledException ex) {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+        ErrorCode errorCode = ErrorCode.ACCOUNT_DISABLED;
+
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(
                 ApiResponse.<Void>builder()
                         .success(false)
-                        .message("Account is deactivated")
+                        .errorCode(errorCode.getCode())
+                        .message(errorCode.getMessage())
                         .build()
-        );
+                );
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = new HashMap<>();
+
         for (FieldError error : ex.getBindingResult().getFieldErrors()) {
             fieldErrors.put(error.getField(), error.getDefaultMessage());
         }
 
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+        ErrorCode errorCode = ErrorCode.VALIDATION_FAILED;
+
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(
                 ApiResponse.<Map<String, String>>builder()
                         .success(false)
-                        .message("Validation Failed")
+                        .errorCode(errorCode.getCode())
+                        .message(errorCode.getMessage())
                         .data(fieldErrors)
+                        .build()
+                );
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException ex) {
+        ErrorCode errorCode = ErrorCode.ACCESS_DENIED;
+
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+                ApiResponse.<Void>builder()
+                        .success(false)
+                        .errorCode(errorCode.getCode())
+                        .message(errorCode.getMessage())
+                        .build()
+                );
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception ex) {
+        ErrorCode errorCode = ErrorCode.INTERNAL_SERVER_ERROR;
+
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+                ApiResponse.<Void>builder()
+                        .success(false)
+                        .errorCode(errorCode.getCode())
+                        .message(errorCode.getMessage())
+                        .build()
+                );
+    }
+
+    @ExceptionHandler(AppException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAppException(AppException ex) {
+        ErrorCode errorCode = ex.getErrorCode();
+
+        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+                ApiResponse.<Void>builder()
+                        .success(false)
+                        .errorCode(errorCode.getCode())
+                        .message(errorCode.getMessage())
                         .build()
         );
     }

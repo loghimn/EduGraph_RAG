@@ -6,6 +6,8 @@ import fu.coreservice.dto.course.CourseResponse;
 import fu.coreservice.dto.course.CourseUpdateRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.User;
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.CourseRepository;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.service.CourseService;
@@ -33,7 +35,7 @@ public class CourseServiceImpl implements CourseService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = Course.builder()
                 .user(currentUser)
@@ -55,10 +57,10 @@ public class CourseServiceImpl implements CourseService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
-                .orElseThrow(() -> new RuntimeException("Course not found or you are not the creator"));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
         course.setCourseName(request.getCourseName().trim());
         course.setDescription(request.getDescription().trim());
@@ -77,10 +79,10 @@ public class CourseServiceImpl implements CourseService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
-                .orElseThrow(() -> new RuntimeException("Course not found or you are not the creator"));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
         course.setPublic(false);
 
@@ -89,13 +91,7 @@ public class CourseServiceImpl implements CourseService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<CourseResponse> getMyCourses(
-            int page,
-            int size,
-            String sortBy,
-            String sortDirection,
-            Boolean isPublic
-    ) {
+    public PageResponse<CourseResponse> getMyCourses(int page, int size, String sortBy, String sortDirection, Boolean isPublic) {
 
         Sort.Direction direction = sortDirection.equalsIgnoreCase("asc")
                 ? Sort.Direction.ASC
@@ -110,21 +106,14 @@ public class CourseServiceImpl implements CourseService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Page<Course> coursePage;
 
         if (isPublic == null) {
-            coursePage = courseRepository.findByUser(
-                    currentUser,
-                    pageable
-            );
+            coursePage = courseRepository.findByUser(currentUser, pageable);
         } else {
-            coursePage = courseRepository.findByUserAndIsPublic(
-                    currentUser,
-                    isPublic,
-                    pageable
-            );
+            coursePage = courseRepository.findByUserAndIsPublic(currentUser, isPublic, pageable);
         }
 
         return getCourseResponsePageResponse(coursePage);
@@ -137,10 +126,10 @@ public class CourseServiceImpl implements CourseService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
-                .orElseThrow(() -> new RuntimeException("Course not found or you are not the creator"));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
         return mapToCourseResponse(course);
     }
@@ -177,9 +166,8 @@ public class CourseServiceImpl implements CourseService {
     @Override
     @Transactional(readOnly = true)
     public CourseResponse getPublicCourseDetail(Long courseId) {
-        Course course = courseRepository
-                .findByCourseIdAndIsPublicTrue(courseId)
-                .orElseThrow(() -> new RuntimeException("Public course not found"));
+        Course course = courseRepository.findByCourseIdAndIsPublicTrue(courseId)
+                .orElseThrow(() -> new AppException(ErrorCode.PUBLIC_COURSE_NOT_FOUND));
 
         return mapToCourseResponse(course);
     }
