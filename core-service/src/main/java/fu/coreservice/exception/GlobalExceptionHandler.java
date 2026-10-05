@@ -1,6 +1,7 @@
 package fu.coreservice.exception;
 
 import fu.coreservice.dto.ApiResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -18,6 +19,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BadCredentialsException.class)
@@ -122,6 +124,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception ex) {
+        log.error("Unexpected exception occurred", ex);
         ErrorCode errorCode = ErrorCode.INTERNAL_SERVER_ERROR;
 
         return ResponseEntity.status(errorCode.getHttpStatus()).body(
