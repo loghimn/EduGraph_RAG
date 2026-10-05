@@ -31,21 +31,23 @@ public record ErrorResponse(
 
     private static String toJson(String errorCode, String message) {
 
-        String escapedCode = String.valueOf(errorCode)
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", " ")
-                .replace("\r", " ");
-
         String escapedMessage = String.valueOf(message)
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", " ")
                 .replace("\r", " ");
 
-        return "{\"success\":false,\"errorCode\":\""
-                + escapedCode
-                + "\",\"message\":\""
+        String errorCodeJson = errorCode == null
+                ? "null"
+                : "\"" + errorCode
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", " ") + "\"";
+
+        return "{\"success\":false,\"errorCode\":"
+                + errorCodeJson
+                + ",\"message\":\""
                 + escapedMessage
                 + "\",\"data\":null}";
     }

@@ -37,9 +37,13 @@ public enum ErrorCode {
     FILE_UPLOAD_FAILED("DOCUMENT_003", "Failed to upload file", HttpStatus.INTERNAL_SERVER_ERROR),
     FILE_READ_FAILED("DOCUMENT_004", "Failed to read file content", HttpStatus.INTERNAL_SERVER_ERROR),
     SIGNED_URL_FAILED("DOCUMENT_005", "Failed to create signed URL", HttpStatus.INTERNAL_SERVER_ERROR),
-    FILE_TOO_LARGE("DOCUMENT_006", "File size must not exceed 40 MB", HttpStatus.INTERNAL_SERVER_ERROR),
+    FILE_TOO_LARGE("DOCUMENT_006", "File size must not exceed 40 MB", HttpStatus.CONTENT_TOO_LARGE),
     INVALID_FILE_TYPE("DOCUMENT_007", "Invalid !!! Only PDF, DOCX, PPTX and TXT files", HttpStatus.BAD_REQUEST),
     FILE_NAME_EMPTY("DOCUMENT_008", "File name must not be empty", HttpStatus.BAD_REQUEST),
+
+    // Common
+    INVALID_REQUEST("COMMON_001", "Invalid request", HttpStatus.BAD_REQUEST),
+    INVALID_PARAMETER("COMMON_002", "Invalid parameter", HttpStatus.BAD_REQUEST),
 
 
     // System

@@ -70,7 +70,11 @@ public class DocumentServiceImpl implements DocumentService {
         String storagePath;
         try {
             storagePath = supabaseStorageService.uploadCourseMaterial(file, courseId, document.getDocumentId());
+        } catch (AppException e) {
+            documentRepository.delete(document);
+            throw e;
         } catch (Exception e) {
+            log.error("Failed to upload document to Supabase. documentId={}", document.getDocumentId(), e);
             documentRepository.delete(document);
             throw new AppException(ErrorCode.FILE_UPLOAD_FAILED);
         }
