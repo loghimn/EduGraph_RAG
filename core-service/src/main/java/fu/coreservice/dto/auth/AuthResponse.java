@@ -1,4 +1,4 @@
-package fu.coreservice.dto;
+package fu.coreservice.dto.auth;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -17,5 +17,6 @@ public class AuthResponse {
     private String refreshToken;
     private String tokenType;
     private Long expiresIn;
+
 }
 

@@ -4,6 +4,8 @@ import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.document.DocumentDownloadResponse;
 import fu.coreservice.dto.document.DocumentResponse;
 import fu.coreservice.entity.*;
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.CourseRepository;
 import fu.coreservice.repository.DocumentProcessingJobRepository;
 import fu.coreservice.repository.DocumentRepository;
@@ -42,17 +44,17 @@ public class DocumentServiceImpl implements DocumentService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new RuntimeException("Course not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-            throw new RuntimeException("You are not the owner of this course");
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
 
         if (file == null || file.isEmpty()) {
-            throw new RuntimeException("File is null or empty");
+            throw new AppException(ErrorCode.FILE_EMPTY);
         }
 
         Document document = Document.builder()
@@ -68,10 +70,13 @@ public class DocumentServiceImpl implements DocumentService {
         String storagePath;
         try {
             storagePath = supabaseStorageService.uploadCourseMaterial(file, courseId, document.getDocumentId());
+        } catch (AppException e) {
+            documentRepository.delete(document);
+            throw e;
         } catch (Exception e) {
             log.error("Failed to upload document to Supabase. documentId={}", document.getDocumentId(), e);
             documentRepository.delete(document);
-            throw e;
+            throw new AppException(ErrorCode.FILE_UPLOAD_FAILED);
         }
 
         document.setFileUrlPath(storagePath);
@@ -91,7 +96,7 @@ public class DocumentServiceImpl implements DocumentService {
     public PageResponse<DocumentResponse> getDocumentsByCourse(Long courseId, int page, int size, UploadStatus status, Sort.Direction sortDirection) {
 
         Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new RuntimeException("Course not found with id: " + courseId));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, "uploadAt"));
 
@@ -122,10 +127,10 @@ public class DocumentServiceImpl implements DocumentService {
     public DocumentResponse getDocumentById(Long courseId, Long documentId) {
 
         courseRepository.findById(courseId)
-                .orElseThrow(() -> new RuntimeException("Course not found with id: " + courseId));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId,courseId)
-                .orElseThrow(() -> new RuntimeException("Document not found with id: " + documentId));
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
 
         return mapToResponse(document);
     }
@@ -137,7 +142,7 @@ public class DocumentServiceImpl implements DocumentService {
         getCourseOwnedByCurrentInstructor(courseId);
 
         Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId, courseId)
-                .orElseThrow(() -> new RuntimeException("Document not found with id: " + documentId));
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
 
         String signedUrl = supabaseStorageService.createSignedUrl(document.getFileUrlPath(), 3600);
 
@@ -168,13 +173,13 @@ public class DocumentServiceImpl implements DocumentService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new RuntimeException("Course not found with id: " + courseId));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-            throw new AccessDeniedException("You do not have permission to access this course");
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
 
     }

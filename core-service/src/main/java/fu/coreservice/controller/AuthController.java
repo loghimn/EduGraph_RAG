@@ -1,11 +1,12 @@
 package fu.coreservice.controller;
 
 import fu.coreservice.dto.ApiResponse;
-import fu.coreservice.dto.AuthResponse;
+import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;
 import fu.coreservice.dto.auth.RegisterRequest;
 import fu.coreservice.dto.auth.UserInfoResponse;
+import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.service.AuthService;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
@@ -175,6 +176,7 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
                     ApiResponse.<UserInfoResponse>builder()
                             .success(false)
+                            .errorCode(ErrorCode.UNAUTHORIZED.getCode())
                             .message("Not authenticated")
                             .build()
             );

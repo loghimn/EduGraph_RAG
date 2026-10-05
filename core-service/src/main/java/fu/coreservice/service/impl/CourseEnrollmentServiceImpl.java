@@ -6,6 +6,8 @@ import fu.coreservice.dto.courseEnrollment.CourseLearnerResponse;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.CourseEnrollment;
 import fu.coreservice.entity.User;
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.CourseEnrollmentRepository;
 import fu.coreservice.repository.CourseRepository;
 import fu.coreservice.repository.UserRepository;
@@ -35,15 +37,15 @@ public class CourseEnrollmentServiceImpl implements CourseEnrollmentService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Course course = courseRepository.findByCourseIdAndIsPublicTrue(courseId)
-                .orElseThrow(() -> new RuntimeException("Public course not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.PUBLIC_COURSE_NOT_FOUND));
 
         boolean alreadyEnrolled = courseEnrollmentRepository.existsByCourseAndUser(course, currentUser);
 
         if (alreadyEnrolled) {
-            throw new RuntimeException("You are already enrolled in this course");
+            throw new AppException(ErrorCode.ALREADY_ENROLLED_COURSE);
         }
 
         CourseEnrollment enrollment = CourseEnrollment.builder()
@@ -67,7 +69,7 @@ public class CourseEnrollmentServiceImpl implements CourseEnrollmentService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Page<CourseEnrollment> enrollmentPage = courseEnrollmentRepository.findByUser(currentUser, pageable);
 
@@ -93,10 +95,10 @@ public class CourseEnrollmentServiceImpl implements CourseEnrollmentService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         CourseEnrollment enrollment = courseEnrollmentRepository.findByCourse_CourseIdAndUser(courseId, currentUser)
-                .orElseThrow(() -> new RuntimeException("You are not enrolled in this course"));
+                .orElseThrow(() -> new AppException(ErrorCode.NOT_ENROLLED_COURSE));
 
         courseEnrollmentRepository.delete(enrollment);
     }
@@ -108,11 +110,11 @@ public class CourseEnrollmentServiceImpl implements CourseEnrollmentService {
         String email = SecurityUtils.getCurrentUserEmail();
 
         User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         // Only the course owner can access its learners
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
-                .orElseThrow(() -> new RuntimeException("Course not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         Sort.Direction direction = sortDirection.equalsIgnoreCase("asc")
                 ? Sort.Direction.ASC

@@ -1,5 +1,7 @@
 package fu.coreservice.utils;
 
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -13,7 +15,7 @@ public final class SecurityUtils {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 
         if (authentication == null || !authentication.isAuthenticated()) {
-            throw new RuntimeException("User is not authenticated");
+            throw new AppException(ErrorCode.UNAUTHORIZED);
         }
 
         return authentication.getName();

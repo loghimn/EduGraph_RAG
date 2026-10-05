@@ -62,7 +62,7 @@ public class JwtAuthenticationGlobalFilter implements GlobalFilter, Ordered {
         response.setStatusCode(HttpStatus.UNAUTHORIZED);
         response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
 
-        byte[] body = ErrorResponse.errorJson(message);
+        byte[] body = ErrorResponse.errorJson("AUTH_001", message);
         DataBuffer buffer = response.bufferFactory().wrap(body);
         return response.writeWith(Mono.just(buffer));
     }

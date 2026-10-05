@@ -1,13 +1,15 @@
 package fu.coreservice.service.impl;
 
 import fu.coreservice.config.JwtService;
-import fu.coreservice.dto.AuthResponse;
+import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;
 import fu.coreservice.dto.auth.RegisterRequest;
 import fu.coreservice.dto.auth.UserInfoResponse;
 import fu.coreservice.entity.User;
 import fu.coreservice.entity.UserSession;
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.repository.UserSessionRepository;
 import fu.coreservice.service.AuthService;
@@ -49,10 +51,10 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email already registered");
+            throw new AppException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
         if (userRepository.existsByUsername(request.getUsername())) {
-            throw new RuntimeException("Username already taken");
+            throw new AppException(ErrorCode.USERNAME_ALREADY_EXISTS);
         }
 
         User user = User.builder()
@@ -85,10 +87,10 @@ public class AuthServiceImpl implements AuthService {
         );
 
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         if (!user.getIsActive()) {
-            throw new RuntimeException("Account is deactivated");
+            throw new AppException(ErrorCode.ACCOUNT_DISABLED);
         }
 
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
@@ -112,11 +114,11 @@ public class AuthServiceImpl implements AuthService {
     public AuthResponse refreshAccessToken(RefreshTokenRequest request) {
         String refreshToken = request.getRefreshToken();
         UserSession session = userSessionRepository.findByRefreshToken(refreshToken)
-                .orElseThrow(() -> new RuntimeException("Invalid refresh token"));
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_REFRESH_TOKEN));
 
         if (session.getExpiresAt().isBefore(LocalDateTime.now())) {
             userSessionRepository.delete(session);
-            throw new RuntimeException("Refresh token expired");
+            throw new AppException(ErrorCode.REFRESH_TOKEN_EXPIRED);
         }
 
         User user = session.getUser();
@@ -143,14 +145,14 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public void logoutAllSessions(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         userSessionRepository.deleteAllByUser(user);
     }
 
     @Override
     public UserInfoResponse getCurrentUser(String email) {
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         return UserInfoResponse.builder()
                 .userId(user.getUserId())

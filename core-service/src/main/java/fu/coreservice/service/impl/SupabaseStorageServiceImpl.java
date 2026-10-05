@@ -1,6 +1,8 @@
 package fu.coreservice.service.impl;
 
 import fu.coreservice.config.SupabaseStorageConfig;
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.service.SupabaseStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,12 +45,7 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
 
         String safeFilename = UUID.randomUUID() + extension;
 
-        String filePath = String.format(
-                "course/%d/document/%d/%s",
-                courseId,
-                documentId,
-                safeFilename
-        );
+        String filePath = String.format("course/%d/document/%d/%s", courseId, documentId, safeFilename);
 
         try {
             String uploadUrl = supabaseStorageConfig.getUploadUrl(filePath);
@@ -77,25 +74,19 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
 
             if (!response.getStatusCode().is2xxSuccessful()) {
                 log.error("Supabase upload failed. Status: {}, Body: {}", response.getStatusCode(), response.getBody());
-
-                throw new RuntimeException("Failed to upload file to Supabase");
+                throw new AppException(ErrorCode.FILE_UPLOAD_FAILED);
             }
 
             log.info("File uploaded successfully. Path: {}", filePath);
-
             return filePath;
 
         } catch (IOException e) {
-
             log.error("Failed to read uploaded file", e);
-
-            throw new RuntimeException("Failed to read file content", e);
+            throw new AppException(ErrorCode.FILE_READ_FAILED);
 
         } catch (RestClientException e) {
-
             log.error("Supabase Storage API call failed", e);
-
-            throw new RuntimeException("Failed to upload file to Supabase", e);
+            throw new AppException(ErrorCode.FILE_UPLOAD_FAILED);
         }
     }
 
@@ -128,21 +119,19 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
             Map responseBody = response.getBody();
 
             if (responseBody == null) {
-                throw new RuntimeException("Failed to create signed URL: empty response");
+                throw new AppException(ErrorCode.SIGNED_URL_FAILED);
             }
 
             Object signedUrlObject = responseBody.get("signedURL");
 
             if (signedUrlObject == null) {
-                throw new RuntimeException("Failed to create signed URL");
+                throw new AppException(ErrorCode.SIGNED_URL_FAILED);
             }
 
             String signedUrl = signedUrlObject.toString();
 
             if (signedUrl.startsWith("/")) {
-                signedUrl = supabaseStorageConfig.getUrl()
-                        + "/storage/v1"
-                        + signedUrl;
+                signedUrl = supabaseStorageConfig.getUrl() + "/storage/v1" + signedUrl;
             }
 
             return signedUrl;
@@ -151,30 +140,30 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
 
             log.error("Failed to create signed URL for file: {}", filePath, e);
 
-            throw new RuntimeException("Failed to create signed URL", e);
+            throw new AppException(ErrorCode.SIGNED_URL_FAILED);
         }
     }
 
     private void validateFile(MultipartFile file) {
 
         if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("File must not be empty");
+            throw new AppException(ErrorCode.FILE_EMPTY);
         }
 
         if (file.getSize() > MAX_FILE_SIZE) {
-            throw new IllegalArgumentException("File size must not exceed 40 MB");
+            throw new AppException(ErrorCode.FILE_TOO_LARGE);
         }
 
         String contentType = file.getContentType();
 
         if (contentType == null || !ALLOWED_CONTENT_TYPES.contains(contentType)) {
-            throw new IllegalArgumentException("Only PDF, DOCX, PPTX and TXT files are allowed");
+            throw new AppException(ErrorCode.INVALID_FILE_TYPE);
         }
 
         String filename = file.getOriginalFilename();
 
         if (!StringUtils.hasText(filename)) {
-            throw new IllegalArgumentException("File name must not be empty");
+            throw new AppException(ErrorCode.FILE_NAME_EMPTY);
         }
     }
 
