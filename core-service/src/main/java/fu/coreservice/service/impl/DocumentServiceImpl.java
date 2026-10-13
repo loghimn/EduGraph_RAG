@@ -11,19 +11,26 @@ import fu.coreservice.repository.DocumentProcessingJobRepository;
 import fu.coreservice.repository.DocumentRepository;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.service.DocumentService;
+import fu.coreservice.service.AiDocumentProcessingService;
 import fu.coreservice.service.SupabaseStorageService;
 import fu.coreservice.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 @Service
@@ -36,6 +43,7 @@ public class DocumentServiceImpl implements DocumentService {
     private final CourseRepository courseRepository;
     private final SupabaseStorageService supabaseStorageService;
     private final UserRepository userRepository;
+    private final AiDocumentProcessingService aiDocumentProcessingService;
 
     @Override
     @Transactional
@@ -88,6 +96,11 @@ public class DocumentServiceImpl implements DocumentService {
                         .jobStatus(JobStatus.QUEUED)
                         .build();
         documentProcessingJobRepository.save(processingJob);
+
+        // Sau khi commit, đẩy file + lệnh /ingest sang AI core (Python) bất đồng bộ.
+        // Trả response ngay với docStatus=PENDING; poller sẽ đồng bộ COMPLETED/FAILED.
+        triggerAiPipelineAfterCommit(courseId, document.getDocumentId(), currentUser.getUserId(), file);
+
         return mapToResponse(document);
     }
 
@@ -182,5 +195,49 @@ public class DocumentServiceImpl implements DocumentService {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
 
+    }
+
+    /**
+     * Sau khi transaction commit, đẩy file + lệnh /ingest sang AI core (Python) bất đồng bộ.
+     * File được đọc vào bộ nhớ TRƯỚC commit vì MultipartFile không còn hợp lệ sau khi request kết thúc.
+     */
+    private void triggerAiPipelineAfterCommit(Long courseId, Long documentId, Long ownerId, MultipartFile file) {
+
+        String filename = file.getOriginalFilename() != null && !file.getOriginalFilename().isBlank()
+                ? file.getOriginalFilename()
+                : "document";
+
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (IOException e) {
+            log.error("Failed to read uploaded file for AI pipeline. documentId={}", documentId, e);
+            throw new AppException(ErrorCode.FILE_READ_FAILED);
+        }
+
+        MediaType mediaType = parseMediaType(file.getContentType());
+        Resource content = new ByteArrayResource(bytes);
+
+        Runnable trigger = () -> aiDocumentProcessingService.triggerPipelineAsync(
+                courseId, documentId, ownerId, filename, mediaType, content);
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    trigger.run();
+                }
+            });
+        } else {
+            trigger.run();
+        }
+    }
+
+    private MediaType parseMediaType(String contentType) {
+        try {
+            return contentType == null ? MediaType.APPLICATION_OCTET_STREAM : MediaType.parseMediaType(contentType);
+        } catch (Exception e) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
     }
 }

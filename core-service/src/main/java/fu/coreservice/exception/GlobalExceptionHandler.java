@@ -149,6 +149,25 @@ public class GlobalExceptionHandler {
     }
 
 
+    @ExceptionHandler(AiCoreException.class)
+    public ResponseEntity<ApiResponse<Map<String, Object>>> handleAiCoreException(AiCoreException ex) {
+        log.warn("AI core call failed. status={}, detail={}", ex.getHttpStatus(), ex.getDetail());
+
+        HttpStatus status = HttpStatus.resolve(ex.getHttpStatus());
+        if (status == null || status.is2xxSuccessful()) {
+            status = HttpStatus.BAD_GATEWAY;
+        }
+
+        return ResponseEntity.status(status).body(
+                ApiResponse.<Map<String, Object>>builder()
+                        .success(false)
+                        .errorCode("AI_CORE_" + ex.getHttpStatus())
+                        .message(ex.getDetail())
+                        .data(ex.getBody().isEmpty() ? null : ex.getBody())
+                        .build()
+        );
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception ex) {
         log.error("Unexpected exception occurred", ex);

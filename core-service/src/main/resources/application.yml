@@ -66,6 +66,16 @@ app:
     secret-key: ${SUPABASE_SECRET_KEY}
     bucket-name: ${SUPABASE_STORAGE_BUCKET:course-materials}
 
+# AI core-service (Python FastAPI, edugraph-ai-core) — chỉ nội bộ, không public.
+ai-core:
+  base-url: ${AI_CORE_URL:http://localhost:8082}
+  # PHẢI khớp INTERNAL_API_KEY trong .env của edugraph-ai-core (không commit giá trị).
+  internal-key: ${AI_CORE_INTERNAL_KEY:}
+  connect-timeout-ms: 5000
+  # Timeout đọc cho các call đồng bộ (status/chat/learning-path); /ingest chỉ trả ack nên không bị ảnh hưởng.
+  read-timeout-ms: 30000
+  status-poll-interval-ms: 15000
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
