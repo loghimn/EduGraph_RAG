@@ -3,6 +3,8 @@ import sys
 import httpx
 import time
 
+from app.config import settings
+
 async def main():
     print("Seeding course & document via HTTP or direct script? Seed script ran already.")
     
@@ -11,7 +13,7 @@ async def main():
     # We'll just assume the server is running on localhost:8000
     
     url = "http://localhost:8000/ingest"
-    headers = {"X-Internal-Key": "correct"} # We need to check config.INTERNAL_API_KEY
+    headers = {"X-Internal-Key": settings.INTERNAL_API_KEY}
     
     payload = {
         "document_id": "demo-sql-doc-2",

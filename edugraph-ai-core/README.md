@@ -18,7 +18,7 @@ Bạn không nên tải bản `+cu121` vì file rất nặng (~2.5GB). Hãy ch�
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install fastapi uvicorn pydantic-settings sse-starlette sentence-transformers keybert neo4j openai diskcache tenacity
 ```
-Sau đó cấu hình trong `.env`: `EMBEDDING_DEVICE=cpu`.
+Sau đó cấu hình trong `.env`: `EMBEDDING_DEVICE=cpu` và `INTERNAL_API_KEY` thành một secret riêng, không rỗng. Service sẽ không khởi động nếu thiếu `INTERNAL_API_KEY`; khi triển khai, cung cấp biến môi trường này qua secret manager hoặc môi trường runtime.
 
 ## Windows Troubleshooting
 If you see encoding issues on Windows, set the environment variable: set PYTHONUTF8=1 or $env:PYTHONUTF8=1 in PowerShell.

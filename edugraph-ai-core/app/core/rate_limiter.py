@@ -17,6 +17,11 @@ class TokenLimiter:
         self.priority_waiters = 0
         
     async def wait_and_deduct(self, estimated_tokens: int, heartbeat_callback=None, priority: bool = False):
+        if estimated_tokens > self.tpm_limit:
+            raise ValueError(
+                f"Estimated token count {estimated_tokens} exceeds TPM limit {self.tpm_limit}"
+            )
+
         is_waiting_priority = False
         try:
             while True:

@@ -40,6 +40,22 @@ async def test_embed_batch_mock(mock_embedding_model):
     assert len(res) == 2
     assert len(res[0]) == 1024
 
+@pytest.mark.asyncio
+async def test_embed_batch_retries_on_cuda_oom_message(monkeypatch):
+    model = EmbeddingModel()
+    model._model = MagicMock()
+    model._model.encode.side_effect = [
+        RuntimeError("CUDA out of memory. Tried to allocate 1.00 GiB."),
+        [[0.1, 0.2]],
+    ]
+    monkeypatch.setattr("app.core.embedding.settings.EMBED_BATCH_SIZE", 4)
+    monkeypatch.setattr("app.core.embedding.torch.cuda.is_available", lambda: False)
+
+    result = await model.embed_batch(["test"])
+
+    assert result == [[0.1, 0.2]]
+    assert [call.kwargs["batch_size"] for call in model._model.encode.call_args_list] == [4, 2]
+
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_embed_batch_real():
@@ -80,3 +96,35 @@ async def test_llm_stream_error_after_first_token():
     assert chunks[0] == "first token"
     assert "ERROR: Stream interrupted" in chunks[1], "Không thấy lỗi stream được yield"
     assert not client.gemini_client.chat.completions.create.called, "Không được fallback nếu lỗi sau token đầu"
+
+@pytest.mark.asyncio
+async def test_llm_stream_first_token_timeout_uses_fallback(monkeypatch):
+    client = LLMClient()
+    stalled = asyncio.Event()
+
+    async def groq_stream():
+        await stalled.wait()
+        yield None
+
+    async def gemini_stream():
+        class MockDelta:
+            content = "fallback token"
+        class MockChoice:
+            delta = MockDelta()
+        class MockChunk:
+            choices = [MockChoice()]
+        yield MockChunk()
+
+    client.groq_client.chat.completions.create = AsyncMock(return_value=groq_stream())
+    client.gemini_client.chat.completions.create = AsyncMock(return_value=gemini_stream())
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", "configured-test-key")
+    monkeypatch.setattr("app.core.llm.settings.STREAM_FIRST_TOKEN_TIMEOUT", 0.01)
+    monkeypatch.setattr(
+        "app.core.rate_limiter.token_limiter.wait_and_deduct",
+        AsyncMock(),
+    )
+
+    chunks = [chunk async for chunk in client.generate_stream("hello")]
+
+    assert chunks == ["fallback token"]
+    client.gemini_client.chat.completions.create.assert_awaited_once()

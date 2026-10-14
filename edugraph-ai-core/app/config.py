@@ -1,5 +1,6 @@
 import os
 from typing import Literal
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -13,7 +14,7 @@ class Settings(BaseSettings):
     # LLM Keys
     GROQ_API_KEY: str = "dummy_key"
     GEMINI_API_KEY: str = ""
-    INTERNAL_API_KEY: str = "dummy_key"
+    INTERNAL_API_KEY: str = Field(min_length=1)
     
     # Path
     RAW_DATA_DIR: str = "/data/raw"

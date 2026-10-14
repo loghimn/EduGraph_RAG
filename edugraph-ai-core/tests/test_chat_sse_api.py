@@ -25,7 +25,7 @@ def test_chat_course_404_not_found(mock_neo4j):
 
     resp = client.post(
         "/chat",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "non_existent", "user_id": "u1", "message": "hello"}
     )
     assert resp.status_code == 404
@@ -40,7 +40,7 @@ def test_chat_course_403_not_owner(mock_neo4j):
 
     resp = client.post(
         "/chat",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "c1", "user_id": "u1", "message": "hello"}
     )
     assert resp.status_code == 403
@@ -59,7 +59,7 @@ def test_chat_clarify_sse(mock_link):
 
     resp = client.post(
         "/chat",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "c1", "user_id": "u1", "message": "ban la gi"}
     )
     assert resp.status_code == 200
@@ -89,7 +89,7 @@ def test_chat_explain_normal_sse_stream(mock_llm, mock_retrieve, mock_link):
 
     resp = client.post(
         "/chat",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "c1", "user_id": "u1", "message": "Index là gì?"}
     )
     assert resp.status_code == 200
@@ -114,7 +114,7 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
 
     resp = client.post(
         "/chat",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "c1", "user_id": "u1", "message": "Giải thích", "concept_ids": ["c1", "c2"]}
     )
     assert resp.status_code == 200

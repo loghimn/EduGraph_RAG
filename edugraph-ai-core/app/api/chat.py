@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.config import settings
+from app.api.internal_auth import verify_internal_key
 from app.db.neo4j_client import neo4j_client
 from app.retrieval.concept_linker import link_concepts
 from app.retrieval.chunk_retriever import retrieve_chunks
@@ -18,11 +19,6 @@ class ChatRequest(BaseModel):
     user_id: str
     message: str
     concept_ids: Optional[List[str]] = None
-
-def verify_internal_key(x_internal_key: str = Header(...)):
-    if x_internal_key not in (settings.INTERNAL_API_KEY, "correct"):
-        raise HTTPException(status_code=403, detail="Invalid Internal Key")
-    return x_internal_key
 
 async def verify_course_ownership(course_id: str, user_id: str):
     query = "MATCH (c:Course {id: $course_id}) RETURN c.owner_id AS owner_id"

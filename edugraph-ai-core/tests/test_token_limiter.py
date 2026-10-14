@@ -1,7 +1,11 @@
 import pytest
 import asyncio
-from unittest.mock import patch
+import httpx2
+import openai
+from tenacity import wait_none
+from unittest.mock import AsyncMock, MagicMock, patch
 from app.core.rate_limiter import TokenLimiter
+
 
 class FakeClock:
     def __init__(self):
@@ -16,6 +20,26 @@ class FakeClock:
         self.sleepers.append((self.now + delay, fut))
         self.sleepers.sort(key=lambda x: x[0])
         await fut
+
+
+@pytest.mark.asyncio
+async def test_token_limiter_rejects_requests_over_tpm_limit():
+    limiter = TokenLimiter(tpm_limit=10)
+
+    with pytest.raises(ValueError, match="exceeds TPM limit"):
+        await limiter.wait_and_deduct(11)
+
+    assert limiter.remaining_tokens == 10
+
+
+@pytest.mark.asyncio
+async def test_token_limiter_accepts_request_equal_to_tpm_limit():
+    limiter = TokenLimiter(tpm_limit=10)
+
+    await limiter.wait_and_deduct(10)
+
+    assert limiter.remaining_tokens == 0
+
 
 @pytest.mark.asyncio
 async def test_token_limiter_concurrency():
@@ -66,25 +90,51 @@ async def test_token_limiter_concurrency():
     assert len(history) == 10
 
 @pytest.mark.asyncio
-async def test_llm_respect_retry_after():
+async def test_llm_rate_limit_retry_is_bounded_and_refunds_tokens():
     from app.core.llm import LLMClient
+
     client = LLMClient()
-    class MockResponse:
-        def __init__(self):
-            self.headers = {"retry-after": "0.2"}
-    class MockError(Exception):
-        def __init__(self):
-            self.response = MockResponse()
-    call_count = 0
-    async def mock_call(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise MockError()
-        return "success", "mock_model"
-    with patch.object(client, '_call_provider', new=mock_call):
-        try:
-            await client.generate("test prompt", "v1", "data")
-        except Exception:
-            pass
-    assert call_count >= 1
+    error = openai.RateLimitError(
+        "rate limited",
+        response=httpx2.Response(
+            429,
+            headers={"retry-after": "Wed, 21 Oct 2030 07:28:00 GMT"},
+            request=httpx2.Request("POST", "https://example.test"),
+        ),
+        body=None,
+    )
+    create = AsyncMock(side_effect=error)
+    client.groq_client.chat.completions.with_raw_response.create = create
+
+    limiter = MagicMock()
+    limiter.wait_and_deduct = AsyncMock()
+    limiter.refund = AsyncMock()
+    limiter.update_from_headers = AsyncMock()
+    with (
+        patch("app.core.rate_limiter.token_limiter", limiter),
+        patch.object(client._call_provider.retry, "wait", wait_none()),
+    ):
+        with pytest.raises(openai.RateLimitError):
+            await client._call_provider(client.groq_client, "model", "test prompt", False)
+
+    assert create.await_count == 4
+    assert limiter.wait_and_deduct.await_count == 4
+    assert limiter.refund.await_count == 4
+    assert all(call.args == (902,) for call in limiter.refund.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_llm_does_not_cache_invalid_json_response():
+    from app.core.llm import LLMClient
+
+    client = LLMClient()
+    cache = MagicMock()
+    cache.__contains__ = MagicMock(return_value=False)
+    with (
+        patch("app.core.llm.cache", cache),
+        patch.object(client, "_call_provider", new=AsyncMock(return_value=("not json", "model"))),
+    ):
+        with pytest.raises(ValueError, match="LLM returned invalid JSON"):
+            await client.generate("prompt", "v1", {"input": "data"}, json_mode=True)
+
+    cache.set.assert_not_called()

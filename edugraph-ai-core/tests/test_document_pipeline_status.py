@@ -26,7 +26,7 @@ async def test_document_pipeline_status():
 
         with patch("app.concept_extraction.pipeline.process_document_pipeline", new=AsyncMock()) as mock_extract:
             with patch("app.prerequisite.pipeline.run_prerequisite_pipeline", new=AsyncMock(side_effect=Exception("Prereq Error"))) as mock_prereq:
-                resp = await ac.post("/ingest", headers={"X-Internal-Key": "dummy_key"}, json={
+                resp = await ac.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={
                     "document_id": "doc1", "course_id": "__test__", "user_id": "user1", "filename": "test.pdf"
                 })
                 assert resp.status_code == 200
@@ -47,7 +47,7 @@ async def test_document_pipeline_status():
 
         with patch("app.concept_extraction.pipeline.process_document_pipeline", new=AsyncMock()) as mock_extract:
             with patch("app.prerequisite.pipeline.run_prerequisite_pipeline", new=AsyncMock()) as mock_prereq:
-                resp = await ac.post("/ingest", headers={"X-Internal-Key": "dummy_key"}, json={
+                resp = await ac.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={
                     "document_id": "doc2", "course_id": "__test__", "user_id": "user1", "filename": "test.pdf"
                 })
                 assert resp.status_code == 200

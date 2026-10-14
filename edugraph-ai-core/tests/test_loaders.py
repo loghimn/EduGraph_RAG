@@ -2,7 +2,7 @@ import pytest
 from pptx import Presentation
 
 from app.ingestion.loaders import load_document, load_pptx
-from app.core.errors import ScannedPDFError
+from app.core.errors import InvalidPathError, ScannedPDFError
 
 
 def _make_pptx(path, slides):
@@ -41,6 +41,45 @@ def test_load_document_dispatch_pptx(tmp_path, monkeypatch):
     assert len(pages) == 1
     assert pages[0][0] == 1
     assert "Chương 1" in pages[0][1]
+
+
+def test_get_safe_path_rejects_sibling_prefix_and_absolute_outside(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.ingestion.loaders import get_safe_path
+
+    raw_dir = tmp_path / "raw"
+    sibling_dir = tmp_path / "raw_other"
+    raw_dir.mkdir()
+    sibling_dir.mkdir()
+    monkeypatch.setattr(settings, "RAW_DATA_DIR", str(raw_dir))
+
+    with pytest.raises(InvalidPathError):
+        get_safe_path("..", "raw_other/secret.txt")
+    with pytest.raises(InvalidPathError):
+        get_safe_path("doc-1", str(sibling_dir / "secret.txt"))
+
+
+def test_get_safe_path_rejects_root_and_symlink_escape(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.ingestion.loaders import get_safe_path
+
+    raw_dir = tmp_path / "raw"
+    outside_dir = tmp_path / "outside"
+    raw_dir.mkdir()
+    outside_dir.mkdir()
+    (raw_dir / "doc-1").mkdir()
+    monkeypatch.setattr(settings, "RAW_DATA_DIR", str(raw_dir))
+
+    with pytest.raises(InvalidPathError):
+        get_safe_path("..", ".")
+
+    try:
+        (raw_dir / "doc-1" / "link").symlink_to(outside_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation is unavailable")
+
+    with pytest.raises(InvalidPathError):
+        get_safe_path("doc-1", "link/secret.txt")
 
 
 def test_load_pptx_empty_raises(tmp_path):

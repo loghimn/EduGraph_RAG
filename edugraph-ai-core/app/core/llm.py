@@ -74,21 +74,13 @@ class LLMClient:
         
         await token_limiter.wait_and_deduct(estimated_tokens)
             
-        rate_limit_429 = 0
         try:
             raw_response = await client.chat.completions.with_raw_response.create(**kwargs)
             headers = raw_response.headers
             await token_limiter.update_from_headers(headers)
-        except Exception as e:
-            if hasattr(e, "response") and e.response:
-                retry_after = e.response.headers.get("retry-after")
-                if retry_after:
-                    rate_limit_429 += 1
-                    print(f"[RateLimit] 429 Too Many Requests. Retry-After: {retry_after}s. Đợi...")
-                    await asyncio.sleep(float(retry_after))
-                    return await self._call_provider(client, model, prompt, json_mode)
+        except Exception:
             await token_limiter.refund(estimated_tokens)
-            raise e
+            raise
             
         parsed = raw_response.parse()
         choice = parsed.choices[0]
@@ -116,7 +108,7 @@ class LLMClient:
             "total_tokens": actual_total,
             "finish_reason": finish_reason,
             "duration_s": call_duration,
-            "is_429": rate_limit_429 > 0
+            "is_429": False
         })
         
         # Strip Qwen <think>
@@ -180,9 +172,8 @@ class LLMClient:
                     if not isinstance(parsed_content, dict):
                         # Gói vào một dict nếu LLM trả về kiểu khác (dù đã yêu cầu JSON object)
                         parsed_content = {"result": parsed_content}
-                except json.JSONDecodeError:
-                    # Trong thực tế, có thể implement logic thử lại (retry) riêng cho parse lỗi.
-                    parsed_content = {"result": content, "error": "Invalid JSON"}
+                except json.JSONDecodeError as e:
+                    raise ValueError("LLM returned invalid JSON in json_mode") from e
                 
                 cache_key = generate_cache_key(used_model, prompt_version, input_data)
                 cache.set(cache_key, parsed_content)
@@ -201,17 +192,19 @@ class LLMClient:
         # Khởi tạo hai luồng client
         # Fallback chỉ thực hiện trước token đầu tiên (Timeout 8s)
         try:
-            stream = await asyncio.wait_for(
-                self.groq_client.chat.completions.create(
+            async def open_stream_and_read_first_chunk():
+                stream = await self.groq_client.chat.completions.create(
                     model=settings.MODEL_MAIN,
                     messages=[{"role": "user", "content": prompt}],
                     stream=True,
                     temperature=0.0
-                ),
+                )
+                return stream, await stream.__anext__()
+
+            stream, first_chunk = await asyncio.wait_for(
+                open_stream_and_read_first_chunk(),
                 timeout=settings.STREAM_FIRST_TOKEN_TIMEOUT
             )
-            # Lấy token đầu tiên để kiểm chứng
-            first_chunk = await stream.__anext__()
         except (asyncio.TimeoutError, Exception) as e:
             if isinstance(e, StopAsyncIteration):
                 return

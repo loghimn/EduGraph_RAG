@@ -4,6 +4,7 @@ import argparse
 from typing import Optional, List
 from httpx import AsyncClient, ASGITransport
 
+from app.config import settings
 from app.main import app
 from app.db.neo4j_client import neo4j_client
 
@@ -93,7 +94,7 @@ async def main():
                     "known_concept_ids": known_ids,
                     "include_external_prereqs": True
                 }
-                resp = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": "correct"}, json=payload)
+                resp = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json=payload)
                 if resp.status_code != 200:
                     print(f"❌ Lỗi {resp.status_code}: {resp.text}")
                     return
@@ -120,7 +121,7 @@ async def main():
                 "document_id": args.document_id,
                 "include_external_prereqs": True
             }
-            resp1 = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": "correct"}, json=payload1)
+            resp1 = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json=payload1)
             if resp1.status_code == 200:
                 print_learning_path("KỊCH BẢN 1: LỘ TRÌNH TOÀN BỘ TÀI LIỆU (demo-sql-doc-2)", resp1.json())
             else:
@@ -135,7 +136,7 @@ async def main():
                     "known_concept_ids": [name_to_id["join"]],
                     "include_external_prereqs": True
                 }
-                resp2 = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": "correct"}, json=payload2)
+                resp2 = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json=payload2)
                 if resp2.status_code == 200:
                     print_learning_path("KỊCH BẢN 2: MỤC TIÊU 'view' | ĐÃ BIẾT 'JOIN'", resp2.json())
 
@@ -147,7 +148,7 @@ async def main():
                     "goal_concept_ids": [name_to_id["instead of insert"]],
                     "include_external_prereqs": True
                 }
-                resp3 = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": "correct"}, json=payload3)
+                resp3 = await ac.post("/learning-paths/plan", headers={"X-Internal-Key": settings.INTERNAL_API_KEY}, json=payload3)
                 if resp3.status_code == 200:
                     print_learning_path("KỊCH BẢN 3: MỤC TIÊU NÂNG CAO 'INSTEAD OF INSERT'", resp3.json())
                     with open("scratch/learning_path_result.json", "w", encoding="utf-8") as f:

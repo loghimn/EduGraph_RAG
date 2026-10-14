@@ -24,7 +24,7 @@ def test_ingest_merges_nodes_200(mock_neo4j):
 
     mock_session.run.side_effect = [mock_rec_course, mock_rec_doc]
 
-    response = client.post("/ingest", headers={"X-Internal-Key": "correct"}, json={"document_id": "doc1", "course_id": "c1", "user_id": "user1"})
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "doc1", "course_id": "c1", "user_id": "user1"})
     assert response.status_code == 200
     assert response.json()["status"] == "processing"
     # Query Course phải là MERGE (tạo node nếu chưa có)
@@ -45,7 +45,7 @@ def test_ingest_owner_mismatch_403(mock_neo4j):
     mock_rec_course.single.return_value = {"owner_id": "real_owner"}
     mock_session.run.return_value = mock_rec_course
 
-    response = client.post("/ingest", headers={"X-Internal-Key": "correct"}, json={"document_id": "doc1", "course_id": "c1", "user_id": "imposter"})
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "doc1", "course_id": "c1", "user_id": "imposter"})
     assert response.status_code == 403
     assert "Permission denied" in response.json()["detail"]
 
@@ -61,7 +61,7 @@ def test_upload_file_stores_raw(tmp_path, monkeypatch):
 
     response = client.post(
         "/documents/doc-upload-1/file",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("bai1.pdf", b"%PDF-1.4 fake", "application/pdf")}
     )
     assert response.status_code == 200
@@ -79,7 +79,7 @@ def test_upload_file_accepts_pptx(tmp_path, monkeypatch):
 
     response = client.post(
         "/documents/doc-upload-pptx/file",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("slides.pptx", b"PK fake pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
     )
     assert response.status_code == 200
@@ -94,7 +94,7 @@ def test_upload_file_rejects_bad_extension(tmp_path, monkeypatch):
 
     response = client.post(
         "/documents/doc-upload-2/file",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("malware.exe", b"MZ", "application/octet-stream")}
     )
     assert response.status_code == 400
@@ -106,7 +106,7 @@ def test_upload_file_rejects_empty(tmp_path, monkeypatch):
 
     response = client.post(
         "/documents/doc-upload-3/file",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("empty.txt", b"", "text/plain")}
     )
     assert response.status_code == 400
@@ -126,7 +126,7 @@ def test_document_status_200(mock_neo4j):
     mock_rec.single.return_value = {"status": "DONE", "progress": None, "error": None}
     mock_session.run.return_value = mock_rec
 
-    response = client.get("/documents/doc1/status?course_id=c1", headers={"X-Internal-Key": "correct"})
+    response = client.get("/documents/doc1/status?course_id=c1", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "DONE"
@@ -143,7 +143,7 @@ def test_document_status_404(mock_neo4j):
     mock_rec.single.return_value = None
     mock_session.run.return_value = mock_rec
 
-    response = client.get("/documents/missing/status?course_id=c1", headers={"X-Internal-Key": "correct"})
+    response = client.get("/documents/missing/status?course_id=c1", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 404
 
 @patch("app.api.ingest.neo4j_client")
@@ -159,7 +159,7 @@ def test_delete_processing_409(mock_neo4j):
     
     mock_session.run.side_effect = [mock_rec_course, mock_rec_doc]
     
-    response = client.delete("/documents/doc-processing?course_id=c1&user_id=user1", headers={"X-Internal-Key": "correct"})
+    response = client.delete("/documents/doc-processing?course_id=c1&user_id=user1", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 409
 
 @pytest.mark.asyncio
@@ -188,7 +188,7 @@ def test_prerequisites_course_404(mock_neo4j):
     mock_rec.single.return_value = None
     mock_session.run.return_value = mock_rec
 
-    response = client.post("/courses/c_none/prerequisites?user_id=u1", headers={"X-Internal-Key": "correct"})
+    response = client.post("/courses/c_none/prerequisites?user_id=u1", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 404
 
 @patch("app.api.ingest.neo4j_client")
@@ -199,7 +199,7 @@ def test_prerequisites_owner_403(mock_neo4j):
     mock_rec.single.return_value = {"owner_id": "real_owner"}
     mock_session.run.return_value = mock_rec
 
-    response = client.post("/courses/c1/prerequisites?user_id=imposter", headers={"X-Internal-Key": "correct"})
+    response = client.post("/courses/c1/prerequisites?user_id=imposter", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 403
     assert "Permission denied" in response.json()["detail"]
 
@@ -212,7 +212,7 @@ def test_prerequisites_success_200(mock_neo4j, mock_run_prereq):
     mock_rec.single.return_value = {"owner_id": "real_owner"}
     mock_session.run.return_value = mock_rec
 
-    response = client.post("/courses/c1/prerequisites?user_id=real_owner", headers={"X-Internal-Key": "correct"})
+    response = client.post("/courses/c1/prerequisites?user_id=real_owner", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 200
     assert response.json()["status"] == "processing prerequisites"
 

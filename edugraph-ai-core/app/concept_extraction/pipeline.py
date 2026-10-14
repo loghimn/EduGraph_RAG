@@ -168,6 +168,24 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
                 f"[{doc_id}] ✔ Đã nạp {len(db_concepts)} concept hiện có của course để merge"
             )
             
+            # Embed concepts before merging so cross-language cosine matching can run.
+            concept_texts_to_embed = []
+            for nc in new_concepts:
+                aliases = nc.get("aliases", [])[:settings.CONCEPT_EMBED_MAX_ALIASES]
+                emb_str = nc["canonical"]
+                if aliases:
+                    emb_str += "; " + "; ".join(aliases)
+                concept_texts_to_embed.append(emb_str)
+
+            if concept_texts_to_embed:
+                c_embs = await embed_model.embed_batch(concept_texts_to_embed)
+                for i, nc in enumerate(new_concepts):
+                    nc["embedding"] = c_embs[i]
+                    nc["embedding_model"] = "BAAI/bge-m3"
+                logger.info(
+                    f"[{doc_id}] ✔ Embed {len(concept_texts_to_embed)} concept mới xong"
+                )
+
             # Gộp và xử lý
             t_merge = time.perf_counter()
             merged_new, merge_cands = await asyncio.to_thread(merge_concepts, new_concepts, db_concepts)
@@ -176,8 +194,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
                 f"({time.perf_counter() - t_merge:.2f}s)"
             )
             
-            # Tính order và embedding cho các concept mới
-            concept_texts_to_embed = []
+            # Tính order cho các concept mới
             for nc in merged_new:
                 # Tính order
                 fc_index = nc.get("first_chunk_index", 0)
@@ -185,22 +202,6 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
                 # Tạm gán: seq = 1
                 seq = 1
                 nc["order"] = seq * 100000 + fc_index
-                
-                # Tạo chuỗi embed: name; alias1; alias2
-                aliases = nc.get("aliases", [])[:settings.CONCEPT_EMBED_MAX_ALIASES]
-                emb_str = nc["canonical"]
-                if aliases:
-                    emb_str += "; " + "; ".join(aliases)
-                concept_texts_to_embed.append(emb_str)
-                
-            if concept_texts_to_embed:
-                c_embs = await embed_model.embed_batch(concept_texts_to_embed)
-                for i, nc in enumerate(merged_new):
-                    nc["embedding"] = c_embs[i]
-                    nc["embedding_model"] = "BAAI/bge-m3"
-                logger.info(
-                    f"[{doc_id}] ✔ Embed {len(concept_texts_to_embed)} concept mới xong"
-                )
                 
             # Sinh Mentions: từ LLM và từ Scanner
             mentions = []

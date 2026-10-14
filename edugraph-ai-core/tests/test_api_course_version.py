@@ -32,7 +32,7 @@ async def test_api_course_version():
                     assert v["v"] == 1
                     
         # 2. DELETE /documents/d1?course_id=__test__&user_id=user1
-        resp = await ac.delete("/documents/d1?course_id=__test__&user_id=user1", headers={"X-Internal-Key": "dummy_key"})
+        resp = await ac.delete("/documents/d1?course_id=__test__&user_id=user1", headers={"X-Internal-Key": "test-internal-api-key"})
         assert resp.status_code == 200
         async with neo4j_client.driver.session() as s:
             v = await (await s.run("MATCH (c:Course {id: '__test__'}) RETURN c.version AS v")).single()

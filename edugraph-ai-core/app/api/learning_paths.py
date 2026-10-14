@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import settings
+from app.api.internal_auth import verify_internal_key
 from app.db.neo4j_client import neo4j_client
 from app.core.cache import cache, generate_cache_key
 from app.retrieval.graph_cache import get_course_graph, GraphConflictError
@@ -19,11 +20,6 @@ class LearningPathPlanRequest(BaseModel):
     known_concept_ids: Optional[List[str]] = None
     include_external_prereqs: bool = True
     assume_known_prerequisites: bool = True
-
-def verify_internal_key(x_internal_key: str = Header(...)):
-    if x_internal_key not in (settings.INTERNAL_API_KEY, "correct"):
-        raise HTTPException(status_code=403, detail="Invalid Internal Key")
-    return x_internal_key
 
 @router.post("/learning-paths/plan")
 async def create_learning_path_plan(

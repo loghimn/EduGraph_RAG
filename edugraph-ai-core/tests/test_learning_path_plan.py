@@ -179,7 +179,7 @@ def test_api_auth_ownership_and_errors(mock_neo4j):
     mock_rec = AsyncMock()
     mock_rec.single.return_value = None
     mock_session.run.return_value = mock_rec
-    resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "correct"}, json={"course_id": "c_missing", "user_id": "u1"})
+    resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "test-internal-api-key"}, json={"course_id": "c_missing", "user_id": "u1"})
     assert resp.status_code == 404
 
     # 8c. Sai chủ sở hữu -> 403
@@ -193,7 +193,7 @@ def test_api_auth_ownership_and_errors(mock_neo4j):
         "doc_concept_ids": []
     }
     mock_session.run.return_value = mock_rec_owner
-    resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "correct"}, json={"course_id": "c1", "user_id": "u1"})
+    resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "test-internal-api-key"}, json={"course_id": "c1", "user_id": "u1"})
     assert resp.status_code == 403
 
 # 9. Test API: Goal không tồn tại trong course -> 404 kèm ID
@@ -218,7 +218,7 @@ def test_api_goal_not_found_404(mock_neo4j, mock_get_graph):
 
     resp = client.post(
         "/learning-paths/plan",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "c1", "user_id": "u1", "goal_concept_ids": ["UNKNOWN_ID"]}
     )
     assert resp.status_code == 404
@@ -247,7 +247,7 @@ def test_api_pending_documents_warning(mock_neo4j, mock_get_graph):
 
     resp = client.post(
         "/learning-paths/plan",
-        headers={"X-Internal-Key": "correct"},
+        headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "c1", "user_id": "u1"}
     )
     assert resp.status_code == 200

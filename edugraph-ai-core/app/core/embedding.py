@@ -67,7 +67,7 @@ class EmbeddingModel:
                     if batch_size < 1:
                         raise RuntimeError("Hết VRAM ngay cả với batch_size=1.")
                 except Exception as e:
-                    if "CUDA out of memory" in str(e).lower() or "allocate" in str(e).lower():
+                    if "cuda out of memory" in str(e).lower() or "allocate" in str(e).lower():
                         batch_size //= 2
                         if torch.cuda.is_available():
                             torch.cuda.empty_cache()
@@ -77,4 +77,3 @@ class EmbeddingModel:
                         raise e
 
 embed_model = EmbeddingModel()
-

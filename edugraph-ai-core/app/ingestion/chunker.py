@@ -50,6 +50,8 @@ def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) ->
             
         # Tạm thời để giảm độ phức tạp: chunking bằng tokenizer với return_offsets_mapping 
         # (nếu tokenzier hỗ trợ dạng fast)
+        page_chunk_start = len(chunks)
+        page_chunk_index = chunk_index
         try:
             tokens = tokenizer(
                 text, 
@@ -88,12 +90,21 @@ def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) ->
                 # Đảm bảo tiến tới
                 if settings.CHUNK_TOKENS - settings.CHUNK_OVERLAP <= 0:
                     idx += settings.CHUNK_TOKENS
-                    
+
         except Exception:
+            del chunks[page_chunk_start:]
+            chunk_index = page_chunk_index
+
             # Nếu tokenizer không phải fast, fall back sang cắt theo ký tự (xấp xỉ 1 token = 3-4 chars)
             # 500 tokens ~ 1500 chars
             char_step = settings.CHUNK_TOKENS * 3
             char_overlap = settings.CHUNK_OVERLAP * 3
+            char_advance = char_step - char_overlap
+            if char_advance <= 0:
+                raise ValueError(
+                    "CHUNK_TOKENS must be greater than CHUNK_OVERLAP for character fallback chunking"
+                )
+
             idx = 0
             while idx < len(text):
                 end_idx = min(idx + char_step, len(text))
@@ -110,6 +121,6 @@ def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) ->
                     "text": chunk_text
                 })
                 chunk_index += 1
-                idx += (char_step - char_overlap)
+                idx += char_advance
                 
     return chunks

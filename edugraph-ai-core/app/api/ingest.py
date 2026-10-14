@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.config import settings
+from app.api.internal_auth import verify_internal_key
 from app.db.neo4j_client import neo4j_client
 from app.concept_extraction.pipeline import process_document_pipeline
 from app.prerequisite.pipeline import run_prerequisite_pipeline
@@ -21,11 +22,6 @@ class IngestRequest(BaseModel):
     course_id: str
     user_id: str
     filename: Optional[str] = "unknown.pdf"
-
-def verify_internal_key(x_internal_key: str = Header(...)):
-    if x_internal_key not in (settings.INTERNAL_API_KEY, "correct", "dummy_key"):
-        raise HTTPException(status_code=403, detail="Invalid Internal Key")
-    return x_internal_key
 
 async def _background_ingest(doc_id: str, course_id: str, filename: str):
     try:

@@ -7,7 +7,7 @@ import statistics
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db.neo4j_client import neo4j_client
-from app.db.repo import repo
+from app.db import repo
 
 async def run_latency_test(name: str, coro, iterations: int = 30) -> list[float]:
     latencies = []
@@ -47,9 +47,13 @@ async def main():
         # Test 2: Vector Query
         # Insert 100 fake vectors for testing
         print("\nInserting 100 fake vectors for vector query test...")
-        await repo.smoke_test_insert_fake_vectors(course_id, count=100)
-        
         import random
+        vector_list = [
+            {"id": f"__smoke__:{i}", "emb": [random.random() for _ in range(1024)]}
+            for i in range(100)
+        ]
+        await repo.smoke_test_insert_vector(course_id, vector_list)
+
         # Query with random vector
         async def query_vector():
             test_vector = [random.random() for _ in range(1024)]

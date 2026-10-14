@@ -153,7 +153,7 @@ public class AiCoreClient {
                             throw toAiCoreException(httpResponse.getStatusCode().value(), errorBody);
                         }
                         return httpResponse;
-                    });
+                    }, false);
         } catch (AiCoreException e) {
             throw e;
         } catch (RestClientException e) {

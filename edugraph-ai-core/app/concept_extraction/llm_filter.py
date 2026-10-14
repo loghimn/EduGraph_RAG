@@ -9,7 +9,8 @@ from app.core.text_utils import normalize_text_unaccent
 from app.concept_extraction.mention_scanner import verify_and_map_evidence
 
 # Tải prompt
-with open(os.path.join(settings.RAW_DATA_DIR, "..", "..", "prompts", "concept_filter.txt"), "r", encoding="utf-8") as f:
+prompt_path = os.path.join(os.path.dirname(__file__), "..", "..", "prompts", "concept_filter.txt")
+with open(os.path.abspath(prompt_path), "r", encoding="utf-8") as f:
     PROMPT_CONTENT = f.read()
 
 # Tách PROMPT_VERSION và template

@@ -8,9 +8,13 @@ from app.config import settings
 from app.core.errors import InvalidPathError, ScannedPDFError, UnsupportedFormatError
 
 def get_safe_path(doc_id: str, filename: str) -> str:
-    base_dir = os.path.abspath(settings.RAW_DATA_DIR)
-    target_path = os.path.abspath(os.path.join(base_dir, doc_id, filename))
-    if not target_path.startswith(base_dir):
+    base_dir = os.path.realpath(settings.RAW_DATA_DIR)
+    target_path = os.path.realpath(os.path.join(base_dir, doc_id, filename))
+    try:
+        common_path = os.path.commonpath((base_dir, target_path))
+    except ValueError:
+        common_path = None
+    if common_path != base_dir or target_path == base_dir:
         raise InvalidPathError(f"Path traversal detected: {target_path}")
     return target_path
 

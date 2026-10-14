@@ -10,7 +10,9 @@ from app.core.cache import cache, generate_cache_key
 PROMPT_VERSION = "v1"
 PROMPT_TEMPLATE = ""
 
-prompt_path = os.path.join(settings.RAW_DATA_DIR, "..", "..", "prompts", "prerequisite.txt")
+prompt_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "prompts", "prerequisite.txt")
+)
 if os.path.exists(prompt_path):
     with open(prompt_path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -22,7 +24,7 @@ if os.path.exists(prompt_path):
         PROMPT_TEMPLATE = "\n".join([line for line in lines if not line.startswith("PROMPT_VERSION=")])
 else:
     # Dummy n\u1ebfu ch\u01b0a c\u00f3 file
-    PROMPT_TEMPLATE = "TARGET: {target}\nCANDIDATES: {candidates}\nEVIDENCE: {evidence}"
+    raise FileNotFoundError(f"Required prerequisite prompt not found: {prompt_path}")
 
 judge_telemetry = []
 semaphore = asyncio.Semaphore(settings.LLM_CONCURRENCY)
