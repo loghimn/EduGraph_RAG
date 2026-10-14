@@ -2,6 +2,7 @@ package fu.coreservice.service.impl;
 
 import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.document.DocumentDownloadResponse;
+import fu.coreservice.dto.document.DocumentProcessingResponse;
 import fu.coreservice.dto.document.DocumentResponse;
 import fu.coreservice.entity.*;
 import fu.coreservice.exception.AppException;
@@ -146,6 +147,27 @@ public class DocumentServiceImpl implements DocumentService {
                 .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
 
         return mapToResponse(document);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public DocumentProcessingResponse getDocumentProcessingStatus(Long courseId, Long documentId) {
+        getCourseOwnedByCurrentInstructor(courseId);
+
+        Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId, courseId)
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        DocumentProcessingJob job = documentProcessingJobRepository
+                .findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(document.getDocumentId())
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        return DocumentProcessingResponse.builder()
+                .documentId(document.getDocumentId())
+                .jobStatus(job.getJobStatus())
+                .jobType(job.getJobType())
+                .errorMessage(job.getErrorMessage())
+                .updatedAt(job.getUpdatedAt())
+                .build();
     }
 
     @Override

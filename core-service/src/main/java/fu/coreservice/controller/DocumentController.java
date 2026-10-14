@@ -3,6 +3,7 @@ package fu.coreservice.controller;
 import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.document.DocumentDownloadResponse;
+import fu.coreservice.dto.document.DocumentProcessingResponse;
 import fu.coreservice.dto.document.DocumentResponse;
 import fu.coreservice.entity.UploadStatus;
 import fu.coreservice.service.DocumentService;
@@ -107,6 +108,21 @@ public class DocumentController {
                         .data(response)
                         .build()
         );
+    }
+
+    @GetMapping("/{courseId}/documents/{documentId}/processing")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ResponseEntity<ApiResponse<DocumentProcessingResponse>> getDocumentProcessingStatus(
+            @PathVariable Long courseId,
+            @PathVariable Long documentId
+    ) {
+        DocumentProcessingResponse response = documentService.getDocumentProcessingStatus(courseId, documentId);
+
+        return ResponseEntity.ok(ApiResponse.<DocumentProcessingResponse>builder()
+                .success(true)
+                .message("Document processing status retrieved successfully")
+                .data(response)
+                .build());
     }
 
     @GetMapping("/{courseId}/documents/{documentId}/download")
