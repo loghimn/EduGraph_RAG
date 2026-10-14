@@ -6,6 +6,7 @@ import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.DocumentProcessingJob;
 import fu.coreservice.entity.JobStatus;
+import fu.coreservice.entity.JobType;
 import fu.coreservice.entity.UploadStatus;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.repository.DocumentProcessingJobRepository;
@@ -134,12 +135,17 @@ public class AiDocumentProcessingService {
 
     private void applyStatus(Document document, AiDocumentStatusResponse status) {
         String pythonStatus = status == null || status.getStatus() == null ? "" : status.getStatus();
+        JobType currentStep = parseCurrentStep(status, document.getDocumentId());
+        Optional<DocumentProcessingJob> latestJob = findLatestJob(document.getDocumentId());
         switch (pythonStatus) {
             case "DONE" -> {
                 document.setDocStatus(UploadStatus.COMPLETED);
                 documentRepository.save(document);
-                findLatestJob(document.getDocumentId()).ifPresent(job -> {
+                latestJob.ifPresent(job -> {
                     job.setJobStatus(JobStatus.DONE);
+                    if (currentStep != null) {
+                        job.setJobType(currentStep);
+                    }
                     documentProcessingJobRepository.save(job);
                 });
                 log.info("Document processing completed. documentId={}", document.getDocumentId());
@@ -147,17 +153,37 @@ public class AiDocumentProcessingService {
             case "FAILED" -> {
                 document.setDocStatus(UploadStatus.FAILED);
                 documentRepository.save(document);
-                findLatestJob(document.getDocumentId()).ifPresent(job -> {
+                latestJob.ifPresent(job -> {
                     job.setJobStatus(JobStatus.FAILED);
+                    if (currentStep != null) {
+                        job.setJobType(currentStep);
+                    }
                     job.setErrorMessage(truncate(status.getError()));
                     documentProcessingJobRepository.save(job);
                 });
                 log.warn("Document processing failed. documentId={}", document.getDocumentId());
             }
             case "PROCESSING", "UPLOADED" -> {
-                // chưa kết thúc — không thay đổi trạng thái
+                latestJob.ifPresent(job -> {
+                    if (currentStep != null && job.getJobType() != currentStep) {
+                        job.setJobType(currentStep);
+                        documentProcessingJobRepository.save(job);
+                    }
+                });
             }
             default -> log.warn("Unknown AI status '{}'. documentId={}", pythonStatus, document.getDocumentId());
+        }
+    }
+
+    private JobType parseCurrentStep(AiDocumentStatusResponse status, Long documentId) {
+        if (status == null || status.getCurrentStep() == null || status.getCurrentStep().isBlank()) {
+            return null;
+        }
+        try {
+            return JobType.valueOf(status.getCurrentStep());
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown AI processing step '{}'. documentId={}", status.getCurrentStep(), documentId);
+            return null;
         }
     }
 }

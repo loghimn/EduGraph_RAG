@@ -21,18 +21,22 @@ def get_course_lock(course_id: str) -> asyncio.Lock:
         course_locks[course_id] = asyncio.Lock()
     return course_locks[course_id]
 
-async def update_heartbeat(doc_id: str, progress: str = None):
-    query = """
-    MATCH (d:Document {id: $doc_id})
-    SET d.updated_at = timestamp()
+async def update_heartbeat(doc_id: str, progress: str = None, current_step: str = None):
+    set_clauses = ["d.updated_at = timestamp()"]
+    parameters = {"doc_id": doc_id}
+    if progress is not None:
+        set_clauses.append("d.progress = $progress")
+        parameters["progress"] = progress
+    if current_step is not None:
+        set_clauses.append("d.current_step = $current_step")
+        set_clauses.append("d.progress = null")
+        parameters["current_step"] = current_step
+    query = f"""
+    MATCH (d:Document {{id: $doc_id}})
+    SET {", ".join(set_clauses)}
     """
-    if progress:
-        query = """
-        MATCH (d:Document {id: $doc_id})
-        SET d.updated_at = timestamp(), d.progress = $progress
-        """
     async with neo4j_client.driver.session() as session:
-                await session.run(query, doc_id=doc_id, progress=progress)
+        await session.run(query, **parameters)
 
 async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
     t_start = time.perf_counter()
@@ -52,7 +56,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         from app.concept_extraction.mention_scanner import scan_mentions
         from app.concept_extraction.merger import merge_concepts
         
-        await update_heartbeat(doc_id)
+        await update_heartbeat(doc_id, current_step="EXTRACTING_TEXT_AND_CHUNKING")
         
         # I/O & Text processing trong to_thread
         def _cpu_bound_text_prep():
@@ -77,7 +81,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             logger.warning(f"[{doc_id}] ✖ Tài liệu trống hoặc không hợp lệ — dừng pipeline.")
             return
             
-        await update_heartbeat(doc_id)
+        await update_heartbeat(doc_id, current_step="GENERATING_CHUNK_EMBEDDINGS")
         
         # Tính Embedding cho các chunk (chạy 1 lần, dùng cho cả KeyBERT và DB)
         
@@ -91,7 +95,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             c["embedding"] = embeddings[i]
             c["embedding_model"] = "BAAI/bge-m3"
             
-        await update_heartbeat(doc_id)
+        await update_heartbeat(doc_id, current_step="EXTRACTING_KEYWORDS")
         
         # KeyBERT Candidates (to_thread)
         t_cand = time.perf_counter()
@@ -101,7 +105,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             f"({time.perf_counter() - t_cand:.2f}s)"
         )
         
-        await update_heartbeat(doc_id)
+        await update_heartbeat(doc_id, current_step="FILTERING_CONCEPTS")
         
         # LLM Filter (asyncio gather)
         # Ghép nhóm chunks (CHUNKS_PER_LLM_CALL)
@@ -154,7 +158,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             f"còn lại: {len(new_concepts)}"
         )
         
-        await update_heartbeat(doc_id)
+        await update_heartbeat(doc_id, current_step="MERGING_CONCEPTS")
         
         # Locking khi đụng đến DB
         async with course_lock:
@@ -244,6 +248,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
                 f"[{doc_id}] ▶ Ghi DB: {len(chunks)} chunks, {len(merged_new)} concepts, "
                 f"{len(mentions)} mentions"
             )
+            await update_heartbeat(doc_id, current_step="SAVING_GRAPH")
             t_save = time.perf_counter()
             for c in merged_new:
                 if "canonical" in c:

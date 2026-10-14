@@ -31,7 +31,10 @@ async def _background_ingest(doc_id: str, course_id: str, filename: str):
     try:
         query = """
         MATCH (d:Document {id: $doc_id, course_id: $course_id})
-        SET d.status = 'PROCESSING', d.updated_at = timestamp()
+        SET d.status = 'PROCESSING',
+            d.current_step = 'EXTRACTING_TEXT_AND_CHUNKING',
+            d.progress = null,
+            d.updated_at = timestamp()
         """
         async with neo4j_client.driver.session() as session:
             await session.run(query, doc_id=doc_id, course_id=course_id)
@@ -48,6 +51,17 @@ async def _background_ingest(doc_id: str, course_id: str, filename: str):
             f"[{doc_id}] ► Bước 2/2: tiên quyết... "
             f"(trích xuất mất {_time.perf_counter() - t0:.1f}s)"
         )
+        async with neo4j_client.driver.session() as session:
+            await session.run(
+                """
+                MATCH (d:Document {id: $doc_id, course_id: $course_id})
+                SET d.current_step = 'INFERRING_PREREQUISITES',
+                    d.progress = null,
+                    d.updated_at = timestamp()
+                """,
+                doc_id=doc_id,
+                course_id=course_id
+            )
         await prereq_pipeline.run_prerequisite_pipeline(course_id)
         logger.info(f"[{doc_id}] ===== HOÀN TẤT cả 2 bước =====")
         
@@ -236,7 +250,10 @@ async def get_document_status(
 
     query = """
     MATCH (d:Document {id: $doc_id, course_id: $course_id})
-    RETURN d.status AS status, d.progress AS progress, d.error AS error
+    RETURN d.status AS status,
+           properties(d)['progress'] AS progress,
+           properties(d)['error'] AS error,
+           properties(d)['current_step'] AS current_step
     """
     async with neo4j_client.driver.session() as session:
         rec = await session.run(query, doc_id=doc_id, course_id=course_id)
@@ -251,4 +268,5 @@ async def get_document_status(
         "status": doc["status"],
         "progress": doc["progress"],
         "error": doc["error"],
+        "current_step": doc.get("current_step"),
     }

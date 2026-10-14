@@ -30,5 +30,8 @@ public class AiDocumentStatusResponse {
 
     private String progress;
 
+    @JsonProperty("current_step")
+    private String currentStep;
+
     private String error;
 }

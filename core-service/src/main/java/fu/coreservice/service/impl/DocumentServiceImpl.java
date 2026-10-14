@@ -92,7 +92,7 @@ public class DocumentServiceImpl implements DocumentService {
 
         DocumentProcessingJob processingJob = DocumentProcessingJob.builder()
                         .document(document)
-                        .jobType(JobType.FULL_PIPELINE)
+                        .jobType(JobType.NONE)
                         .jobStatus(JobStatus.QUEUED)
                         .build();
         documentProcessingJobRepository.save(processingJob);
