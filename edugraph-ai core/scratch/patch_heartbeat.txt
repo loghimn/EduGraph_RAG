@@ -1,0 +1,12 @@
+async def update_heartbeat(doc_id: str, progress: str = None):
+    query = """
+    MATCH (d:Document {id: $doc_id})
+    SET d.updated_at = timestamp()
+    """
+    if progress:
+        query = """
+        MATCH (d:Document {id: $doc_id})
+        SET d.updated_at = timestamp(), d.progress = $progress
+        """
+    async with neo4j_client.driver.session() as session:
+        await session.run(query, doc_id=doc_id, progress=progress)

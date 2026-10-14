@@ -1,0 +1,15 @@
+        if args.out and res:
+            import json
+            out_data = {
+                "concepts": res.get("valid_concepts", []),
+                "dropped": res.get("dropped_concepts", [])
+            }
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(out_data, f, ensure_ascii=False, indent=2)
+            print(f"Đã xuất JSON ra {args.out}")
+            
+        if args.dry_run:
+            async with neo4j_client.driver.session() as session:
+                rec = await session.run("MATCH (n {course_id: '__test__'}) RETURN count(n) AS c")
+                c = (await rec.single())["c"]
+                print(f"[Xác minh DRY-RUN] Số node mang course_id __test__: {c}")

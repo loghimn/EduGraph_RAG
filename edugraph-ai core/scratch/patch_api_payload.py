@@ -1,0 +1,5 @@
+with open('scripts/test_ingest_api.py', 'r', encoding='utf-8') as f: text = f.read()
+text = text.replace('"doc_id":', '"document_id":')
+text = text.replace('"owner_id":', '"user_id":')
+text = text.replace("doc.get('err')", "''")
+with open('scripts/test_ingest_api.py', 'w', encoding='utf-8') as f: f.write(text)
