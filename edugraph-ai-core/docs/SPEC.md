@@ -87,11 +87,12 @@ Giao diện ──► Java (Spring Boot) ──► Neo4j Aura
                   ▼                      │
               Python FastAPI ────────────┘
               POST /ingest, POST /chat (SSE), DELETE /documents/{id},
-              POST /courses/{id}/prerequisites
+              POST /courses/{id}/prerequisites, GET /courses/{id}/knowledge-graph
 ```
 
 - **Java** lo: đăng nhập, upload file vào `/data/raw/<doc_id>/<filename>`, tạo `Course`, `Document(UPLOADED)`, cạnh `HAS_DOCUMENT` và `Document.seq`, chặn upload trùng `file_hash`, gọi Python, xem / sửa đồ thị (confirm / remove / add cạnh), kiểm quyền theo `owner_id`.
-- **Python** lo: `/ingest` (phần 0-2), `/chat` (phần 3), xóa tài liệu (`DELETE /documents/{id}`, để toàn bộ logic dọn dẹp nằm một chỗ), chạy lại bước tiên quyết cho một khóa học.
+- **Python** lo: `/ingest` (phần 0-2), `/chat` (phần 3), xóa tài liệu (`DELETE /documents/{id}`, để toàn bộ logic dọn dẹp nằm một chỗ), chạy lại bước tiên quyết cho một khóa học, và cung cấp graph concepts/quan hệ tiên quyết cùng chi tiết nguồn concept.
+- **Knowledge graph:** Java cung cấp `GET /api/courses/{courseId}/knowledge-graph` cho chủ khóa học hoặc học viên đã đăng ký; endpoint proxy graph concepts và cạnh `PREREQUISITE_OF` từ Python. `GET /api/courses/{courseId}/knowledge-graph/concepts/{conceptId}` trả chi tiết concept cùng các chunk evidence, trang và tài liệu nguồn. FE chỉ gọi Java; Python vẫn private.
 - Hai bên chỉ chia sẻ Neo4j và `/data/raw/` (cùng máy hoặc cùng mount). Đường dẫn file = `/data/raw/<doc_id>/<filename>`; sau khi resolve phải kiểm tra vẫn nằm trong `/data/raw` (chống path traversal).
 - **Đã xác nhận:** Python không public; Java gọi kèm header `X-Internal-Key`. Body của `/ingest` là `{document_id, course_id, user_id}`; `/chat` cũng có `course_id`, `user_id`. Python đối chiếu với DB: `Document` thuộc `Course`, `Course.owner_id = user_id`.
 - Neo4j chạy trên cloud (AuraDB): URI dạng `neo4j+s://...`, có độ trễ mạng, nên gộp truy vấn và ghi theo lô.
@@ -350,6 +351,8 @@ Làm: `config`, `core/*`, `db/*`, `scripts/init_schema.py`, `scripts/smoke_neo4j
   - Tính toàn bộ trong RAM, tính `Concept.order`, rồi ghi **một transaction** theo "Quy tắc transaction" (mục 2).
   - Sau đó chạy bước tiên quyết (giai đoạn 3) rồi mới `DONE`. Lỗi bất kỳ bước nào thì `FAILED` kèm `error`. Trong lúc làm giai đoạn 2 (chưa có bước tiên quyết) thì dừng ở trạng thái trung gian của giai đoạn đó và **ghi rõ trong báo cáo**; sang giai đoạn 3, `DONE` chỉ đặt sau khi cả hai bước xong, và tài liệu đã ingest ở giai đoạn 2 cần `POST /courses/{id}/prerequisites` để bổ sung cạnh.
 - **`POST /ingest {document_id, course_id, user_id}`:** kiểm `X-Internal-Key` và quyền (mục 3), chạy nền, trả về ngay.
+- **`GET /courses/{course_id}/knowledge-graph`:** trả toàn bộ concept của khóa học và cạnh tiên quyết không bị `REJECTED`; chiều cạnh `source -> target` biểu thị source là tiên quyết của target.
+- **`GET /courses/{course_id}/knowledge-graph/concepts/{concept_id}`:** trả metadata concept và tối đa 50 chunk evidence làm nguồn, sắp theo thứ tự tài liệu/chunk.
 - **`DELETE /documents/{id}`:** dọn dẹp theo quy tắc xóa tài liệu ở mục 4, một transaction, tăng version.
 - **Test:**
   - Tiếng Việt có dấu, không dấu, mixed EN-VI. PDF scan. DOCX có bảng.

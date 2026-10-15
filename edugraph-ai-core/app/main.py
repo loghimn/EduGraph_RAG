@@ -73,4 +73,6 @@ app.include_router(chat_router)
 from app.api.learning_paths import router as learning_paths_router
 app.include_router(learning_paths_router)
 
+from app.api.knowledge_graph import router as knowledge_graph_router
+app.include_router(knowledge_graph_router)
 

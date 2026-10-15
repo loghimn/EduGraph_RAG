@@ -7,11 +7,14 @@ import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.request.ChatRequest;
 import fu.coreservice.dto.request.LearningPathPlanRequest;
 import fu.coreservice.entity.Course;
+import fu.coreservice.entity.Document;
 import fu.coreservice.entity.User;
 import fu.coreservice.exception.AiCoreException;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.CourseRepository;
+import fu.coreservice.repository.CourseEnrollmentRepository;
+import fu.coreservice.repository.DocumentRepository;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +24,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.http.client.ClientHttpResponse;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Proxy logic cho các endpoint AI (chat SSE, learning-path) — frontend chỉ gọi qua
@@ -36,6 +44,95 @@ public class AiRagService {
     private final AiCoreClient aiCoreClient;
     private final UserRepository userRepository;
     private final CourseRepository courseRepository;
+    private final CourseEnrollmentRepository courseEnrollmentRepository;
+    private final DocumentRepository documentRepository;
+
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraph(Long courseId) {
+        requireCourseGraphAccess(courseId);
+        try {
+            Map<String, Object> graph = aiCoreClient.getKnowledgeGraph(courseId);
+            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
+                    .success(true)
+                    .message("Knowledge graph retrieved successfully")
+                    .data(graph)
+                    .build());
+        } catch (AiCoreException e) {
+            return relayAiCoreError(e, courseId, "Knowledge graph retrieval failed");
+        }
+    }
+
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraphConcept(Long courseId,
+                                                                                     String conceptId) {
+        requireCourseGraphAccess(courseId);
+        try {
+            Map<String, Object> concept = aiCoreClient.getKnowledgeGraphConcept(courseId, conceptId);
+            enrichSourceFileNames(concept, courseId);
+            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
+                    .success(true)
+                    .message("Knowledge graph concept retrieved successfully")
+                    .data(concept)
+                    .build());
+        } catch (AiCoreException e) {
+            return relayAiCoreError(e, courseId, "Knowledge graph concept retrieval failed");
+        }
+    }
+
+    private void enrichSourceFileNames(Map<String, Object> concept, Long courseId) {
+        Object rawSources = concept.get("sources");
+        if (!(rawSources instanceof List<?> sources)) {
+            return;
+        }
+
+        List<Map<String, Object>> normalizedSources = new ArrayList<>();
+        Set<Long> documentIds = new LinkedHashSet<>();
+        for (Object rawSource : sources) {
+            if (!(rawSource instanceof Map<?, ?> source)) {
+                continue;
+            }
+            Map<String, Object> normalizedSource = new LinkedHashMap<>();
+            source.forEach((key, value) -> {
+                if (key instanceof String stringKey) {
+                    normalizedSource.put(stringKey, value);
+                }
+            });
+            normalizedSources.add(normalizedSource);
+
+            Object documentId = normalizedSource.get("document_id");
+            if (documentId != null) {
+                try {
+                    documentIds.add(Long.valueOf(documentId.toString()));
+                } catch (NumberFormatException e) {
+                    log.warn("Ignoring invalid source document id in knowledge graph response. courseId={}, documentId={}",
+                            courseId, documentId);
+                }
+            }
+        }
+
+        if (documentIds.isEmpty()) {
+            concept.put("sources", normalizedSources);
+            return;
+        }
+
+        Map<Long, String> fileNamesByDocumentId = new LinkedHashMap<>();
+        for (Document document : documentRepository.findByDocumentIdInAndCourseCourseId(
+                new ArrayList<>(documentIds), courseId)) {
+            fileNamesByDocumentId.put(document.getDocumentId(), document.getFileName());
+        }
+        for (Map<String, Object> source : normalizedSources) {
+            Object documentId = source.get("document_id");
+            if (documentId != null) {
+                try {
+                    String fileName = fileNamesByDocumentId.get(Long.valueOf(documentId.toString()));
+                    if (fileName != null) {
+                        source.put("filename", fileName);
+                    }
+                } catch (NumberFormatException e) {
+                    // The invalid id was logged when collecting document ids above.
+                }
+            }
+        }
+        concept.put("sources", normalizedSources);
+    }
 
     public ClientHttpResponse openChatStream(Long courseId, ChatRequest request) {
         User owner = requireCourseOwner(courseId);
@@ -99,5 +196,35 @@ public class AiRagService {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
         return user;
+    }
+
+    private void requireCourseGraphAccess(Long courseId) {
+        String email = SecurityUtils.getCurrentUserEmail();
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
+
+        boolean isOwner = course.getUser().getUserId().equals(user.getUserId());
+        boolean isEnrolled = courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user);
+        if (!isOwner && !isEnrolled) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+    }
+
+    private ResponseEntity<ApiResponse<Map<String, Object>>> relayAiCoreError(
+            AiCoreException e, Long courseId, String message) {
+        HttpStatus status = HttpStatus.resolve(e.getHttpStatus());
+        if (status == null || status.is2xxSuccessful()) {
+            status = HttpStatus.BAD_GATEWAY;
+        }
+        log.warn("{}, courseId={}, status={}", message, courseId, e.getHttpStatus());
+        return ResponseEntity.status(status).body(ApiResponse.<Map<String, Object>>builder()
+                .success(false)
+                .errorCode("AI_CORE_" + e.getHttpStatus())
+                .message(e.getDetail())
+                .data(e.getBody().isEmpty() ? null : e.getBody())
+                .build());
     }
 }

@@ -34,7 +34,10 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
     # 1. Lấy tất cả Concept của khóa học
     q_concepts = """
     MATCH (c:Concept {course_id: $course_id})
-    RETURN c.id AS id, c.name AS name, coalesce(c.order, 0) AS order
+    RETURN c.id AS id, c.key AS key, c.name AS name,
+           coalesce(c.aliases, []) AS aliases,
+           coalesce(c.language, 'mixed') AS language,
+           coalesce(c.order, 0) AS order
     """
     # 2. Lấy cạnh PREREQUISITE_OF không phải REJECTED
     q_edges = """
@@ -66,7 +69,14 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
     # Dựng DiGraph
     G = nx.DiGraph()
     for n in nodes_data:
-        G.add_node(n["id"], name=n["name"], order=n["order"])
+        G.add_node(
+            n["id"],
+            key=n.get("key"),
+            name=n["name"],
+            aliases=n.get("aliases", []),
+            language=n.get("language", "mixed"),
+            order=n["order"],
+        )
 
     for e in edges_data:
         # Bỏ self-loop nếu có
