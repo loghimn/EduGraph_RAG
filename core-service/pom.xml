@@ -111,6 +111,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-restclient</artifactId>
         </dependency>
+
+        <!-- Cần cho MultipartBody khi gửi file qua RestClient (Spring 7 tham chiếu Publisher) -->
+        <dependency>
+            <groupId>org.reactivestreams</groupId>
+            <artifactId>reactive-streams</artifactId>
+            <version>1.0.4</version>
+        </dependency>
     </dependencies>
 
     <build>

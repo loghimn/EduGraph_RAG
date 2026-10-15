@@ -1,0 +1,116 @@
+{
+  "concepts": [],
+  "dropped": [],
+  "merge_candidates": [
+    [
+      "view",
+      "view",
+      "Merged (Alias Match)"
+    ],
+    [
+      "view",
+      "view",
+      "Merged (Alias Match)"
+    ],
+    [
+      "JOIN",
+      "JOIN command",
+      "Merged (Plural/Head Noun)"
+    ],
+    [
+      "view",
+      "view",
+      "Merged (Alias Match)"
+    ],
+    [
+      "GROUP BY",
+      "GROUP BY",
+      "Merged (Alias Match)"
+    ],
+    [
+      "primary key",
+      "primary key",
+      "Merged (Alias Match)"
+    ],
+    [
+      "foreign key",
+      "foreign key",
+      "Merged (Alias Match)"
+    ],
+    [
+      "CREATE VIEW",
+      "CREATE VIEW",
+      "Merged (Alias Match)"
+    ],
+    [
+      "JOIN command",
+      "JOIN command",
+      "Merged (Alias Match)"
+    ],
+    [
+      "nested query",
+      "nested query",
+      "Merged (Alias Match)"
+    ],
+    [
+      "partitioning",
+      "partitioning",
+      "Merged (Alias Match)"
+    ],
+    [
+      "WHEN keyword",
+      "WHEN keyword",
+      "Merged (Alias Match)"
+    ],
+    [
+      "soft deletion",
+      "soft deletion",
+      "Merged (Alias Match)"
+    ],
+    [
+      "soft deletion",
+      "soft deletion",
+      "Merged (Alias Match)"
+    ],
+    [
+      "temporary view",
+      "temporary view",
+      "Merged (Alias Match)"
+    ],
+    [
+      "Viewing in SQL",
+      "Viewing in SQL",
+      "Merged (Alias Match)"
+    ],
+    [
+      "ORDER BY clause",
+      "ORDER BY clause",
+      "Merged (Alias Match)"
+    ],
+    [
+      "accession number",
+      "accession number",
+      "Merged (Alias Match)"
+    ],
+    [
+      "INSTEAD OF INSERT",
+      "INSTEAD OF INSERT",
+      "Merged (Alias Match)"
+    ],
+    [
+      "INSTEAD OF trigger",
+      "INSTEAD OF trigger",
+      "Merged (Alias Match)"
+    ],
+    [
+      "Common Table Expression",
+      "Common Table Expression",
+      "Merged (Alias Match)"
+    ],
+    [
+      "Personally Identifiable Information",
+      "Personally Identifiable Information",
+      "Merged (Alias Match)"
+    ]
+  ]
+}

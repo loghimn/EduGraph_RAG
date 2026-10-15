@@ -45,6 +45,10 @@ public enum ErrorCode {
     INVALID_REQUEST("COMMON_001", "Invalid request", HttpStatus.BAD_REQUEST),
     INVALID_PARAMETER("COMMON_002", "Invalid parameter", HttpStatus.BAD_REQUEST),
 
+    // AI Core (Python, port 8082)
+    AI_CORE_UNAVAILABLE("AI_001", "AI service is unavailable", HttpStatus.SERVICE_UNAVAILABLE),
+    AI_CORE_ERROR("AI_002", "AI service request failed", HttpStatus.BAD_GATEWAY),
+
 
     // System
     INTERNAL_SERVER_ERROR("SYSTEM_001", "Internal server error", HttpStatus.INTERNAL_SERVER_ERROR),

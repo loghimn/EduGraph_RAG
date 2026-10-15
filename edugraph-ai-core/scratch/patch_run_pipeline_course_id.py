@@ -1,0 +1,5 @@
+with open('scripts/run_pipeline.py', 'r', encoding='utf-8') as f: text = f.read()
+text = text.replace('    course_id = "__test__"', '    parser.add_argument("--course-id", default="__test__")\n')
+text = text.replace('doc_id = args.doc_id\n', 'doc_id = args.doc_id\n    course_id = args.course_id\n')
+text = text.replace('if not args.dry_run and doc_id == "doc-test-123":', 'if not args.dry_run and course_id == "__test__":')
+with open('scripts/run_pipeline.py', 'w', encoding='utf-8') as f: f.write(text)
