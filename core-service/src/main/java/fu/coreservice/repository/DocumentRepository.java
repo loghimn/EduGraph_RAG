@@ -16,6 +16,7 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
     Page<Document> findByCourseCourseId(Long courseId, Pageable pageable);
     Page<Document> findByCourseCourseIdAndDocStatus(Long courseId, UploadStatus docStatus, Pageable pageable);
     Optional<Document> findByDocumentIdAndCourseCourseId(Long documentId, Long courseId);
+    List<Document> findByDocumentIdInAndCourseCourseId(List<Long> documentIds, Long courseId);
     List<Document> findByDocStatus(UploadStatus docStatus);
 
 }

@@ -24,6 +24,35 @@ async def get_course_concepts(course_id: str) -> List[Dict[str, Any]]:
         records = await result.data()
         return records
 
+
+async def get_knowledge_graph_concept(course_id: str, concept_id: str) -> Dict[str, Any] | None:
+    """Load one concept and the document chunks that provide its source evidence."""
+    query = """
+    MATCH (c:Concept {course_id: $course_id, id: $concept_id})
+    OPTIONAL MATCH (ch:Chunk {course_id: $course_id})-[:MENTIONS {is_evidence: true}]->(c)
+    OPTIONAL MATCH (d:Document {id: ch.doc_id, course_id: $course_id})
+    WITH c, ch, d
+    ORDER BY coalesce(d.seq, 0), coalesce(ch.index, 0)
+    WITH c, collect(DISTINCT CASE WHEN ch IS NULL THEN null ELSE {
+        document_id: ch.doc_id,
+        filename: d.filename,
+        chunk_id: ch.id,
+        page: ch.page,
+        snippet: substring(coalesce(ch.text, ''), 0, 400)
+    } END) AS sources
+    RETURN c.id AS id,
+           c.key AS key,
+           c.name AS name,
+           coalesce(c.aliases, []) AS aliases,
+           coalesce(c.language, 'mixed') AS language,
+           [source IN sources WHERE source IS NOT NULL][0..50] AS sources
+    """
+    async with neo4j_client.driver.session() as session:
+        result = await session.run(query, course_id=course_id, concept_id=concept_id)
+        record = await result.single()
+        return record.data() if record else None
+
+
 async def save_ingestion_transaction(
     doc_id: str,
     course_id: str,

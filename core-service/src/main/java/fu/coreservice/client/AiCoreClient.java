@@ -14,6 +14,7 @@ import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpResponse;
@@ -132,6 +133,32 @@ public class AiCoreClient {
             throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (RestClientException e) {
             throw unavailable(String.valueOf(documentId), e);
+        }
+    }
+
+    public Map<String, Object> getKnowledgeGraph(Long courseId) {
+        try {
+            return restClient.get()
+                    .uri("/courses/{courseId}/knowledge-graph", courseId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(courseId), e);
+        }
+    }
+
+    public Map<String, Object> getKnowledgeGraphConcept(Long courseId, String conceptId) {
+        try {
+            return restClient.get()
+                    .uri("/courses/{courseId}/knowledge-graph/concepts/{conceptId}", courseId, conceptId)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(courseId), e);
         }
     }
 
