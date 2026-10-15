@@ -1,9 +1,12 @@
 import asyncio
+import logging
 import re
 from typing import List, Dict, Any, Optional
 from app.config import settings
 from app.core.embedding import embed_model
 from app.db.neo4j_client import neo4j_client
+
+logger = logging.getLogger(__name__)
 
 def compute_rrf(
     vector_results: List[Dict[str, Any]],
@@ -47,17 +50,25 @@ def sanitize_fulltext_query(query: str) -> str:
         return "*"
     return " ".join(tokens)
 
+async def _course_has_chunks(course_id: str) -> bool:
+    """Trả về True nếu course còn ít nhất một Chunk (chống retry vô tận khi course trống)."""
+    q = "MATCH (c:Chunk {course_id: $course_id}) RETURN count(c) AS n"
+    async with neo4j_client.driver.session() as s:
+        rec = await (await s.run(q, course_id=course_id)).single()
+        return bool(rec and rec["n"])
+
 async def retrieve_chunks(
     course_id: str,
     query: str,
     concept_ids: Optional[List[str]] = None,
     max_chunks: int = 6,
-    overfetch_k: int = 50
+    overfetch_k: Optional[int] = None
 ) -> List[Dict[str, Any]]:
     """
     Truy xuất chunks cho câu hỏi giải thích (explain):
     1. Lấy chunks gắn với concepts qua MENTIONS (is_evidence=true).
-    2. Vector search (k=50, lọc course_id) + Fulltext search (k=50, lọc course_id).
+    2. Vector search (lọc course_id, adaptive overfetch khi top-k toàn cục
+       không chứa chunk của course) + Fulltext search (lọc course_id).
     3. Gộp qua RRF (khoảng 10 dòng) và giới hạn tối đa max_chunks.
     """
     graph_chunks = []
@@ -97,18 +108,37 @@ async def retrieve_chunks(
     vector_results = []
     fulltext_results = []
 
+    fetch_k = overfetch_k if overfetch_k is not None else settings.VECTOR_OVERFETCH_K
+    max_k = settings.VECTOR_OVERFETCH_MAX
+    step = settings.VECTOR_OVERFETCH_STEP
+
     async with neo4j_client.driver.session() as session:
-        try:
-            res_vec = await session.run(vec_query, k=overfetch_k, vector=vec, course_id=course_id)
-            vector_results = await res_vec.data()
-        except Exception as e:
-            # Nếu vector index chưa sẵn sàng trong mock/test
-            pass
+        # Adaptive overfetch: db.index.vector.queryNodes trả top-k toàn cục
+        # rồi mới lọc course_id, nên retry với k lớn dần khi kết quả rỗng.
+        while True:
+            try:
+                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id)
+                vector_results = await res_vec.data()
+            except Exception:
+                # Nếu vector index chưa sẵn sàng trong mock/test
+                vector_results = []
+                break
+            if vector_results or fetch_k >= max_k:
+                break
+            try:
+                if not await _course_has_chunks(course_id):
+                    break
+            except Exception:
+                break
+            fetch_k = min(fetch_k * step, max_k)
+            logger.warning(
+                "vector overfetch retry course_id=%s fetch_k=%s", course_id, fetch_k
+            )
 
         try:
             res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id)
             fulltext_results = await res_ft.data()
-        except Exception as e:
+        except Exception:
             # Nếu fulltext index chưa sẵn sàng
             pass
 

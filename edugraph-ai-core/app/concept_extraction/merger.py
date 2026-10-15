@@ -111,6 +111,8 @@ def merge_concepts(new_concepts: List[Dict[str, Any]], db_concepts: List[Dict[st
             if check_alias_match(nc, db_c):
                 if db_c.get("has_reviewed_edge", False):
                     merge_candidates.append((nc["canonical"], db_c["canonical"], "has_reviewed_edge (Alias Match)"))
+                    nc["key"] = db_c["key"]   # remap mention -> concept đã duyệt
+                    merged = True              # không vào merged_list -> không ghi đè properties
                 else:
                     nc["merge_target_id"] = db_c["id"]
                     nc["key"] = db_c["key"]
@@ -125,6 +127,8 @@ def merge_concepts(new_concepts: List[Dict[str, Any]], db_concepts: List[Dict[st
             if should_merge_plurals_or_head_nouns(nc, db_c):
                 if db_c.get("has_reviewed_edge", False):
                     merge_candidates.append((nc["canonical"], db_c["canonical"], "has_reviewed_edge (Plural/Head Noun)"))
+                    nc["key"] = db_c["key"]   # remap mention -> concept đã duyệt
+                    merged = True              # không vào merged_list -> không ghi đè properties
                 else:
                     nc["merge_target_id"] = db_c["id"]
                     nc["key"] = db_c["key"]
@@ -139,6 +143,8 @@ def merge_concepts(new_concepts: List[Dict[str, Any]], db_concepts: List[Dict[st
             if should_merge_fuzzy(nc, db_c):
                 if db_c.get("has_reviewed_edge", False):
                     merge_candidates.append((nc["canonical"], db_c["canonical"], "has_reviewed_edge (Fuzzy)"))
+                    nc["key"] = db_c["key"]   # remap mention -> concept đã duyệt
+                    merged = True              # không vào merged_list -> không ghi đè properties
                 else:
                     nc["merge_target_id"] = db_c["id"]
                     nc["key"] = db_c["key"]
@@ -153,6 +159,8 @@ def merge_concepts(new_concepts: List[Dict[str, Any]], db_concepts: List[Dict[st
             if should_merge_cosine(nc, db_c):
                 if db_c.get("has_reviewed_edge", False):
                     merge_candidates.append((nc["canonical"], db_c["canonical"], "has_reviewed_edge (Cosine)"))
+                    nc["key"] = db_c["key"]   # remap mention -> concept đã duyệt
+                    merged = True              # không vào merged_list -> không ghi đè properties
                 else:
                     nc["merge_target_id"] = db_c["id"]
                     nc["key"] = db_c["key"]

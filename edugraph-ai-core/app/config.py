@@ -42,7 +42,6 @@ class Settings(BaseSettings):
     ALIAS_SCAN_MIN_LEN: int = 4
     ACRONYM_MIN_LEN: int = 2
     CONCEPT_EMBED_MAX_ALIASES: int = 3
-    STALE_PROCESSING_MINUTES: int = 15
     NEO4J_BATCH_SIZE: int = 100
     ENABLE_HEADER_CLEANING: bool = False
     HEADER_REPEAT_RATIO: float = 0.5
@@ -60,6 +59,8 @@ class Settings(BaseSettings):
     # Chat Constants
     GRAPH_VERSION_CHECK_INTERVAL: float = 10.0
     VECTOR_OVERFETCH_K: int = 50
+    VECTOR_OVERFETCH_STEP: int = 4
+    VECTOR_OVERFETCH_MAX: int = 2000
     CHAT_MAX_CHUNKS: int = 6
     MIN_CHARS_PER_PAGE: int = 100
     ALIAS_FUZZY_MIN_LEN: int = 4

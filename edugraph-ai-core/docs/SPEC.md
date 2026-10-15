@@ -97,7 +97,8 @@ Giao diện ──► Java (Spring Boot) ──► Neo4j Aura
 - Neo4j chạy trên cloud (AuraDB): URI dạng `neo4j+s://...`, có độ trễ mạng, nên gộp truy vấn và ghi theo lô.
 - Chat chạy độc lập với pipeline trích xuất: `retrieval/` chỉ đọc từ Neo4j.
 - **Tiến trình:** uvicorn **1 worker**; `/ingest` và `/chat` chung một tiến trình (bge-m3 chỉ load một lần, khóa theo course có tác dụng). Ingest chạy **tối đa 1 tài liệu cùng lúc**, thêm `asyncio.Lock` theo `course_id`.
-- **Phục hồi khi khởi động:** `Document` còn `PROCESSING` mà `updated_at` cũ hơn `STALE_PROCESSING_MINUTES` thì đổi thành `FAILED`, `error = "interrupted by restart"`. Pipeline cập nhật `updated_at` ở mỗi bước (heartbeat).
+- **Phục hồi khi khởi động (single-worker):** mọi `Document` còn `PROCESSING` đều bị coi là mồ côi (BackgroundTasks chết cùng tiến trình) nên đổi thẳng thành `FAILED`, `error = "interrupted by restart"` (không lọc theo tuổi `updated_at`).
+
 - **Máy chạy (dev):** Ryzen 7 5800H, RAM 15 GB, GPU RTX 3050 Ti Laptop 4 GB VRAM, Python 3.12.10.
 
 ---
@@ -177,7 +178,7 @@ CREATE FULLTEXT INDEX chunk_text IF NOT EXISTS
 FOR (c:Chunk) ON EACH [c.text_unaccent];
 ```
 
-Kiểm tra cú pháp theo phiên bản Aura thật. **Không dùng property existence constraint** (có thể chỉ có ở bản Enterprise). Vector index trả top-k trước rồi mới lọc `course_id`, nên truy vấn phải lấy dư (k = 50) rồi lọc.
+Kiểm tra cú pháp theo phiên bản Aura thật. **Không dùng property existence constraint** (có thể chỉ có ở bản Enterprise). Vector index trả top-k trước rồi mới lọc `course_id`, nên truy vấn phải lấy dư (k = 50) rồi lọc, retry với k lớn dần khi kết quả rỗng (adaptive overfetch).
 
 **Đã xác nhận:** Sử dụng constraint một thuộc tính `concept_course_key` dựa trên trường hợp gộp `course_key = course_id + "|" + key`. Aura Free hỗ trợ constraint dạng này. Lệnh `MERGE` concept sẽ được thực hiện dựa trên `course_key`.
 
@@ -296,14 +297,15 @@ Mỗi ADR là một file markdown ngắn: Trạng thái, Bối cảnh, Quyết �
 | `LLM_CONCURRENCY` | 5 | Semaphore |
 | `STREAM_FIRST_TOKEN_TIMEOUT` | 8 s | |
 | `GRAPH_VERSION_CHECK_INTERVAL` | 10 s | |
-| `VECTOR_OVERFETCH_K` | 50 | Lấy dư rồi lọc `course_id` |
+| `VECTOR_OVERFETCH_K` | 50 | Lấy dư rồi lọc `course_id`, retry khi rỗng (adaptive overfetch) |
+| `VECTOR_OVERFETCH_STEP` | 4 | Hệ số nhân k mỗi lần retry (50 → 200 → 800) |
+| `VECTOR_OVERFETCH_MAX` | 2000 | Trần k an toàn cho adaptive overfetch |
 | `CHAT_MAX_CHUNKS` | 6 | Chunk đưa vào prompt; ưu tiên chunk của goal và concept missing |
 | `MIN_CHARS_PER_PAGE` | 100 | Phát hiện PDF scan |
 | `ALIAS_FUZZY_MIN_LEN` | 4 | Alias ngắn hơn chỉ khớp exact (linker) |
 | `ALIAS_SCAN_MIN_LEN` / `ACRONYM_MIN_LEN` | 4 / 2 | Quét `MENTIONS` loại (b) |
 | `CONCEPT_EMBED_MAX_ALIASES` | 3 | Số alias đưa vào chuỗi embed concept |
 | `NEO4J_BATCH_SIZE` | 100 | Số dòng mỗi câu `UNWIND` |
-| `STALE_PROCESSING_MINUTES` | 15 | Phục hồi `PROCESSING` khi khởi động |
 | `FORMULA_*` | (đặt khi làm cleaner) | Ngưỡng mật độ ký hiệu, danh sách font toán, độ dài `$...$` |
 
 ---
@@ -403,7 +405,7 @@ Thứ tự trong `/chat`:
 5. **chunk_retriever:**
    - Graph-first: mỗi concept trong lộ trình lấy 1 chunk `is_evidence = true` qua `MENTIONS`; nếu nhiều thì lấy `index` nhỏ nhất.
    - Tổng tối đa `CHAT_MAX_CHUNKS`, ưu tiên chunk của goal và concept missing.
-   - Câu hỏi `explain` / `mixed` thì thêm vector + fulltext (lấy k = 50 rồi lọc `course_id`), gộp bằng RRF tự viết (khoảng 10 dòng). Embed câu hỏi bằng bge-m3 qua `to_thread`.
+   - Câu hỏi `explain` / `mixed` thì thêm vector + fulltext (lấy k = 50 rồi lọc `course_id`, retry khi rỗng), gộp bằng RRF tự viết (khoảng 10 dòng). Embed câu hỏi bằng bge-m3 qua `to_thread`.
 6. **answer:**
    - Dựng prompt, stream SSE theo thứ tự sự kiện `path` → `token` → `sources` → `done`. Gửi `error` riêng nếu lỗi giữa chừng.
    - `intent = explain` thì **không** gửi `path`.

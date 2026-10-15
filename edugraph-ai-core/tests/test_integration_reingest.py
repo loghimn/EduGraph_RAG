@@ -65,7 +65,7 @@ async def test_reingest_cleans_orphans():
             ids = [r["id"] async for r in rec]
         
         assert "C1" not in ids
-        # assert "C2" in ids
+        assert "C2" in ids
     finally:
         async with neo4j_client.driver.session() as s:
             await s.run("MATCH(n) WHERE n.course_id='__test__' OR n.id='__test__' DETACH DELETE n")

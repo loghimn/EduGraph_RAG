@@ -1,5 +1,49 @@
 import pytest
 from app.retrieval.chunk_retriever import compute_rrf, sanitize_fulltext_query
+from app.retrieval import chunk_retriever
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def data(self):
+        return self._rows
+
+
+class _FakeSession:
+    """Giả lập session Neo4j: trả rỗng ở k nhỏ, có dữ liệu ở k lớn."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def run(self, query, **params):
+        self.calls.append(dict(params))
+        if "vector" in params:
+            k = params.get("k", 0)
+            if k < 200:
+                return _FakeResult([])
+            return _FakeResult([{
+                "id": "ch1", "text": "chunk 1",
+                "doc_id": "d1", "page": 1, "index": 0, "score": 0.9,
+            }])
+        # fulltext: trả rỗng để test tập trung vào nhánh vector
+        return _FakeResult([])
+
+
+class _FakeDriver:
+    def __init__(self, session):
+        self._session = session
+
+    def session(self):
+        return self._session
+
 
 def test_compute_rrf_scoring_and_ranking():
     # vector results: [ch1, ch2, ch3]
@@ -35,3 +79,28 @@ def test_sanitize_fulltext_query():
         assert char not in cleaned
     assert "SELECT" in cleaned
     assert "users" in cleaned
+
+
+@pytest.mark.asyncio
+async def test_vector_overfetch_retries_until_course_chunks_found(monkeypatch):
+    """k=50 rỗng do top-k toàn cục → retry k lớn hơn và tìm được chunk của course."""
+    session = _FakeSession()
+    monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))
+
+    async def _fake_embed(texts):
+        return [[0.0] * 8]
+
+    async def _fake_has_chunks(course_id):
+        return True
+
+    monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", _fake_embed)
+    monkeypatch.setattr(chunk_retriever, "_course_has_chunks", _fake_has_chunks)
+
+    chunks = await chunk_retriever.retrieve_chunks(
+        course_id="c1", query="dao ham", overfetch_k=50
+    )
+
+    assert [c["id"] for c in chunks] == ["ch1"]
+    vec_ks = [c.get("k") for c in session.calls if "vector" in c]
+    assert vec_ks[0] == 50
+    assert vec_ks[-1] >= 200

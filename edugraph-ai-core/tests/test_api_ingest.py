@@ -175,6 +175,9 @@ async def test_recover_processing_on_startup(mock_neo4j):
     query_called = mock_session.run.call_args[0][0]
     assert "SET d.status = 'FAILED'" in query_called
     assert "error = 'interrupted by restart'" in query_called
+    # Option A (single-worker): no age filter — every orphan must fail.
+    assert "updated_at >" not in query_called
+    assert "timeout" not in mock_session.run.call_args.kwargs
 
 def test_prerequisites_auth_403():
     response = client.post("/courses/c1/prerequisites?user_id=u1", headers={"X-Internal-Key": "wrong"})

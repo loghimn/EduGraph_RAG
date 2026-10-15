@@ -142,14 +142,17 @@ async def delete_document_endpoint(
     return {"status": "deleted"}
 
 async def recover_processing_documents():
+    # Single-worker deployment: BackgroundTasks die with the process, so every
+    # leftover PROCESSING document at startup is orphaned by definition.
+    # No age filter on purpose: heartbeat keeps updated_at fresh, which would
+    # otherwise let recently-interrupted docs slip through and hang forever.
     query = """
     MATCH (d:Document {status: 'PROCESSING'})
-    WHERE timestamp() - d.updated_at > $timeout
     SET d.status = 'FAILED', d.error = 'interrupted by restart', d.updated_at = timestamp()
     """
-    timeout_ms = settings.STALE_PROCESSING_MINUTES * 60 * 1000
     async with neo4j_client.driver.session() as session:
-        await session.run(query, timeout=timeout_ms)
+        await session.run(query)
+        logger.info("Startup recovery: marked orphaned PROCESSING documents as FAILED")
 
 @router.post("/courses/{course_id}/prerequisites")
 async def generate_course_prerequisites(

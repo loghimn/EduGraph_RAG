@@ -84,6 +84,20 @@ def test_merger_rejected():
     # S? sinh ra merge_cands thay vì merge tr?c ti?p vào db_c
     assert len(merge_cands) == 1
     assert merge_cands[0] == ('Concept A', 'Concept A', 'has_reviewed_edge (Alias Match)')
+    assert merged_new == []        # KHÔNG lọt merged_list -> không ghi đè properties concept đã duyệt
+    assert "id" not in nc[0]       # UUID giả không được tạo
+    assert nc[0]["key"] == "concept a"   # remap key về key concept đã duyệt
+
+def test_merger_rejected_alias_match():
+    from app.concept_extraction.merger import merge_concepts
+    nc = [{'canonical': 'CNN', 'language': 'en', 'aliases': []}]
+    db_c = [{'id': 'db-1', 'key': 'convolutional neural network', 'canonical': 'Convolutional Neural Network', 'aliases': ['cnn'], 'has_reviewed_edge': True}]
+    merged_new, merge_cands = merge_concepts(nc, db_c)
+    assert len(merge_cands) == 1
+    assert merge_cands[0] == ('CNN', 'Convolutional Neural Network', 'has_reviewed_edge (Alias Match)')
+    assert merged_new == []        # không lọt merged_list -> không tạo concept trùng lặp
+    assert nc[0]["key"] == "convolutional neural network"  # remap key về concept đã duyệt
+
 
 def test_clean_repeating_headers():
     from app.ingestion.cleaner import remove_repeating_headers_footers
