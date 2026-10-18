@@ -137,9 +137,10 @@ class LLMClient:
         async with self.semaphore:
             content = None
             used_model = None
+            used_client = self.groq_client
             try:
                 content, used_model = await self._call_provider(
-                    self.groq_client, settings.MODEL_MAIN, prompt, json_mode
+                    used_client, settings.MODEL_MAIN, prompt, json_mode
                 )
             except Exception as e:
                 logger.warning(f"Groq failed: {e}.")
@@ -155,8 +156,9 @@ class LLMClient:
                         f"chưa được cấu hình nên không có fallback. Lỗi gốc: {e}"
                     ) from e
                 try:
+                    used_client = self.gemini_client
                     content, used_model = await self._call_provider(
-                        self.gemini_client, settings.MODEL_FALLBACK, prompt, json_mode
+                        used_client, settings.MODEL_FALLBACK, prompt, json_mode
                     )
                 except Exception as e2:
                     logger.error(f"Gemini also failed: {e2}")
@@ -169,11 +171,34 @@ class LLMClient:
             if json_mode:
                 try:
                     parsed_content = json.loads(content)
-                    if not isinstance(parsed_content, dict):
-                        # Gói vào một dict nếu LLM trả về kiểu khác (dù đã yêu cầu JSON object)
-                        parsed_content = {"result": parsed_content}
                 except json.JSONDecodeError as e:
-                    raise ValueError("LLM returned invalid JSON in json_mode") from e
+                    logger.warning(
+                        "Model %s returned invalid JSON; retrying once with stricter formatting instructions.",
+                        used_model,
+                    )
+                    repair_prompt = (
+                        f"{prompt}\n\n"
+                        "IMPORTANT: Your previous response was not valid JSON. Complete the original task "
+                        "again and return exactly one valid JSON object. Use double-quoted property names "
+                        "and strings. Do not include Markdown fences or text outside the JSON object."
+                    )
+                    try:
+                        content, used_model = await self._call_provider(
+                            used_client, used_model, repair_prompt, json_mode=True
+                        )
+                        parsed_content = json.loads(content)
+                    except json.JSONDecodeError as retry_error:
+                        raise ValueError(
+                            "LLM returned invalid JSON in json_mode after one formatting retry"
+                        ) from retry_error
+                    except Exception as retry_error:
+                        raise ValueError(
+                            "LLM returned invalid JSON in json_mode and the formatting retry failed"
+                        ) from retry_error
+
+                if not isinstance(parsed_content, dict):
+                    # Wrap a non-object JSON value for callers expecting a dictionary.
+                    parsed_content = {"result": parsed_content}
                 
                 cache_key = generate_cache_key(used_model, prompt_version, input_data)
                 cache.set(cache_key, parsed_content)

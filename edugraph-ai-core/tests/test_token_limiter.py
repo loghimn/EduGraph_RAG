@@ -130,11 +130,39 @@ async def test_llm_does_not_cache_invalid_json_response():
     client = LLMClient()
     cache = MagicMock()
     cache.__contains__ = MagicMock(return_value=False)
+    provider_call = AsyncMock(return_value=("not json", "model"))
     with (
         patch("app.core.llm.cache", cache),
-        patch.object(client, "_call_provider", new=AsyncMock(return_value=("not json", "model"))),
+        patch.object(client, "_call_provider", new=provider_call),
     ):
-        with pytest.raises(ValueError, match="LLM returned invalid JSON"):
+        with pytest.raises(ValueError, match="after one formatting retry"):
             await client.generate("prompt", "v1", {"input": "data"}, json_mode=True)
 
+    assert provider_call.await_count == 2
     cache.set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_llm_retries_once_when_provider_returns_invalid_json():
+    from app.core.llm import LLMClient
+
+    client = LLMClient()
+    cache = MagicMock()
+    cache.__contains__ = MagicMock(return_value=False)
+    provider_call = AsyncMock(
+        side_effect=[
+            ("{invalid json}", "gemini-model"),
+            ('{"prerequisites": []}', "gemini-model"),
+        ]
+    )
+    with (
+        patch("app.core.llm.cache", cache),
+        patch.object(client, "_call_provider", new=provider_call),
+    ):
+        result = await client.generate("prompt", "v1", {"input": "data"}, json_mode=True)
+
+    assert result == {"prerequisites": []}
+    assert provider_call.await_count == 2
+    retry_prompt = provider_call.await_args_list[1].args[2]
+    assert "previous response was not valid JSON" in retry_prompt
+    cache.set.assert_called_once()
