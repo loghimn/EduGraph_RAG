@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
     message: str
     concept_ids: Optional[List[str]] = None
     history: List[HistoryMessage] = Field(default_factory=list, max_length=12)
+    reply_context: List[HistoryMessage] = Field(default_factory=list, max_length=2)
 
 async def verify_course_exists(course_id: str):
     # Java authorizes owners/enrolled learners against its relational database.
@@ -60,14 +61,18 @@ async def chat_explain_stream_generator(
     course_id: str,
     message: str,
     concept_ids: Optional[List[str]] = None,
-    history: Optional[List[Dict[str, str]]] = None
+    history: Optional[List[Dict[str, str]]] = None,
+    reply_context: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[str, None]:
     try:
         history = prepare_history(history)
+        reply_context = prepare_history(reply_context)
         search_query = message
-        if history:
+        if history or reply_context:
             yield ": resolving conversation context\n\n"
-            search_query = await asyncio.wait_for(resolve_question(message, history), timeout=20)
+            resolution = (resolve_question(message, history, reply_context) if reply_context
+                          else resolve_question(message, history))
+            search_query = await asyncio.wait_for(resolution, timeout=20)
             yield ": conversation context resolved\n\n"
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
@@ -99,7 +104,8 @@ async def chat_explain_stream_generator(
             return
 
         # 3. Dựng prompt cho nhánh explain
-        prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query)
+        prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query,
+                                      reply_context=reply_context)
 
         # 4. Stream token từ LLM (với priority=True)
         accumulated_tokens = []
@@ -138,6 +144,7 @@ async def chat_endpoint(
 
     return StreamingResponse(
         chat_explain_stream_generator(req.course_id, req.message, req.concept_ids,
-                                      [item.model_dump() for item in req.history]),
+                                      [item.model_dump() for item in req.history],
+                                      [item.model_dump() for item in req.reply_context]),
         media_type="text/event-stream"
     )

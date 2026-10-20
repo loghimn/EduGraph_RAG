@@ -11,6 +11,7 @@ import java.util.List;
 @Builder
 public class ChatMessageResponse {
     private Long messageId;
+    private Long replyToMessageId;
     private SenderType senderType;
     private String content;
     private ChatMessageStatus status;

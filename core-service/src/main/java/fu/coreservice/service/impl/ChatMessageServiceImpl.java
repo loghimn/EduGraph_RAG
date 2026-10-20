@@ -37,6 +37,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         AiChatRequest aiRequest = AiChatRequest.builder().courseId(courseId.toString())
                 .userId(turn.userId().toString()).message(request.getMessage())
                 .history(turn.history())
+                .replyContext(turn.replyContext())
                 .conceptIds(request.getConceptIds() == null ? null : new ArrayList<>(request.getConceptIds())).build();
         return output -> stream(turn, aiRequest, output);
     }

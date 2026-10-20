@@ -12,6 +12,32 @@ client = TestClient(app)
 @patch("app.api.chat.link_concepts", new_callable=AsyncMock)
 @patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
 @patch("app.api.chat.llm_client")
+def test_reply_uses_selected_message_without_recent_history(mock_llm, mock_retrieve, mock_link, mock_resolve):
+    mock_resolve.return_value = "Java Servlet HTTP example"
+    mock_link.return_value = {"concept_ids": ["servlet"], "clarify": None}
+    mock_retrieve.return_value = [{"id": "ch1", "doc_id": "1", "text": "Servlet HTTP"}]
+
+    async def answer(prompt, priority=True):
+        assert "Servlet handles HTTP" in prompt
+        yield "Example [1]"
+
+    mock_llm.generate_stream = answer
+    resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+        "course_id": "c1", "user_id": "u1", "message": "Give an example",
+        "reply_context": [{"role": "assistant", "content": "Servlet handles HTTP [7]"}]
+    })
+    assert resp.status_code == 200
+    mock_resolve.assert_awaited_once_with("Give an example", [],
+                                          [{"role": "assistant", "content": "Servlet handles HTTP "}])
+    mock_link.assert_awaited_once_with("c1", "Java Servlet HTTP example")
+    assert "Example [1]" in resp.text
+
+
+@patch("app.api.chat.verify_course_exists", new=AsyncMock())
+@patch("app.api.chat.resolve_question", new_callable=AsyncMock)
+@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.api.chat.llm_client")
 def test_followup_links_and_retrieves_using_contextual_question(mock_llm, mock_retrieve, mock_link, mock_resolve):
     resolved = "Thứ tự học Java và HTTP để học Java Servlet?"
     mock_resolve.return_value = resolved

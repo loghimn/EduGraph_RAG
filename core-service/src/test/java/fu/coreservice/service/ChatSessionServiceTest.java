@@ -63,6 +63,64 @@ class ChatSessionServiceTest {
     }
 
     @Test
+    void replyToOldBotPersistsReferenceAndCapturesItsOriginalQuestion() {
+        allowLearner();
+        ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();
+        ChatMessage originalQuestion = ChatMessage.builder().messageId(5L).session(session)
+                .senderType(SenderType.USER).content("What is Java Servlet?").build();
+        ChatMessage target = ChatMessage.builder().messageId(6L).session(session).senderType(SenderType.BOT)
+                .content("Servlet handles HTTP requests").replyToMessage(originalQuestion).build();
+        when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, learner))
+                .thenReturn(Optional.of(session));
+        when(chatMessageRepository.findByMessageIdAndSession(6L, session)).thenReturn(Optional.of(target));
+        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
+            ChatMessage message = call.getArgument(0);
+            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
+            return message;
+        });
+        ChatTurn turn = service.beginTurn(7L, 10L, ChatRequest.builder()
+                .message("Give me an example").replyToMessageId(6L).build());
+        assertTrue(turn.history().isEmpty()); // selected message is outside the recent window
+        assertEquals(2, turn.replyContext().size());
+        assertEquals("What is Java Servlet?", turn.replyContext().getFirst().content());
+        assertEquals(target.getContent(), turn.replyContext().getLast().content());
+        ArgumentCaptor<ChatMessage> saved = ArgumentCaptor.forClass(ChatMessage.class);
+        verify(chatMessageRepository, times(2)).saveAndFlush(saved.capture());
+        assertSame(target, saved.getAllValues().getFirst().getReplyToMessage());
+        assertSame(saved.getAllValues().getFirst(), saved.getAllValues().getLast().getReplyToMessage());
+    }
+
+    @Test
+    void replyCannotReferenceMessageOutsideOwnedSession() {
+        allowLearner();
+        ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();
+        when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, learner))
+                .thenReturn(Optional.of(session));
+        when(chatMessageRepository.findByMessageIdAndSession(99L, session)).thenReturn(Optional.empty());
+        assertEquals(ErrorCode.CHAT_REPLY_NOT_FOUND, assertThrows(AppException.class,
+                () -> service.beginTurn(7L, 10L, ChatRequest.builder()
+                        .message("Explain this").replyToMessageId(99L).build())).getErrorCode());
+        verify(chatMessageRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void replyCannotTargetStreamingOrFailedAnswer() {
+        allowLearner();
+        ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();
+        when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, learner))
+                .thenReturn(Optional.of(session));
+        for (ChatMessageStatus status : List.of(ChatMessageStatus.STREAMING, ChatMessageStatus.FAILED,
+                ChatMessageStatus.INTERRUPTED)) {
+            when(chatMessageRepository.findByMessageIdAndSession(6L, session)).thenReturn(Optional.of(
+                    ChatMessage.builder().messageId(6L).session(session).content("Partial").status(status).build()));
+            assertEquals(ErrorCode.CHAT_REPLY_NOT_READY, assertThrows(AppException.class,
+                    () -> service.beginTurn(7L, 10L, ChatRequest.builder()
+                            .message("Explain this").replyToMessageId(6L).build())).getErrorCode());
+        }
+        verify(chatMessageRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void contextLoadsOnlyCompletedMessagesFromOwnedSessionBeforeCurrentTurn() {
         allowLearner();
         ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();
@@ -254,7 +312,7 @@ class ChatSessionServiceTest {
         ChatMessage question = ChatMessage.builder().messageId(20L).session(session)
                 .senderType(SenderType.USER).content("OOP?").build();
         ChatMessage answer = ChatMessage.builder().messageId(21L).session(session)
-                .senderType(SenderType.BOT).content("Explanation [1]").build();
+                .senderType(SenderType.BOT).content("Explanation [1]").replyToMessage(question).build();
         Pageable pageable = PageRequest.of(0, 20, Sort.by(Sort.Direction.ASC, "createdAt", "messageId"));
         when(chatMessageRepository.findBySession(session, pageable))
                 .thenReturn(new PageImpl<>(List.of(question, answer), pageable, 2));
@@ -265,6 +323,7 @@ class ChatSessionServiceTest {
         assertTrue(response.getContent().getFirst().getCitations().isEmpty());
         var bot = response.getContent().get(1);
         assertEquals(ChatMessageStatus.COMPLETED, bot.getStatus());
+        assertEquals(20L, bot.getReplyToMessageId());
         assertEquals(1, bot.getCitations().getFirst().getCitationNumber());
         assertEquals(40L, bot.getCitations().getFirst().getDocumentId());
     }

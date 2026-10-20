@@ -47,16 +47,45 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         if (request.getMessage() == null || request.getMessage().isBlank()) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
         }
+        ChatMessage replyTarget = null;
+        List<AiChatHistoryMessage> replyContext = new ArrayList<>();
+        if (request.getReplyToMessageId() != null) {
+            if (request.getReplyToMessageId() <= 0) throw new AppException(ErrorCode.INVALID_REQUEST);
+            replyTarget = chatMessageRepository.findByMessageIdAndSession(request.getReplyToMessageId(), session)
+                    .orElseThrow(() -> new AppException(ErrorCode.CHAT_REPLY_NOT_FOUND));
+            if (replyTarget.getStatus() != ChatMessageStatus.COMPLETED
+                    || replyTarget.getContent() == null || replyTarget.getContent().isBlank()) {
+                throw new AppException(ErrorCode.CHAT_REPLY_NOT_READY);
+            }
+            // A completed BOT answer links to its question. Include that question
+            // as supporting context, then the explicitly selected message last.
+            ChatMessage parent = replyTarget.getReplyToMessage();
+            if (replyTarget.getSenderType() == SenderType.BOT && parent != null
+                    && parent.getSession().getSessionId().equals(sessionId)
+                    && parent.getStatus() == ChatMessageStatus.COMPLETED
+                    && parent.getContent() != null && !parent.getContent().isBlank()) {
+                replyContext.add(toContextMessage(parent));
+            }
+            replyContext.add(toContextMessage(replyTarget));
+        }
         List<AiChatHistoryMessage> history = loadContext(session);
         ChatMessage question = chatMessageRepository.saveAndFlush(ChatMessage.builder()
                 .session(session).senderType(SenderType.USER).content(request.getMessage())
+                .replyToMessage(replyTarget)
                 .status(ChatMessageStatus.COMPLETED).build());
         ChatMessage answer = chatMessageRepository.saveAndFlush(ChatMessage.builder()
                 .session(session).senderType(SenderType.BOT).content("")
+                .replyToMessage(question)
                 .status(ChatMessageStatus.STREAMING).build());
         session.setLastActive(LocalDateTime.now());
         chatSessionRepository.save(session);
-        return new ChatTurn(sessionId, access.user().getUserId(), question.getMessageId(), answer.getMessageId(), history);
+        return new ChatTurn(sessionId, access.user().getUserId(), question.getMessageId(), answer.getMessageId(),
+                history, replyContext);
+    }
+
+    private AiChatHistoryMessage toContextMessage(ChatMessage message) {
+        return new AiChatHistoryMessage(message.getSenderType() == SenderType.USER ? "user" : "assistant",
+                message.getContent().substring(0, Math.min(message.getContent().length(), 4_000)));
     }
 
     private List<AiChatHistoryMessage> loadContext(ChatSession session) {
@@ -152,6 +181,8 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                             Collectors.mapping(this::toCitationResponse, Collectors.toList())));
         return toPageResponse(messages, message -> ChatMessageResponse.builder()
                 .messageId(message.getMessageId()).senderType(message.getSenderType())
+                .replyToMessageId(message.getReplyToMessage() == null ? null
+                        : message.getReplyToMessage().getMessageId())
                 .content(message.getContent()).status(message.getStatus())
                 .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .createdAt(message.getCreatedAt())

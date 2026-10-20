@@ -27,6 +27,10 @@ public class ChatMessage {
     @JoinColumn(name = "session_id", nullable = false)
     private ChatSession session;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reply_to_message_id", foreignKey = @ForeignKey(name = "fk_chat_messages_reply_to"))
+    private ChatMessage replyToMessage;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "sender_type", nullable = false)
     private SenderType senderType;

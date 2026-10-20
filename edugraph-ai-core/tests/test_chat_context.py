@@ -54,3 +54,23 @@ def test_answer_prompt_keeps_history_separate_from_current_evidence():
     assert "Thứ tự học Java Servlet?" in prompt
     assert "[1] Java fundamentals" in prompt
     assert "không phải nguồn bằng chứng" in prompt
+
+
+@pytest.mark.asyncio
+@patch("app.chat.context.llm_client")
+async def test_explicit_reply_is_included_separately_from_recent_topic(mock_llm):
+    mock_llm.generate = AsyncMock(return_value={"query": "Give an HTTP example for Java Servlet"})
+    history = [{"role": "assistant", "content": "Recent topic is SQL"}]
+    reply = [{"role": "assistant", "content": "Older Java Servlet answer"}]
+    await resolve_question("Give an example", history, reply)
+    assert mock_llm.generate.call_args.kwargs["input_data"]["reply_context"] == reply
+    assert "Prioritize that message over recent history" in mock_llm.generate.call_args.args[0]
+
+
+def test_reply_prompt_has_selected_message_even_without_recent_history():
+    reply = [{"role": "assistant", "content": "Older Java Servlet answer"}]
+    prompt = build_explain_prompt("Give an example", [{"text": "Servlet example"}],
+                                  reply_context=reply, resolved_question="Java Servlet example?")
+    assert "Older Java Servlet answer" in prompt
+    assert "Java Servlet example?" in prompt
+    assert "ưu tiên tin này" in prompt

@@ -51,6 +51,8 @@ public enum ErrorCode {
 
     // Chat: do not disclose whether another user's session exists.
     CHAT_SESSION_NOT_FOUND("CHAT_001", "Chat session not found", HttpStatus.NOT_FOUND),
+    CHAT_REPLY_NOT_FOUND("CHAT_002", "Reply message not found in this session", HttpStatus.NOT_FOUND),
+    CHAT_REPLY_NOT_READY("CHAT_003", "Only completed non-empty messages can be replied to", HttpStatus.BAD_REQUEST),
 
 
     // System

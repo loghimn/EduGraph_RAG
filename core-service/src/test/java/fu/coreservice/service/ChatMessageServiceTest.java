@@ -30,7 +30,8 @@ class ChatMessageServiceTest {
     private final AiCoreClient client = mock(AiCoreClient.class);
     private final ClientHttpResponse response = mock(ClientHttpResponse.class);
     private final ChatTurn turn = new ChatTurn(10L, 2L, 20L, 21L,
-            List.of(new AiChatHistoryMessage("assistant", "Learn Java and HTTP for Java Servlet")));
+            List.of(new AiChatHistoryMessage("assistant", "Learn Java and HTTP for Java Servlet")),
+            List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")));
     private final ChatRequest request = ChatRequest.builder().message("Kế thừa?")
             .conceptIds(List.of("concept1")).build();
     private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper());
@@ -79,6 +80,7 @@ class ChatMessageServiceTest {
         assertEquals("7", upstream.getValue().getCourseId());
         assertEquals(List.of("concept1"), upstream.getValue().getConceptIds());
         assertEquals(turn.history(), upstream.getValue().getHistory());
+        assertEquals(turn.replyContext(), upstream.getValue().getReplyContext());
         verify(response).close();
     }
 

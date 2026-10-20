@@ -33,4 +33,7 @@ public class AiChatRequest {
     private List<String> conceptIds;
 
     private List<AiChatHistoryMessage> history;
+
+    @JsonProperty("reply_context")
+    private List<AiChatHistoryMessage> replyContext;
 }

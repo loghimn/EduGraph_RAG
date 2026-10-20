@@ -23,15 +23,21 @@ def prepare_history(history: list[dict[str, str]] | None) -> list[dict[str, str]
     return list(reversed(selected))
 
 
-async def resolve_question(message: str, history: list[dict[str, str]]) -> str:
-    if not history:
+async def resolve_question(message: str, history: list[dict[str, str]],
+                           reply_context: list[dict[str, str]] | None = None) -> str:
+    if not history and not reply_context:
         return message
     input_data: dict[str, Any] = {"history": history, "question": message}
+    if reply_context:
+        input_data["reply_context"] = reply_context
     prompt = """Rewrite the current question as one standalone search question using the conversation below.
 Return exactly one JSON object: {"query": "..."}.
 Rules:
 - Preserve the user's language, intent and requested action. Do not answer the question.
 - Resolve references such as 'it', 'those topics', 'what you listed' only when supported by history.
+- If reply_context is present, its LAST message is the message the user explicitly replied to.
+  Prioritize that message over recent history when resolving references. Earlier reply_context
+  entries provide its original question. A reply may target an older topic than recent history.
 - For a request about learning order, include the topic and relevant knowledge items from the previous answer.
 - If the user changes topic, keep the new topic; never force an unrelated question into the previous subject.
 - If references cannot be resolved, retain the original question. Do not invent missing subjects.
@@ -39,7 +45,7 @@ Rules:
 CONVERSATION DATA:
 """ + json.dumps(input_data, ensure_ascii=False)
     result = await llm_client.generate(
-        prompt, prompt_version="chat-context-v1", input_data=input_data, json_mode=True
+        prompt, prompt_version="chat-context-v2", input_data=input_data, json_mode=True
     )
     query = result.get("query") if isinstance(result, dict) else None
     if not isinstance(query, str) or not query.strip() or len(query) > 4_000:

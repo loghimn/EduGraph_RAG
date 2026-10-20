@@ -47,6 +47,7 @@ public class AiChatController {
     @Operation(summary = "Send a message in my chat session",
             description = "Persists the question and streams the answer as token, sources, clarify, error and done events. "
                     + "Only the session owner with course access may send. The done event follows persistence. "
+                    + "Optional replyToMessageId selects a completed message from this same session as primary context. "
                     + "Disconnecting cancels the upstream stream and retains a partial interrupted answer.")
     @PostMapping(value = "/sessions/{sessionId}/messages", produces = "text/event-stream")
     public ResponseEntity<StreamingResponseBody> sendMessage(

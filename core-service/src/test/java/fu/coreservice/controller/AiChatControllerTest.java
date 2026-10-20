@@ -33,6 +33,28 @@ class AiChatControllerTest {
     }
 
     @Test
+    void replyIdIsBoundOnExistingSendRoute() throws Exception {
+        when(messageService.sendMessage(eq(7L), eq(10L), any())).thenReturn(output ->
+                output.write("event: done\ndata: {}\n\n".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        var result = mvc.perform(post("/api/courses/7/chat/sessions/10/messages")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"Explain this\",\"replyToMessageId\":25}"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        verify(messageService).sendMessage(eq(7L), eq(10L), argThat(r -> r.getReplyToMessageId().equals(25L)));
+    }
+
+    @Test
+    void nonPositiveReplyIdIsRejectedBeforeStartingStream() throws Exception {
+        mvc.perform(post("/api/courses/7/chat/sessions/10/messages")
+                        .accept(MediaType.TEXT_EVENT_STREAM).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"Explain this\",\"replyToMessageId\":0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_001"));
+        verifyNoInteractions(messageService);
+    }
+
+    @Test
     void legacyChatEndpointIsNoLongerAvailable() throws Exception {
         mvc.perform(post("/api/courses/7/chat").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"message\":\"OOP?\"}"))
