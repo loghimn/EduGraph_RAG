@@ -45,13 +45,14 @@ Hệ thống trả về: (a) lộ trình theo thứ tự tô-pô, không vi ph�
 - Lưu kèm `embedding_model` trên node để biết khi nào phải embed lại.
 
 ### LLM
-- Groq (chính) + Gemini (dự phòng tùy chọn). Cùng gọi qua SDK `openai`.
-- Model chính (Groq): `qwen/qwen3.8-27b` (chủ đạo cho mọi tác vụ). Để trong `config.py` (`LLM_PRIMARY_MODEL` hoặc `MODEL_MAIN`).
-- Gemini là **TÙY CHỌN**: nếu `GEMINI_API_KEY` trống thì danh sách provider chỉ có Groq (không dùng dummy key), khi Groq lỗi thì raise `LLMUnavailableError` ngay lập tức. Giữ nguyên code fallback và test mock phòng khi dùng.
+- OpenAI (chính) + Gemini (dự phòng tùy chọn). Cùng gọi qua SDK `openai`.
+- Model chính (OpenAI): `gpt-5.4-mini` (chủ đạo cho mọi tác vụ). Để trong `config.py` (`MODEL_MAIN`).
+- Gemini là **TÙY CHỌN**: nếu không có `GEMINI_API_KEY` hoặc `GEMINI_API_KEYS` thì chỉ dùng OpenAI (không dùng dummy key), khi OpenAI lỗi thì raise `LLMUnavailableError` ngay lập tức. Giữ nguyên code fallback và test mock phòng khi dùng.
 - Retry với backoff dựa trên rate limit header của API, `Semaphore` giới hạn số request đồng thời (khởi đầu 2-3 để tránh 429 trên gói Free).
 - Với stream: fallback chỉ thực hiện nếu có Gemini và lỗi xảy ra trước token đầu tiên.
+- Với yêu cầu JSON trên GPT-5.x/6.x, dùng `reasoning_effort=none` và ngân sách đầu ra cấu hình được qua `LLM_JSON_MAX_OUTPUT_TOKENS` (mặc định 3000); log `finish_reason` để phát hiện trường hợp bị cắt vì token.
 - Cache kết quả bằng `diskcache`. Chạy cùng 1 tài liệu lần hai thì không tốn request LLM nào (100% từ cache).
-- Bắt JSON bằng chế độ JSON của provider. Do Qwen có thể sinh text suy luận (`<think>...</think>`), luôn cắt bỏ khối suy luận này và tìm object `{...}` ngoài cùng trước khi parse. **Mọi JSON trả về là object** (ví dụ `{"concepts": [...]}`).
+- Bắt JSON bằng chế độ JSON của provider. **Mọi JSON trả về là object** (ví dụ `{"concepts": [...]}`).
 
 ### Thư viện được phép
 - Lõi: `fastapi`, `uvicorn`, `pydantic-settings`, `sse-starlette`, `sentence-transformers` (+ `torch`), `keybert`, `neo4j`, `openai`, `diskcache`, `rapidfuzz`, `unidecode`, `networkx`, `numpy`, `pymupdf`, `python-docx`, `tenacity` (hoặc tự viết retry), `langchain-text-splitters` (nếu cần).
@@ -209,7 +210,7 @@ Thư mục gốc của repo chính là service Python (không có tiền tố `p
 │   │   └── chat.py              # POST /chat (SSE)
 │   ├── core/
 │   │   ├── embedding.py         # singleton bge-m3, embed qua to_thread
-│   │   ├── llm.py               # Groq → Gemini qua SDK openai, retry, stream
+│   │   ├── llm.py               # OpenAI → Gemini qua SDK openai, retry, stream
 │   │   ├── cache.py             # diskcache + cache_key()
 │   │   ├── text_utils.py        # NFC, unidecode, n-gram
 │   │   └── errors.py            # ScannedPDFError, UnsupportedFormatError,
@@ -251,7 +252,7 @@ Thư mục gốc của repo chính là service Python (không có tiền tố `p
 ├── scripts/
 │   ├── init_schema.py
 │   ├── smoke_neo4j.py
-│   ├── smoke_llm.py             # gọi thử từng model Groq / Gemini, báo model không tồn tại
+│   ├── smoke_llm.py             # gọi thử từng model OpenAI / Gemini, báo model không tồn tại
 │   └── run_pipeline.py
 ├── eval/
 │   ├── gold/
@@ -320,7 +321,7 @@ Làm: `config`, `core/*`, `db/*`, `scripts/init_schema.py`, `scripts/smoke_neo4j
 - `smoke_neo4j.py`: kết nối Aura, tạo schema, thử vector index với khoảng 100 vector ngẫu nhiên, đo p50 / p95 của `RETURN 1` và của vector query top-50 (sau khi làm nóng kết nối), in kết quả. Mục đích: xác nhận Aura tạo được vector index 1024 chiều và biết độ trễ thật. Kiểm tra thêm: phiên bản/edition Aura, có hỗ trợ UNIQUE `(course_id, key)` không. Dữ liệu thử dùng label/`course_id` riêng và dọn sạch sau khi chạy.
 - `smoke_llm.py`: gọi thử từng model (thường, JSON mode, stream) và báo rõ nếu model không tồn tại hoặc thiếu key.
 - `core/embedding.py`: singleton, `embed_batch` qua `to_thread`, warmup.
-- `core/llm.py`: một lớp gọi chung Groq → Gemini, hỗ trợ JSON mode và stream, retry, semaphore.
+- `core/llm.py`: một lớp gọi chung OpenAI → Gemini, hỗ trợ JSON mode và stream, retry, semaphore.
 - Test dùng mock cho LLM và Neo4j.
 
 ### GIAI ĐOẠN 2: Ingestion + trích xuất khái niệm

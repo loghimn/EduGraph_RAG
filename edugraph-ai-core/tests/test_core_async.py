@@ -72,7 +72,7 @@ async def test_llm_stream_error_after_first_token():
     # Test lỗi xảy ra SAU token đầu thì không fallback mà raise/yield lỗi
     client = LLMClient()
     
-    async def mock_stream_groq():
+    async def mock_stream_openai():
         class MockDelta:
             def __init__(self, content):
                 self.content = content
@@ -86,7 +86,7 @@ async def test_llm_stream_error_after_first_token():
         yield MockChunk("first token")
         raise Exception("Random error after first token")
         
-    client.groq_client.chat.completions.create = AsyncMock(return_value=mock_stream_groq())
+    client.openai_client.chat.completions.create = AsyncMock(return_value=mock_stream_openai())
     client.gemini_client.chat.completions.create = AsyncMock() # Nên không được gọi
     
     chunks = []
@@ -102,7 +102,7 @@ async def test_llm_stream_first_token_timeout_uses_fallback(monkeypatch):
     client = LLMClient()
     stalled = asyncio.Event()
 
-    async def groq_stream():
+    async def openai_stream():
         await stalled.wait()
         yield None
 
@@ -115,7 +115,7 @@ async def test_llm_stream_first_token_timeout_uses_fallback(monkeypatch):
             choices = [MockChoice()]
         yield MockChunk()
 
-    client.groq_client.chat.completions.create = AsyncMock(return_value=groq_stream())
+    client.openai_client.chat.completions.create = AsyncMock(return_value=openai_stream())
     client.gemini_client.chat.completions.create = AsyncMock(return_value=gemini_stream())
     monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", "configured-test-key")
     monkeypatch.setattr("app.core.llm.settings.STREAM_FIRST_TOKEN_TIMEOUT", 0.01)

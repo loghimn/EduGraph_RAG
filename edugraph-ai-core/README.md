@@ -20,5 +20,7 @@ pip install fastapi uvicorn pydantic-settings sse-starlette sentence-transformer
 ```
 Sau đó cấu hình trong `.env`: `EMBEDDING_DEVICE=cpu` và `INTERNAL_API_KEY` thành một secret riêng, không rỗng. Service sẽ không khởi động nếu thiếu `INTERNAL_API_KEY`; khi triển khai, cung cấp biến môi trường này qua secret manager hoặc môi trường runtime.
 
+LLM chính gọi trực tiếp OpenAI API. Trong file `.env` cục bộ, cấu hình `OPENAI_API_KEY` với API key từ OpenAI Platform và (tuỳ chọn) `GEMINI_API_KEY` hoặc `GEMINI_API_KEYS` để bật Gemini fallback. Model mặc định là `gpt-5.4-mini` (`MODEL_MAIN`). Ngân sách đầu ra cho JSON mặc định là 3000 token (`LLM_JSON_MAX_OUTPUT_TOKENS`), có thể điều chỉnh theo TPM của tài khoản. OpenAI API được tính phí riêng, không nằm trong gói ChatGPT Plus.
+
 ## Windows Troubleshooting
 If you see encoding issues on Windows, set the environment variable: set PYTHONUTF8=1 or $env:PYTHONUTF8=1 in PowerShell.
