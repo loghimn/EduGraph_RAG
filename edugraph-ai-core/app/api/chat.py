@@ -1,5 +1,6 @@
 import json
 import asyncio
+import logging
 from typing import Optional, List, Dict, Any, AsyncGenerator, Literal
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,9 +13,11 @@ from app.retrieval.concept_linker import link_concepts
 from app.retrieval.chunk_retriever import retrieve_chunks
 from app.chat.answer import build_explain_prompt, filter_citations, build_sources_payload
 from app.core.llm import llm_client
+from app.core.errors import LLMUnavailableError
 from app.chat.context import prepare_history, resolve_question
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 NO_DATA_MESSAGE = (
     "Không tìm thấy dữ liệu phù hợp với câu hỏi trong tài liệu của khóa học. "
@@ -70,10 +73,18 @@ async def chat_explain_stream_generator(
         search_query = message
         if history or reply_context:
             yield ": resolving conversation context\n\n"
-            resolution = (resolve_question(message, history, reply_context) if reply_context
-                          else resolve_question(message, history))
-            search_query = await asyncio.wait_for(resolution, timeout=20)
-            yield ": conversation context resolved\n\n"
+            try:
+                resolution = (resolve_question(message, history, reply_context) if reply_context
+                              else resolve_question(message, history))
+                search_query = await asyncio.wait_for(resolution, timeout=20)
+            except (ValueError, LLMUnavailableError, asyncio.TimeoutError) as error:
+                # Context rewriting is optional; never invent a replacement query.
+                search_query = message
+                logger.warning("Context resolution failed; using original question. course_id=%s error_type=%s",
+                               course_id, type(error).__name__)
+                yield ": using original question\n\n"
+            else:
+                yield ": conversation context resolved\n\n"
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
         if linked_concept_ids is None:

@@ -8,11 +8,19 @@ import fu.coreservice.dto.request.ChatRequest;
 import fu.coreservice.entity.ChatMessageStatus;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
-import fu.coreservice.service.chat.ChatSource;
-import fu.coreservice.service.chat.ChatTurn;
+import fu.coreservice.dto.chat.ChatSource;
+import fu.coreservice.dto.chat.ChatTurn;
 import fu.coreservice.service.impl.ChatMessageServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.context.request.async.CallableProcessingInterceptor;
+import org.springframework.web.context.request.async.WebAsyncUtils;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.client.ClientHttpResponse;
 
@@ -20,6 +28,9 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,6 +50,118 @@ class ChatMessageServiceTest {
     @BeforeEach
     void setup() {
         when(storage.beginTurn(7L, 10L, request)).thenReturn(turn);
+    }
+
+    @AfterEach
+    void resetRequestContext() { RequestContextHolder.resetRequestAttributes(); }
+
+    private MockHttpServletRequest mvcRequest() {
+        MockHttpServletRequest servletRequest = new MockHttpServletRequest();
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
+        return servletRequest;
+    }
+
+    private CallableProcessingInterceptor lifecycle(MockHttpServletRequest servletRequest) {
+        return WebAsyncUtils.getAsyncManager(servletRequest)
+                .getCallableInterceptor(ChatMessageServiceImpl.ASYNC_INTERCEPTOR_KEY);
+    }
+
+    @Test
+    void mvcTimeoutBeforeWorkerStartsPersistsFailedAndDoesNotCallPython() throws Exception {
+        var servletRequest = mvcRequest();
+        var body = service.sendMessage(7L, 10L, request);
+        var interceptor = lifecycle(servletRequest);
+        assertNotNull(interceptor);
+        interceptor.handleTimeout(new ServletWebRequest(servletRequest), () -> null);
+        body.writeTo(new ByteArrayOutputStream());
+        interceptor.afterCompletion(new ServletWebRequest(servletRequest), () -> null);
+        verifyNoInteractions(client);
+        verify(storage).finishTurn(eq(turn), eq(""), eq(ChatMessageStatus.FAILED),
+                eq("MVC async streaming timeout"), anyInt(), eq(List.of()), eq(false));
+    }
+
+    @Test
+    void timeoutClosesUpstreamAndKeepsPartialAnswerWithoutDoubleFinalization() throws Exception {
+        var servletRequest = mvcRequest();
+        BlockingBody input = new BlockingBody();
+        when(client.openChatStream(any())).thenReturn(response);
+        when(response.getBody()).thenReturn(input);
+        doAnswer(call -> { input.release.countDown(); return null; }).when(response).close();
+        StreamingResponseBody body = service.sendMessage(7L, 10L, request);
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread worker = Thread.startVirtualThread(() -> {
+            try { body.writeTo(new ByteArrayOutputStream()); finished.complete(null); }
+            catch (Throwable e) { finished.completeExceptionally(e); }
+        });
+        try {
+            assertTrue(input.waiting.await(5, TimeUnit.SECONDS));
+            lifecycle(servletRequest).handleTimeout(new ServletWebRequest(servletRequest), () -> null);
+            finished.get(5, TimeUnit.SECONDS);
+            lifecycle(servletRequest).afterCompletion(new ServletWebRequest(servletRequest), () -> null);
+            verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.FAILED),
+                    eq("MVC async streaming timeout"), anyInt(), eq(List.of()), eq(false));
+            verify(response).close();
+        } finally {
+            input.release.countDown();
+            worker.interrupt();
+        }
+    }
+
+    @Test
+    void springInterruptBeforeTimeoutCallbackDoesNotMisclassifyTheTurn() throws Exception {
+        var servletRequest = mvcRequest();
+        BlockingBody input = new BlockingBody();
+        when(client.openChatStream(any())).thenReturn(response);
+        when(response.getBody()).thenReturn(input);
+        StreamingResponseBody body = service.sendMessage(7L, 10L, request);
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread worker = Thread.startVirtualThread(() -> {
+            try { body.writeTo(new ByteArrayOutputStream()); finished.complete(null); }
+            catch (Throwable e) { finished.completeExceptionally(e); }
+        });
+        try {
+            assertTrue(input.waiting.await(5, TimeUnit.SECONDS));
+            worker.interrupt(); // MVC Future.cancel(true) happens before handleTimeout.
+            finished.get(5, TimeUnit.SECONDS);
+            verify(storage, never()).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+            lifecycle(servletRequest).handleTimeout(new ServletWebRequest(servletRequest), () -> null);
+            verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.FAILED),
+                    eq("MVC async streaming timeout"), anyInt(), eq(List.of()), eq(false));
+        } finally {
+            input.release.countDown();
+            worker.interrupt();
+        }
+    }
+
+    @Test
+    void doneWinnerIsNotOverwrittenByLaterTimeoutOrCompletion() throws Exception {
+        var servletRequest = mvcRequest();
+        run("event: token\ndata: {\"token\":\"Answer\"}\n\n"
+                + "event: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        var interceptor = lifecycle(servletRequest);
+        interceptor.handleTimeout(new ServletWebRequest(servletRequest), () -> null);
+        interceptor.handleError(new ServletWebRequest(servletRequest), () -> null, new IOException("late error"));
+        interceptor.afterCompletion(new ServletWebRequest(servletRequest), () -> null);
+        verify(storage).finishTurn(eq(turn), eq("Answer"), eq(ChatMessageStatus.COMPLETED),
+                isNull(), anyInt(), eq(List.of()), eq(false));
+    }
+
+    private static class BlockingBody extends InputStream {
+        final ByteArrayInputStream prefix = new ByteArrayInputStream(
+                "event: token\ndata: {\"token\":\"Partial\"}\n\n".getBytes(StandardCharsets.UTF_8));
+        final CountDownLatch waiting = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        @Override public int read(byte[] b, int off, int len) throws IOException {
+            if (prefix.available() > 0) return prefix.read(b, off, len);
+            waiting.countDown();
+            try { release.await(); return -1; }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException(e); }
+        }
+        @Override public int read() throws IOException {
+            byte[] b = new byte[1];
+            return read(b, 0, 1) == -1 ? -1 : b[0] & 255;
+        }
+        @Override public void close() { release.countDown(); }
     }
 
     private ByteArrayOutputStream run(String events) throws Exception {
@@ -156,7 +279,7 @@ class ChatMessageServiceTest {
             @Override public void write(int value) throws IOException { throw new IOException("Disconnected"); }
         });
         verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.INTERRUPTED),
-                eq("Client disconnected"), anyInt(), eq(List.of()), eq(false));
+                eq("Response stream unavailable"), anyInt(), eq(List.of()), eq(false));
         verify(response).close();
     }
 

@@ -1,4 +1,4 @@
-package fu.coreservice.service.chat;
+package fu.coreservice.dto.chat;
 
 import fu.coreservice.dto.ai.AiChatHistoryMessage;
 import java.util.List;

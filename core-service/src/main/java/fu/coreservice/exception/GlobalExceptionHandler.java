@@ -4,6 +4,9 @@ import fu.coreservice.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -26,6 +29,22 @@ import java.util.Map;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAsyncTimeout(AsyncRequestTimeoutException ex,
+                                                               HttpServletResponse response) {
+        // A committed SSE response cannot be replaced with a JSON error document.
+        if (response.isCommitted()) return null;
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResponse.<Void>builder().success(false).errorCode("CHAT_STREAM_TIMEOUT")
+                        .message("Chat stream exceeded its time limit").build());
+    }
+
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleAsyncResponseUnavailable(AsyncRequestNotUsableException ex) {
+        // Container has already completed/closed the async response; do not write again.
+        log.debug("Async response is no longer writable: {}", ex.getMessage());
+    }
 
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<ApiResponse<Void>> handleEndpointNotFound(Exception ex) {

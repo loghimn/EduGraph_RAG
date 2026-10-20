@@ -6,8 +6,8 @@ import fu.coreservice.dto.chat.ChatSessionCreateRequest;
 import fu.coreservice.dto.chat.ChatSessionResponse;
 import fu.coreservice.dto.request.ChatRequest;
 import fu.coreservice.entity.ChatMessageStatus;
-import fu.coreservice.service.chat.ChatSource;
-import fu.coreservice.service.chat.ChatTurn;
+import fu.coreservice.dto.chat.ChatSource;
+import fu.coreservice.dto.chat.ChatTurn;
 import java.util.List;
 
 public interface ChatSessionService {
