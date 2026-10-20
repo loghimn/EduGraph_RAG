@@ -11,9 +11,17 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 
 @Repository
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from ChatMessage m where m.messageId = :messageId and m.session = :session")
+    Optional<ChatMessage> findForFeedbackUpdate(@Param("messageId") Long messageId,
+                                               @Param("session") ChatSession session);
     Optional<ChatMessage> findByMessageIdAndSession(Long messageId, ChatSession session);
     List<ChatMessage> findBySessionAndStatusOrderByCreatedAtDescMessageIdDesc(
             ChatSession session, ChatMessageStatus status, Pageable pageable);

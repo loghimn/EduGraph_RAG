@@ -8,6 +8,9 @@ import fu.coreservice.dto.chat.ChatSessionCreateRequest;
 import fu.coreservice.dto.chat.ChatSessionResponse;
 import fu.coreservice.service.ChatSessionService;
 import fu.coreservice.service.ChatMessageService;
+import fu.coreservice.service.MessageFeedbackService;
+import fu.coreservice.dto.chat.MessageFeedbackRequest;
+import fu.coreservice.dto.chat.MessageFeedbackResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -19,6 +22,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -43,6 +48,39 @@ public class AiChatController {
 
     private final ChatSessionService chatSessionService;
     private final ChatMessageService chatMessageService;
+    private final MessageFeedbackService messageFeedbackService;
+
+    @Operation(summary = "Create or update message feedback",
+            description = "Rates a completed BOT message in your own session: 1 helpful, -1 not helpful. "
+                    + "Optional comment up to 2000 characters. Replaces the existing feedback; does not call AI.")
+    @PutMapping("/sessions/{sessionId}/messages/{messageId}/feedback")
+    public ResponseEntity<ApiResponse<MessageFeedbackResponse>> saveFeedback(
+            @PathVariable Long courseId, @PathVariable Long sessionId, @PathVariable Long messageId,
+            @Valid @RequestBody MessageFeedbackRequest request) {
+        MessageFeedbackResponse response = messageFeedbackService.saveFeedback(courseId, sessionId, messageId, request);
+        return ResponseEntity.ok(ApiResponse.<MessageFeedbackResponse>builder()
+                .success(true).message("Message feedback saved successfully").data(response).build());
+    }
+
+    @Operation(summary = "Get message feedback",
+            description = "Returns your feedback for a completed BOT message. Data is null when no feedback exists.")
+    @GetMapping("/sessions/{sessionId}/messages/{messageId}/feedback")
+    public ResponseEntity<ApiResponse<MessageFeedbackResponse>> getFeedback(
+            @PathVariable Long courseId, @PathVariable Long sessionId, @PathVariable Long messageId) {
+        MessageFeedbackResponse response = messageFeedbackService.getFeedback(courseId, sessionId, messageId);
+        return ResponseEntity.ok(ApiResponse.<MessageFeedbackResponse>builder()
+                .success(true).message("Message feedback retrieved successfully").data(response).build());
+    }
+
+    @Operation(summary = "Remove message feedback",
+            description = "Removes only your feedback, preserving the chat message. Repeated deletion succeeds.")
+    @DeleteMapping("/sessions/{sessionId}/messages/{messageId}/feedback")
+    public ResponseEntity<ApiResponse<Void>> deleteFeedback(
+            @PathVariable Long courseId, @PathVariable Long sessionId, @PathVariable Long messageId) {
+        messageFeedbackService.deleteFeedback(courseId, sessionId, messageId);
+        return ResponseEntity.ok(ApiResponse.<Void>builder().success(true)
+                .message("Message feedback removed successfully").data(null).build());
+    }
 
     @Operation(summary = "Send a message in my chat session",
             description = "Persists the question and streams the answer as token, sources, clarify, error and done events. "

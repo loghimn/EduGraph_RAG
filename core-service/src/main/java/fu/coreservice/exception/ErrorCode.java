@@ -53,6 +53,8 @@ public enum ErrorCode {
     CHAT_SESSION_NOT_FOUND("CHAT_001", "Chat session not found", HttpStatus.NOT_FOUND),
     CHAT_REPLY_NOT_FOUND("CHAT_002", "Reply message not found in this session", HttpStatus.NOT_FOUND),
     CHAT_REPLY_NOT_READY("CHAT_003", "Only completed non-empty messages can be replied to", HttpStatus.BAD_REQUEST),
+    CHAT_MESSAGE_NOT_FOUND("CHAT_004", "Chat message not found in this session", HttpStatus.NOT_FOUND),
+    CHAT_FEEDBACK_NOT_ALLOWED("CHAT_005", "Only completed BOT messages can receive feedback", HttpStatus.BAD_REQUEST),
 
 
     // System

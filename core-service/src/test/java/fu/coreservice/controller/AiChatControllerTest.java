@@ -8,8 +8,12 @@ import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.exception.GlobalExceptionHandler;
 import fu.coreservice.service.ChatSessionService;
 import fu.coreservice.service.ChatMessageService;
+import fu.coreservice.service.MessageFeedbackService;
+import fu.coreservice.dto.chat.MessageFeedbackResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -24,12 +28,72 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AiChatControllerTest {
     private final ChatSessionService service = mock(ChatSessionService.class);
     private final ChatMessageService messageService = mock(ChatMessageService.class);
+    private final MessageFeedbackService feedbackService = mock(MessageFeedbackService.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setup() {
-        mvc = MockMvcBuilders.standaloneSetup(new AiChatController(service, messageService))
+        mvc = MockMvcBuilders.standaloneSetup(new AiChatController(service, messageService, feedbackService))
                 .setControllerAdvice(new GlobalExceptionHandler()).build();
+    }
+
+    @Test
+    void feedbackPutUsesJsonEnvelopeAndBindsRatingAndComment() throws Exception {
+        when(feedbackService.saveFeedback(eq(7L), eq(10L), eq(21L), any()))
+                .thenReturn(MessageFeedbackResponse.builder().feedbackId(30L).messageId(21L)
+                        .rating((short) -1).comment("Needs examples").build());
+        mvc.perform(put("/api/courses/7/chat/sessions/10/messages/21/feedback")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rating\":-1,\"comment\":\"Needs examples\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.feedbackId").value(30))
+                .andExpect(jsonPath("$.data.rating").value(-1));
+        verify(feedbackService).saveFeedback(eq(7L), eq(10L), eq(21L),
+                argThat(r -> r.getRating() == -1 && "Needs examples".equals(r.getComment())));
+        verifyNoInteractions(messageService);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"rating\":0}", "{\"rating\":2}", "{\"rating\":-2}"})
+    void invalidFeedbackRatingIsRejected(String body) throws Exception {
+        mvc.perform(put("/api/courses/7/chat/sessions/10/messages/21/feedback")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_001"));
+        verifyNoInteractions(feedbackService);
+    }
+
+    @Test
+    void oversizedFeedbackCommentIsRejected() throws Exception {
+        mvc.perform(put("/api/courses/7/chat/sessions/10/messages/21/feedback")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"rating\":1,\"comment\":\"" + "x".repeat(2001) + "\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(feedbackService);
+    }
+
+    @Test
+    void getFeedbackReturnsSuccessWithNullDataWhenNotRated() throws Exception {
+        mvc.perform(get("/api/courses/7/chat/sessions/10/messages/21/feedback"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data").isEmpty());
+        verify(feedbackService).getFeedback(7L, 10L, 21L);
+    }
+
+    @Test
+    void deleteFeedbackUsesProjectResponseEnvelope() throws Exception {
+        mvc.perform(delete("/api/courses/7/chat/sessions/10/messages/21/feedback"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true));
+        verify(feedbackService).deleteFeedback(7L, 10L, 21L);
+        verifyNoInteractions(messageService);
+    }
+
+    @Test
+    void feedbackForMissingMessageReturnsChatError() throws Exception {
+        when(feedbackService.getFeedback(7L, 10L, 99L))
+                .thenThrow(new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        mvc.perform(get("/api/courses/7/chat/sessions/10/messages/99/feedback"))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("CHAT_004"));
     }
 
     @Test
