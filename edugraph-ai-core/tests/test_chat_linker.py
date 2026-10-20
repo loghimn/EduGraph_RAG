@@ -62,20 +62,11 @@ def test_link_concepts_alias_short_no_fuzzy():
     res_fuzzy = link_concepts_from_data("Học SQX cơ bản", concepts)
     assert "c_sql" not in res_fuzzy["concept_ids"]
 
-def test_link_concepts_fallback_cosine_top3():
-    # Giả lập không match từ nào -> tính cosine embedding top-3
+def test_unmatched_question_does_not_suggest_nearest_concepts():
     concepts = [
-        {"id": "c1", "name": "Database Index", "aliases": [], "embedding": [1.0, 0.0, 0.0]},
-        {"id": "c2", "name": "Query Optimization", "aliases": [], "embedding": [0.8, 0.2, 0.0]},
-        {"id": "c3", "name": "Transaction ACID", "aliases": [], "embedding": [0.0, 1.0, 0.0]},
-        {"id": "c4", "name": "CSS Styling", "aliases": [], "embedding": [0.0, 0.0, 1.0]},
+        {"id": "c1", "name": "OPTIONS", "aliases": [], "embedding": [1.0, 0.0]},
+        {"id": "c2", "name": "Request Object", "aliases": [], "embedding": [0.9, 0.1]},
+        {"id": "c3", "name": "Response Object", "aliases": [], "embedding": [0.8, 0.2]},
     ]
-    
-    msg_emb = [0.9, 0.1, 0.0] # Gần c1 và c2 nhất
-    res = link_concepts_from_data("Một câu hỏi hoàn toàn lạ lẫm", concepts, message_embedding=msg_emb)
-    assert res["concept_ids"] == []
-    assert res["clarify"] is not None
-    assert len(res["clarify"]) == 3
-    top_ids = [c["id"] for c in res["clarify"]]
-    assert top_ids[0] == "c1"
-    assert top_ids[1] == "c2"
+    result = link_concepts_from_data("weather tomorrow", concepts)
+    assert result == {"concept_ids": [], "clarify": None}

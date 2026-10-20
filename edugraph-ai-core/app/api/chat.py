@@ -1,8 +1,9 @@
 import json
-from typing import Optional, List, Dict, Any, AsyncGenerator
+import asyncio
+from typing import Optional, List, Dict, Any, AsyncGenerator, Literal
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.api.internal_auth import verify_internal_key
@@ -11,24 +12,45 @@ from app.retrieval.concept_linker import link_concepts
 from app.retrieval.chunk_retriever import retrieve_chunks
 from app.chat.answer import build_explain_prompt, filter_citations, build_sources_payload
 from app.core.llm import llm_client
+from app.chat.context import prepare_history, resolve_question
 
 router = APIRouter()
+
+NO_DATA_MESSAGE = (
+    "Không tìm thấy dữ liệu phù hợp với câu hỏi trong tài liệu của khóa học. "
+    "Bạn thử hỏi cụ thể hơn nhé."
+)
+
+
+def no_data_events() -> List[str]:
+    # Keep the existing protocol so Java persists this as a normal BOT answer.
+    return [
+        format_sse("token", {"token": NO_DATA_MESSAGE}),
+        format_sse("sources", []),
+        format_sse("done", {}),
+    ]
+
+class HistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4_000)
+
 
 class ChatRequest(BaseModel):
     course_id: str
     user_id: str
     message: str
     concept_ids: Optional[List[str]] = None
+    history: List[HistoryMessage] = Field(default_factory=list, max_length=12)
 
-async def verify_course_ownership(course_id: str, user_id: str):
-    query = "MATCH (c:Course {id: $course_id}) RETURN c.owner_id AS owner_id"
+async def verify_course_exists(course_id: str):
+    # Java authorizes owners/enrolled learners against its relational database.
+    # This internal endpoint trusts that decision only after verifying the key.
+    query = "MATCH (c:Course {id: $course_id}) RETURN c.id AS id"
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, course_id=course_id)
         single = await res.single()
         if not single:
             raise HTTPException(status_code=404, detail="Course not found")
-        if single["owner_id"] != user_id:
-            raise HTTPException(status_code=403, detail="Permission denied: user is not course owner")
 
 def format_sse(event: str, data: Any) -> str:
     payload = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data
@@ -37,13 +59,20 @@ def format_sse(event: str, data: Any) -> str:
 async def chat_explain_stream_generator(
     course_id: str,
     message: str,
-    concept_ids: Optional[List[str]] = None
+    concept_ids: Optional[List[str]] = None,
+    history: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[str, None]:
     try:
+        history = prepare_history(history)
+        search_query = message
+        if history:
+            yield ": resolving conversation context\n\n"
+            search_query = await asyncio.wait_for(resolve_question(message, history), timeout=20)
+            yield ": conversation context resolved\n\n"
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
         if linked_concept_ids is None:
-            link_res = await link_concepts(course_id, message)
+            link_res = await link_concepts(course_id, search_query)
             if link_res.get("clarify"):
                 # Gửi clarify event và kết thúc bằng done
                 yield format_sse("clarify", {"candidates": link_res["clarify"]})
@@ -51,16 +80,26 @@ async def chat_explain_stream_generator(
                 return
             linked_concept_ids = link_res.get("concept_ids", [])
 
+        if not linked_concept_ids:
+            for event in no_data_events():
+                yield event
+            return
+
         # 2. Truy xuất chunks (Graph + Vector + Fulltext + RRF)
         chunks = await retrieve_chunks(
             course_id=course_id,
-            query=message,
+            query=search_query,
             concept_ids=linked_concept_ids,
             max_chunks=settings.CHAT_MAX_CHUNKS
         )
 
+        if not chunks:
+            for event in no_data_events():
+                yield event
+            return
+
         # 3. Dựng prompt cho nhánh explain
-        prompt = build_explain_prompt(message, chunks)
+        prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query)
 
         # 4. Stream token từ LLM (với priority=True)
         accumulated_tokens = []
@@ -95,9 +134,10 @@ async def chat_endpoint(
     x_internal_key: str = Header(...)
 ):
     verify_internal_key(x_internal_key)
-    await verify_course_ownership(req.course_id, req.user_id)
+    await verify_course_exists(req.course_id)
 
     return StreamingResponse(
-        chat_explain_stream_generator(req.course_id, req.message, req.concept_ids),
+        chat_explain_stream_generator(req.course_id, req.message, req.concept_ids,
+                                      [item.model_dump() for item in req.history]),
         media_type="text/event-stream"
     )

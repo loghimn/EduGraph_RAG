@@ -3,6 +3,7 @@ package fu.coreservice.exception;
 import fu.coreservice.dto.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -10,6 +11,8 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -23,6 +26,13 @@ import java.util.Map;
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
+    public ResponseEntity<ApiResponse<Void>> handleEndpointNotFound(Exception ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).contentType(MediaType.APPLICATION_JSON).body(
+                ApiResponse.<Void>builder().success(false).errorCode("SYSTEM_404")
+                        .message("Endpoint not found").build());
+    }
 
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ApiResponse<Void>> handleBadCredentials(BadCredentialsException ex) {
@@ -60,7 +70,7 @@ public class GlobalExceptionHandler {
 
         ErrorCode errorCode = ErrorCode.VALIDATION_FAILED;
 
-        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+        return ResponseEntity.status(errorCode.getHttpStatus()).contentType(MediaType.APPLICATION_JSON).body(
                 ApiResponse.<Map<String, String>>builder()
                         .success(false)
                         .errorCode(errorCode.getCode())
@@ -101,7 +111,7 @@ public class GlobalExceptionHandler {
 
         ErrorCode errorCode = ErrorCode.INVALID_REQUEST;
 
-        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+        return ResponseEntity.status(errorCode.getHttpStatus()).contentType(MediaType.APPLICATION_JSON).body(
                 ApiResponse.<Void>builder()
                         .success(false)
                         .errorCode(errorCode.getCode())
@@ -115,7 +125,7 @@ public class GlobalExceptionHandler {
 
         ErrorCode errorCode = ErrorCode.INVALID_PARAMETER;
 
-        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+        return ResponseEntity.status(errorCode.getHttpStatus()).contentType(MediaType.APPLICATION_JSON).body(
                 ApiResponse.<Void>builder()
                         .success(false)
                         .errorCode(errorCode.getCode())
@@ -186,7 +196,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleAppException(AppException ex) {
         ErrorCode errorCode = ex.getErrorCode();
 
-        return ResponseEntity.status(errorCode.getHttpStatus()).body(
+        return ResponseEntity.status(errorCode.getHttpStatus()).contentType(MediaType.APPLICATION_JSON).body(
                 ApiResponse.<Void>builder()
                         .success(false)
                         .errorCode(errorCode.getCode())
