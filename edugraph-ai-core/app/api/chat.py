@@ -80,8 +80,8 @@ async def chat_explain_stream_generator(
             except (ValueError, LLMUnavailableError, asyncio.TimeoutError) as error:
                 # Context rewriting is optional; never invent a replacement query.
                 search_query = message
-                logger.warning("Context resolution failed; using original question. course_id=%s error_type=%s",
-                               course_id, type(error).__name__)
+                logger.warning("Context resolution failed; using original question. error_type=%s",
+                               type(error).__name__)
                 yield ": using original question\n\n"
             else:
                 yield ": conversation context resolved\n\n"

@@ -228,9 +228,14 @@ class ChatMessageServiceTest {
 
     @Test
     void upstreamErrorRetainsPartialAnswerAsFailed() throws Exception {
-        run("event: token\ndata: {\"token\":\"Partial\"}\n\n"
-                + "event: error\ndata: {\"error\":\"Provider failed\"}\n\n"
+        var output = run("event: token\ndata: {\"token\":\"Partial\"}\n\n"
+                + "event: error\ndata: {\"error\":\"Provider failed\",\"debug\":\"internal-only-detail\"}\n\n"
                 + "event: done\ndata: {}\n\n");
+        String events = output.toString(StandardCharsets.UTF_8);
+        assertTrue(events.contains("event: error\ndata: {\"error\":\"Unable to complete the answer. Please try again.\"}"));
+        assertFalse(events.contains("Provider failed"));
+        assertFalse(events.contains("internal-only-detail"));
+        assertTrue(events.endsWith("event: done\ndata: {}\n\n"));
         verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.FAILED),
                 eq("Provider failed"), anyInt(), eq(List.of()), eq(false));
     }

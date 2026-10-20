@@ -33,6 +33,8 @@ import java.util.Set;
 @RequiredArgsConstructor
 @Slf4j
 public class ChatMessageServiceImpl implements ChatMessageService {
+    private static final String CLIENT_ERROR_PAYLOAD =
+            "{\"error\":\"Unable to complete the answer. Please try again.\"}";
     public static final String ASYNC_INTERCEPTOR_KEY = ChatMessageServiceImpl.class.getName() + ".stream";
     private final ChatSessionService chatSessionService;
     private final AiCoreClient aiCoreClient;
@@ -77,7 +79,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                             return;
                         }
                         if (!execution.accept(event, payload)) return;
-                        writeEvent(output, event, payload);
+                        writeEvent(output, event, "error".equals(event) ? CLIENT_ERROR_PAYLOAD : payload);
                         event = "message";
                         data.setLength(0);
                     } else if (line.startsWith("event:")) {
@@ -99,7 +101,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             log.warn("Chat stream failed. sessionId={}, reason={}", execution.turn.sessionId(), e.getMessage());
             execution.terminate(ChatMessageStatus.FAILED, e.getMessage());
             try {
-                writeEvent(output, "error", "{\"error\":\"Unable to complete the answer. Please try again.\"}");
+                writeEvent(output, "error", CLIENT_ERROR_PAYLOAD);
                 writeEvent(output, "done", "{}");
             } catch (IOException deliveryError) {
                 log.info("Could not deliver chat error. sessionId={}", execution.turn.sessionId());
