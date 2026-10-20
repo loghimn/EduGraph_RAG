@@ -44,7 +44,7 @@ async def test_model(model_name: str, client_attr: str):
 async def main():
     print("Testing LLM connections...")
     
-    await test_model(settings.MODEL_MAIN, "groq_client")
+    await test_model(settings.MODEL_MAIN, "openai_client")
     await test_model(settings.MODEL_FALLBACK, "gemini_client")
     
     print("\nTesting unified LLMClient logic...")

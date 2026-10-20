@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = "password"
 
     # LLM Keys
-    GROQ_API_KEY: str = "dummy_key"
+    OPENAI_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    GEMINI_API_KEYS: str = ""
     INTERNAL_API_KEY: str = Field(min_length=1)
     
     # Path
@@ -23,8 +24,9 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 40
 
     # LLM Config
-    MODEL_MAIN: str = "qwen/qwen3.8-27b"
+    MODEL_MAIN: str = "gpt-5.4-mini"
     MODEL_FALLBACK: str = "gemini-2.5-flash"
+    LLM_JSON_MAX_OUTPUT_TOKENS: int = 3000
     LLM_CONCURRENCY: int = 3
     STREAM_FIRST_TOKEN_TIMEOUT: float = 8.0
 
@@ -68,6 +70,10 @@ class Settings(BaseSettings):
     # Learning Paths Constants
     ISOLATED_CONCEPTS_WARNING_THRESHOLD: float = 0.2
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 settings = Settings()
