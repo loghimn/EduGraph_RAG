@@ -10,6 +10,7 @@ import fu.coreservice.service.ChatMessageService;
 import fu.coreservice.service.ChatSessionService;
 import fu.coreservice.dto.chat.ChatSource;
 import fu.coreservice.dto.chat.ChatTurn;
+import fu.coreservice.utils.BoundedSseReader;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.client.ClientHttpResponse;
@@ -33,6 +34,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 @Slf4j
 public class ChatMessageServiceImpl implements ChatMessageService {
+    private static final int MAX_LINE_CHARS = 1 << 20;
+    private static final int MAX_FRAME_CHARS = 4 << 20;
+    private static final int MAX_ERROR_CHARS = 1_000;
     private static final String CLIENT_ERROR_PAYLOAD =
             "{\"error\":\"Unable to complete the answer. Please try again.\"}";
     public static final String ASYNC_INTERCEPTOR_KEY = ChatMessageServiceImpl.class.getName() + ".stream";
@@ -62,13 +66,22 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         try {
             ClientHttpResponse response = aiCoreClient.openChatStream(request);
             if (!execution.attach(response)) return;
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    response.getBody(), StandardCharsets.UTF_8))) {
+            try (BoundedSseReader reader = new BoundedSseReader(new InputStreamReader(
+                    response.getBody(), StandardCharsets.UTF_8), MAX_LINE_CHARS)) {
                 String event = "message";
                 StringBuilder data = new StringBuilder();
+                int frameChars = 0;
                 String line;
                 while (!execution.isStopped() && (line = reader.readLine()) != null) {
+                    if (!line.isEmpty()) {
+                        // Count every field/comment, including separators, before appending.
+                        if (line.length() + 1 > MAX_FRAME_CHARS - frameChars) {
+                            throw new IOException("AI SSE frame exceeded size limit");
+                        }
+                        frameChars += line.length() + 1;
+                    }
                     if (line.isEmpty()) {
+                        frameChars = 0;
                         if (data.isEmpty()) {
                             event = "message";
                             continue;
@@ -98,8 +111,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         } catch (Exception e) {
             if (execution.deferInterruptedWorker()) return;
             if (execution.isStopped()) return;
-            log.warn("Chat stream failed. sessionId={}, reason={}", execution.turn.sessionId(), e.getMessage());
-            execution.terminate(ChatMessageStatus.FAILED, e.getMessage());
+            log.warn("Chat stream failed. sessionId={}, errorType={}",
+                    execution.turn.sessionId(), e.getClass().getSimpleName());
+            execution.terminate(ChatMessageStatus.FAILED, truncateError(e.getMessage()));
             try {
                 writeEvent(output, "error", CLIENT_ERROR_PAYLOAD);
                 writeEvent(output, "done", "{}");
@@ -167,7 +181,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 if (stopped || finalized) return;
                 stopped = true;
                 state.status = status;
-                state.error = reason;
+                state.error = truncateError(reason);
                 state.failed = status == ChatMessageStatus.FAILED;
                 // Only a successful clarify/done sequence removes the BOT placeholder.
                 state.clarification = false;
@@ -212,7 +226,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         private void persist() {
             int latency = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - started) / 1_000_000);
-            chatSessionService.finishTurn(turn, state.content.toString(), state.status, state.error,
+            chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
                     latency, List.copyOf(state.sources), state.clarification);
             finalized = true; // Set only after the transactional call has committed.
         }
@@ -285,7 +299,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             case "error" -> {
                 state.failed = true;
                 state.status = ChatMessageStatus.FAILED;
-                state.error = json.path("error").asText("AI generation failed");
+                state.error = truncateError(json.path("error").asText("AI generation failed"));
             }
             default -> throw new IOException("Unsupported AI event: " + event);
         }
@@ -303,6 +317,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private String fieldValue(String line) {
         String value = line.substring(line.indexOf(':') + 1);
         return value.startsWith(" ") ? value.substring(1) : value;
+    }
+
+    private String truncateError(String text) {
+        if (text == null || text.length() <= MAX_ERROR_CHARS) return text;
+        int end = MAX_ERROR_CHARS;
+        if (Character.isHighSurrogate(text.charAt(end - 1)) && Character.isLowSurrogate(text.charAt(end))) end--;
+        return text.substring(0, end);
     }
 
     private void writeEvent(OutputStream output, String event, String payload) throws ClientDisconnectedException {

@@ -217,6 +217,61 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void oversizedUnterminatedLineFailsAndClosesUpstream() throws Exception {
+        var output = run("event: token\ndata: {\"token\":\"Partial\"}\n\n"
+                + "data: " + "x".repeat(1 << 20));
+        verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.FAILED),
+                eq("AI SSE line exceeded size limit"), anyInt(), eq(List.of()), eq(false));
+        verify(response).close();
+        assertTrue(output.toString(StandardCharsets.UTF_8).contains("event: error"));
+    }
+
+    @Test
+    void manySmallDataLinesCannotGrowFrameBeyondLimit() throws Exception {
+        var output = run("event: token\ndata: {\"token\":\"Partial\"}\n\n"
+                + "event: sources\n" + ("data: " + " ".repeat(900_000) + "\n").repeat(5));
+        verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.FAILED),
+                eq("AI SSE frame exceeded size limit"), anyInt(), eq(List.of()), eq(false));
+        verify(response).close();
+        assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("event: done\ndata: {}\n\n"));
+    }
+
+    @Test
+    void upstreamErrorIsTruncatedBeforePersistenceAndNeverLeaked() throws Exception {
+        String detail = "x".repeat(5_000);
+        var output = run("event: error\ndata: {\"error\":\"" + detail + "\"}\n\n"
+                + "event: done\ndata: {}\n\n");
+        verify(storage).finishTurn(eq(turn), eq(""), eq(ChatMessageStatus.FAILED),
+                eq("x".repeat(1_000)), anyInt(), eq(List.of()), eq(false));
+        assertFalse(output.toString(StandardCharsets.UTF_8).contains("x".repeat(1_000)));
+    }
+
+    @Test
+    void truncationDoesNotSplitUnicodeSurrogatePair() throws Exception {
+        String detail = "x".repeat(999) + "😀" + "tail";
+        run("event: error\ndata: {\"error\":\"" + detail + "\"}\n\nevent: done\ndata: {}\n\n");
+        verify(storage).finishTurn(eq(turn), eq(""), eq(ChatMessageStatus.FAILED),
+                eq("x".repeat(999)), anyInt(), eq(List.of()), eq(false));
+    }
+
+    @Test
+    void localExceptionTextIsAlsoTruncatedBeforePersistence() throws Exception {
+        when(client.openChatStream(any())).thenThrow(new IllegalStateException("x".repeat(5_000)));
+        service.sendMessage(7L, 10L, request).writeTo(new ByteArrayOutputStream());
+        verify(storage).finishTurn(eq(turn), eq(""), eq(ChatMessageStatus.FAILED),
+                eq("x".repeat(1_000)), anyInt(), eq(List.of()), eq(false));
+    }
+
+    @Test
+    void acceptsCrOnlySseFrames() throws Exception {
+        var output = run("event: token\rdata: {\"token\":\"Answer\"}\r\r"
+                + "event: sources\rdata: []\r\revent: done\rdata: {}\r\r");
+        verify(storage).finishTurn(eq(turn), eq("Answer"), eq(ChatMessageStatus.COMPLETED),
+                isNull(), anyInt(), eq(List.of()), eq(false));
+        assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("event: done\ndata: {}\n\n"));
+    }
+
+    @Test
     void noDataNoticeIsPersistedAsCompletedBotWithoutCitations() throws Exception {
         String message = "Không tìm thấy dữ liệu phù hợp với câu hỏi trong tài liệu của khóa học.";
         var output = run("event: token\ndata: {\"token\":\"" + message + "\"}\n\n"
