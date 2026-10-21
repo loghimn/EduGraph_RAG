@@ -15,6 +15,7 @@ import java.util.Map;
 
 /**
  * Proxy POST /learning-paths/plan của AI core — frontend chỉ gọi qua Gateway.
+ * Chủ khóa học hoặc học viên đã enroll được lập lộ trình cho chính mình.
  * Payload/status từ Python được relay nguyên vẹn (kể cả 409warnings).
  */
 @RestController

@@ -165,15 +165,20 @@ def test_subgraph_cycle_detection_conflict_error():
         generate_learning_path(G=G, evidences={}, mode="course")
     assert len(exc_info.value.conflicts) > 0
 
-# 8. Test API Auth & Ownership (403, 404) & Single Cypher Query mock
+# 8. Internal authentication and missing course checks.
 @patch("app.api.learning_paths.neo4j_client")
-def test_api_auth_ownership_and_errors(mock_neo4j):
+def test_api_internal_auth_and_missing_course(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
 
     # 8a. Sai Internal Key -> 403
     resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "wrong"}, json={"course_id": "c1", "user_id": "u1"})
     assert resp.status_code == 403
+    mock_session.run.assert_not_called()
+
+    resp = client.post("/learning-paths/plan", json={"course_id": "c1", "user_id": "u1"})
+    assert resp.status_code == 422
+    mock_session.run.assert_not_called()
 
     # 8b. Course không tồn tại -> 404
     mock_rec = AsyncMock()
@@ -182,7 +187,12 @@ def test_api_auth_ownership_and_errors(mock_neo4j):
     resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "test-internal-api-key"}, json={"course_id": "c_missing", "user_id": "u1"})
     assert resp.status_code == 404
 
-    # 8c. Sai chủ sở hữu -> 403
+@patch("app.api.learning_paths.cache")
+@patch("app.api.learning_paths.get_course_graph")
+@patch("app.api.learning_paths.neo4j_client")
+def test_api_accepts_learner_authorized_by_core_service(mock_neo4j, mock_get_graph, mock_cache):
+    mock_session = AsyncMock()
+    mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
     mock_rec_owner = AsyncMock()
     mock_rec_owner.single.return_value = {
         "owner_id": "owner_other",
@@ -193,8 +203,13 @@ def test_api_auth_ownership_and_errors(mock_neo4j):
         "doc_concept_ids": []
     }
     mock_session.run.return_value = mock_rec_owner
+    mock_get_graph.return_value = (create_sample_dag(), 1, {}, [])
+    mock_cache.get.return_value = None
+
     resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "test-internal-api-key"}, json={"course_id": "c1", "user_id": "u1"})
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    assert resp.json()["linear_order"] == ["C1", "C2", "C3", "C4", "C5"]
+    mock_session.run.assert_awaited_once()
 
 # 9. Test API: Goal không tồn tại trong course -> 404 kèm ID
 @patch("app.api.learning_paths.get_course_graph")

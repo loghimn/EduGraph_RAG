@@ -28,13 +28,16 @@ async def create_learning_path_plan(
 ):
     verify_internal_key(x_internal_key)
 
-    # 1. Gộp kiểm quyền + Document.status + Course.version + pending_documents + doc_concept_ids vào MỘT truy vấn
+    # Core service authenticates the caller and checks ownership/enrollment before
+    # forwarding this internal request. Enrollment is stored in Java's database,
+    # so user_id identifies the learner and does not have to match the graph owner.
+    # 1. Load document status, course version, pending documents and document concepts.
     q_check = """
     MATCH (c:Course {id: $course_id})
     OPTIONAL MATCH (d:Document {id: $doc_id, course_id: $course_id})
     OPTIONAL MATCH (proc_d:Document {course_id: $course_id, status: 'PROCESSING'})
     OPTIONAL MATCH (ch:Chunk {doc_id: $doc_id, course_id: $course_id})-[:MENTIONS]->(dc:Concept {course_id: $course_id})
-    RETURN c.owner_id AS owner_id,
+    RETURN c.id AS course_id,
            coalesce(c.version, 0) AS course_version,
            d.status AS doc_status,
            d.progress AS doc_progress,
@@ -46,8 +49,6 @@ async def create_learning_path_plan(
         rec = await res.single()
         if not rec:
             raise HTTPException(status_code=404, detail="Course not found")
-        if rec["owner_id"] != req.user_id:
-            raise HTTPException(status_code=403, detail="Permission denied: user is not course owner")
 
         # Kiểm tra Document nếu có truyền document_id
         doc_concept_ids: Optional[Set[str]] = None
