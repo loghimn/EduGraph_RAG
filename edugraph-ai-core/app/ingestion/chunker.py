@@ -1,12 +1,14 @@
 from typing import List, Dict, Any
 from app.config import settings
 from app.core.embedding import embed_model
+from app.core.identifiers import validate_document_id, build_chunk_id, IdentifierValidationError
 
 def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) -> List[Dict[str, Any]]:
     """
     Sử dụng tokenizer bge-m3 để đếm token và cắt chunk.
     pages: danh sách (page_number, text)
     """
+    validate_document_id(doc_id)
     
     # Chú ý: embedding model đang load `sentence-transformers` mô hình.
     # Ta lấy thẳng tokenizer của nó để đếm token.
@@ -74,7 +76,7 @@ def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) ->
                 chunk_text = text[start_char:end_char]
                 
                 chunks.append({
-                    "id": f"{doc_id}:{chunk_index}",
+                    "id": build_chunk_id(doc_id, chunk_index),
                     "doc_id": doc_id,
                     "course_id": course_id,
                     "index": chunk_index,
@@ -91,6 +93,8 @@ def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) ->
                 if settings.CHUNK_TOKENS - settings.CHUNK_OVERLAP <= 0:
                     idx += settings.CHUNK_TOKENS
 
+        except IdentifierValidationError:
+            raise
         except Exception:
             del chunks[page_chunk_start:]
             chunk_index = page_chunk_index
@@ -110,7 +114,7 @@ def chunk_document(pages: List[tuple[int, str]], doc_id: str, course_id: str) ->
                 end_idx = min(idx + char_step, len(text))
                 chunk_text = text[idx:end_idx]
                 chunks.append({
-                    "id": f"{doc_id}:{chunk_index}",
+                    "id": build_chunk_id(doc_id, chunk_index),
                     "doc_id": doc_id,
                     "course_id": course_id,
                     "index": chunk_index,

@@ -208,6 +208,15 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void forwardsHeartbeatCommentsWithoutSavingThemAsAnswerText() throws Exception {
+        var output = run(": heartbeat\n\nevent: token\ndata: {\"token\":\"Answer\"}\n\n"
+                + ": heartbeat\n\nevent: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        assertTrue(output.toString(StandardCharsets.UTF_8).contains(": heartbeat\n\n"));
+        verify(storage).finishTurn(eq(turn), eq("Answer"), eq(ChatMessageStatus.COMPLETED),
+                isNull(), anyInt(), eq(List.of()), eq(false));
+    }
+
+    @Test
     void noDataNoticeIsPersistedAsCompletedBotWithoutCitations() throws Exception {
         String message = "Không tìm thấy dữ liệu phù hợp với câu hỏi trong tài liệu của khóa học.";
         var output = run("event: token\ndata: {\"token\":\"" + message + "\"}\n\n"

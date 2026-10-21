@@ -5,6 +5,29 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from app.main import app
 client = TestClient(app)
 
+
+@pytest.mark.parametrize("document_id", ["abc", "0", "-1", "01", "1.5", "9223372036854775808", "9" * 101])
+@patch("app.api.ingest._background_ingest", new_callable=AsyncMock)
+@patch("app.api.ingest.neo4j_client")
+def test_invalid_document_id_is_rejected_before_graph_or_background_work(mock_neo4j, mock_background, document_id):
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+        "document_id": document_id, "course_id": "c1", "user_id": "u1"
+    })
+    assert response.status_code == 422
+    mock_neo4j.driver.session.assert_not_called()
+    mock_background.assert_not_awaited()
+
+
+@pytest.mark.parametrize("document_id", ["abc", "0", "01", "9223372036854775808", "9" * 101])
+def test_upload_invalid_document_id_does_not_write_file(tmp_path, monkeypatch, document_id):
+    from app.config import settings
+    monkeypatch.setattr(settings, "RAW_DATA_DIR", str(tmp_path))
+    response = client.post(f"/documents/{document_id}/file",
+                           headers={"X-Internal-Key": "test-internal-api-key"},
+                           files={"file": ("a.txt", b"content", "text/plain")})
+    assert response.status_code == 422
+    assert not list(tmp_path.iterdir())
+
 def test_ingest_auth_403():
     response = client.post("/ingest", headers={"X-Internal-Key": "wrong"}, json={"document_id": "1", "course_id": "2", "user_id": "3"})
     assert response.status_code == 403
@@ -24,7 +47,7 @@ def test_ingest_merges_nodes_200(mock_neo4j):
 
     mock_session.run.side_effect = [mock_rec_course, mock_rec_doc]
 
-    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "doc1", "course_id": "c1", "user_id": "user1"})
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "user1"})
     assert response.status_code == 200
     assert response.json()["status"] == "processing"
     # Query Course phải là MERGE (tạo node nếu chưa có)
@@ -45,13 +68,13 @@ def test_ingest_owner_mismatch_403(mock_neo4j):
     mock_rec_course.single.return_value = {"owner_id": "real_owner"}
     mock_session.run.return_value = mock_rec_course
 
-    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "doc1", "course_id": "c1", "user_id": "imposter"})
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "imposter"})
     assert response.status_code == 403
     assert "Permission denied" in response.json()["detail"]
 
 
 def test_upload_file_auth_403():
-    response = client.post("/documents/doc1/file", headers={"X-Internal-Key": "wrong"}, files={"file": ("a.pdf", b"123", "application/pdf")})
+    response = client.post("/documents/1/file", headers={"X-Internal-Key": "wrong"}, files={"file": ("a.pdf", b"123", "application/pdf")})
     assert response.status_code == 403
 
 
@@ -60,7 +83,7 @@ def test_upload_file_stores_raw(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "RAW_DATA_DIR", str(tmp_path))
 
     response = client.post(
-        "/documents/doc-upload-1/file",
+        "/documents/101/file",
         headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("bai1.pdf", b"%PDF-1.4 fake", "application/pdf")}
     )
@@ -68,7 +91,7 @@ def test_upload_file_stores_raw(tmp_path, monkeypatch):
     body = response.json()
     assert body["status"] == "stored"
     assert body["filename"] == "bai1.pdf"
-    stored = tmp_path / "doc-upload-1" / "bai1.pdf"
+    stored = tmp_path / "101" / "bai1.pdf"
     assert stored.exists()
     assert stored.read_bytes() == b"%PDF-1.4 fake"
 
@@ -78,13 +101,13 @@ def test_upload_file_accepts_pptx(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "RAW_DATA_DIR", str(tmp_path))
 
     response = client.post(
-        "/documents/doc-upload-pptx/file",
+        "/documents/102/file",
         headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("slides.pptx", b"PK fake pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")}
     )
     assert response.status_code == 200
     assert response.json()["filename"] == "slides.pptx"
-    stored = tmp_path / "doc-upload-pptx" / "slides.pptx"
+    stored = tmp_path / "102" / "slides.pptx"
     assert stored.exists()
 
 
@@ -93,7 +116,7 @@ def test_upload_file_rejects_bad_extension(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "RAW_DATA_DIR", str(tmp_path))
 
     response = client.post(
-        "/documents/doc-upload-2/file",
+        "/documents/103/file",
         headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("malware.exe", b"MZ", "application/octet-stream")}
     )
@@ -105,7 +128,7 @@ def test_upload_file_rejects_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "RAW_DATA_DIR", str(tmp_path))
 
     response = client.post(
-        "/documents/doc-upload-3/file",
+        "/documents/104/file",
         headers={"X-Internal-Key": "test-internal-api-key"},
         files={"file": ("empty.txt", b"", "text/plain")}
     )

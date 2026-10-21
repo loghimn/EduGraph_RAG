@@ -15,6 +15,7 @@ from app.chat.answer import build_explain_prompt, filter_citations, build_source
 from app.core.llm import llm_client
 from app.core.errors import LLMUnavailableError
 from app.chat.context import prepare_history, resolve_question
+from app.chat.streaming import with_sse_heartbeats
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -61,6 +62,22 @@ def format_sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 async def chat_explain_stream_generator(
+    course_id: str,
+    message: str,
+    concept_ids: Optional[List[str]] = None,
+    history: Optional[List[Dict[str, str]]] = None,
+    reply_context: Optional[List[Dict[str, str]]] = None
+) -> AsyncGenerator[str, None]:
+    events = _chat_explain_events(course_id, message, concept_ids, history, reply_context)
+    stream = with_sse_heartbeats(events, settings.CHAT_HEARTBEAT_INTERVAL_SECONDS)
+    try:
+        async for frame in stream:
+            yield frame
+    finally:
+        await stream.aclose()
+
+
+async def _chat_explain_events(
     course_id: str,
     message: str,
     concept_ids: Optional[List[str]] = None,
