@@ -1,10 +1,8 @@
 package fu.coreservice.service;
 
 import fu.coreservice.client.AiCoreClient;
-import fu.coreservice.dto.ai.AiChatRequest;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
 import fu.coreservice.dto.ApiResponse;
-import fu.coreservice.dto.request.ChatRequest;
 import fu.coreservice.dto.request.LearningPathPlanRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
@@ -22,7 +20,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.http.client.ClientHttpResponse;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -32,9 +29,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Proxy logic cho các endpoint AI (chat SSE, learning-path) — frontend chỉ gọi qua
- * Gateway -> Core Service -> Python. Quyền truy cập được kiểm tại Java (chủ khóa học)
- * trước khi chạm tới Python để tránh call thừa.
+ * Knowledge graph and learning-path operations via the internal AI core.
+ * Session-based chat is handled by ChatMessageService.
  */
 @Service
 @RequiredArgsConstructor
@@ -48,7 +44,7 @@ public class AiRagService {
     private final DocumentRepository documentRepository;
 
     public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraph(Long courseId) {
-        requireCourseGraphAccess(courseId);
+        requireCourseAccess(courseId);
         try {
             Map<String, Object> graph = aiCoreClient.getKnowledgeGraph(courseId);
             return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
@@ -63,7 +59,7 @@ public class AiRagService {
 
     public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraphConcept(Long courseId,
                                                                                      String conceptId) {
-        requireCourseGraphAccess(courseId);
+        requireCourseAccess(courseId);
         try {
             Map<String, Object> concept = aiCoreClient.getKnowledgeGraphConcept(courseId, conceptId);
             enrichSourceFileNames(concept, courseId);
@@ -134,19 +130,6 @@ public class AiRagService {
         concept.put("sources", normalizedSources);
     }
 
-    public ClientHttpResponse openChatStream(Long courseId, ChatRequest request) {
-        User owner = requireCourseOwner(courseId);
-
-        AiChatRequest aiRequest = AiChatRequest.builder()
-                .courseId(String.valueOf(courseId))
-                .userId(String.valueOf(owner.getUserId()))
-                .message(request.getMessage())
-                .conceptIds(request.getConceptIds())
-                .build();
-
-        return aiCoreClient.openChatStream(aiRequest);
-    }
-
     public ResponseEntity<ApiResponse<Map<String, Object>>> planLearningPath(Long courseId,
                                                                              LearningPathPlanRequest request) {
         User owner = requireCourseOwner(courseId);
@@ -198,7 +181,7 @@ public class AiRagService {
         return user;
     }
 
-    private void requireCourseGraphAccess(Long courseId) {
+    private User requireCourseAccess(Long courseId) {
         String email = SecurityUtils.getCurrentUserEmail();
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
@@ -211,6 +194,7 @@ public class AiRagService {
         if (!isOwner && !isEnrolled) {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
+        return user;
     }
 
     private ResponseEntity<ApiResponse<Map<String, Object>>> relayAiCoreError(

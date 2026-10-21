@@ -49,6 +49,13 @@ public enum ErrorCode {
     AI_CORE_UNAVAILABLE("AI_001", "AI service is unavailable", HttpStatus.SERVICE_UNAVAILABLE),
     AI_CORE_ERROR("AI_002", "AI service request failed", HttpStatus.BAD_GATEWAY),
 
+    // Chat: do not disclose whether another user's session exists.
+    CHAT_SESSION_NOT_FOUND("CHAT_001", "Chat session not found", HttpStatus.NOT_FOUND),
+    CHAT_REPLY_NOT_FOUND("CHAT_002", "Reply message not found in this session", HttpStatus.NOT_FOUND),
+    CHAT_REPLY_NOT_READY("CHAT_003", "Only completed non-empty messages can be replied to", HttpStatus.BAD_REQUEST),
+    CHAT_MESSAGE_NOT_FOUND("CHAT_004", "Chat message not found in this session", HttpStatus.NOT_FOUND),
+    CHAT_FEEDBACK_NOT_ALLOWED("CHAT_005", "Only completed BOT messages can receive feedback", HttpStatus.BAD_REQUEST),
+
 
     // System
     INTERNAL_SERVER_ERROR("SYSTEM_001", "Internal server error", HttpStatus.INTERNAL_SERVER_ERROR),

@@ -1,7 +1,4 @@
-import re
-import unicodedata
-from typing import List, Dict, Any, Optional, Tuple
-import numpy as np
+from typing import List, Dict, Any, Tuple
 from rapidfuzz import fuzz
 
 from app.config import settings
@@ -24,11 +21,11 @@ def extract_ngrams(tokens: List[str], max_n: int = 4) -> List[Tuple[str, int, in
 
 async def get_course_concepts_for_linking(course_id: str) -> List[Dict[str, Any]]:
     """
-    Tải danh sách concepts và embeddings của course để phục vụ linker.
+    Tải tên và aliases của concepts trong course để phục vụ linker.
     """
     query = """
     MATCH (c:Concept {course_id: $course_id})
-    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases, c.embedding AS embedding
+    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases
     """
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, course_id=course_id)
@@ -36,8 +33,7 @@ async def get_course_concepts_for_linking(course_id: str) -> List[Dict[str, Any]
 
 def link_concepts_from_data(
     message: str,
-    concepts: List[Dict[str, Any]],
-    message_embedding: Optional[List[float]] = None
+    concepts: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     """
     Thuật toán link concepts từ văn bản và danh sách concepts đã nạp.
@@ -49,7 +45,7 @@ def link_concepts_from_data(
         return {"concept_ids": [], "clarify": None}
 
     # 1. Tiền xử lý các concept: lưu bản có dấu và không dấu
-    # index: id -> {name, norm_name, unaccent_name, aliases, norm_aliases, unaccent_aliases, embedding}
+    # Index names and aliases in accented and unaccented forms.
     concept_map = {}
     for c in concepts:
         cid = c["id"]
@@ -68,8 +64,7 @@ def link_concepts_from_data(
             "unaccent_name": unaccent_name,
             "aliases": aliases,
             "norm_aliases": norm_aliases,
-            "unaccent_aliases": unaccent_aliases,
-            "embedding": c.get("embedding")
+            "unaccent_aliases": unaccent_aliases
         }
 
     # 2. Tokenize message cho n-grams
@@ -82,9 +77,6 @@ def link_concepts_from_data(
 
     linked_ids = set()
     used_token_indices = set()
-
-    # Lưu vết các lần khớp không dấu để phát hiện đa nghĩa
-    unaccent_matches_record = []
 
     # 3. Quét longest-match-first
     for ngram, start, end in ngrams:
@@ -156,30 +148,7 @@ def link_concepts_from_data(
     if linked_ids:
         return {"concept_ids": list(linked_ids), "clarify": None}
 
-    # 5. Nếu KHÔNG khớp gì -> Cosine numpy top-3
-    candidates = []
-    if message_embedding is not None:
-        valid_concepts = [c for c in concepts if c.get("embedding") is not None]
-        if valid_concepts:
-            matrix = np.array([c["embedding"] for c in valid_concepts])
-            q_vec = np.array(message_embedding)
-            # Normalize
-            q_norm = np.linalg.norm(q_vec)
-            if q_norm > 0:
-                q_vec = q_vec / q_norm
-                m_norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-                m_norms[m_norms == 0] = 1.0
-                norm_matrix = matrix / m_norms
-                sims = np.dot(norm_matrix, q_vec)
-                top_k = min(3, len(valid_concepts))
-                top_indices = np.argsort(-sims)[:top_k]
-                for idx in top_indices:
-                    c = valid_concepts[idx]
-                    candidates.append({"id": c["id"], "name": c["name"]})
-
-    if candidates:
-        return {"concept_ids": [], "clarify": candidates}
-
+    # No lexical match: do not suggest unrelated nearest concepts.
     return {"concept_ids": [], "clarify": None}
 
 async def link_concepts(course_id: str, message: str) -> Dict[str, Any]:
@@ -190,14 +159,4 @@ async def link_concepts(course_id: str, message: str) -> Dict[str, Any]:
     if not concepts:
         return {"concept_ids": [], "clarify": None}
 
-    # Embed câu hỏi nếu cần fallback cosine
-    message_embedding = None
-    try:
-        from app.core.embedding import embed_model
-        emb_res = await embed_model.embed_batch([message])
-        if emb_res:
-            message_embedding = emb_res[0]
-    except Exception as e:
-        pass
-
-    return link_concepts_from_data(message, concepts, message_embedding)
+    return link_concepts_from_data(message, concepts)

@@ -8,7 +8,9 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "chat_sessions")
+@Table(name = "chat_sessions", indexes = {
+        @Index(name = "idx_chat_sessions_learner_course_active", columnList = "learner_id, course_id, last_active")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -42,5 +44,7 @@ public class ChatSession {
 
     @UpdateTimestamp
     @Column(name = "last_active")
+    // Saving a child message does not update this field automatically.
+    // The chat service must touch the session when a message is saved.
     private LocalDateTime lastActive;
 }

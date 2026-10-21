@@ -12,13 +12,14 @@ from app.concept_extraction.pipeline import process_document_pipeline
 from app.prerequisite.pipeline import run_prerequisite_pipeline
 from app.ingestion.loaders import get_safe_path
 from app.core.errors import InvalidPathError
+from app.core.identifiers import DocumentId
 from scripts.run_pipeline import delete_document
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 class IngestRequest(BaseModel):
-    document_id: str
+    document_id: DocumentId
     course_id: str
     user_id: str
     filename: Optional[str] = "unknown.pdf"
@@ -192,7 +193,7 @@ ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".pptx", ".md", ".txt"}
 
 @router.post("/documents/{doc_id}/file")
 async def upload_document_file(
-    doc_id: str,
+    doc_id: DocumentId,
     file: UploadFile = File(...),
     x_internal_key: str = Header(...)
 ):
@@ -201,9 +202,6 @@ async def upload_document_file(
     Phải được gọi TRƯỚC POST /ingest vì pipeline đọc file từ đĩa local.
     """
     verify_internal_key(x_internal_key)
-
-    if not doc_id or not doc_id.strip():
-        raise HTTPException(status_code=400, detail="document_id is required")
 
     safe_name = os.path.basename(file.filename or "").strip()
     if not safe_name:

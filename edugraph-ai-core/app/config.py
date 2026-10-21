@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     LLM_JSON_MAX_OUTPUT_TOKENS: int = 3000
     LLM_CONCURRENCY: int = 3
     STREAM_FIRST_TOKEN_TIMEOUT: float = 8.0
+    # Must remain below Java ai-core.read-timeout-ms (currently 30 seconds).
+    CHAT_HEARTBEAT_INTERVAL_SECONDS: float = Field(default=10.0, gt=0, lt=30)
 
     # Embedding Config
     EMBEDDING_DEVICE: Literal["auto", "cuda", "cpu"] = "auto"

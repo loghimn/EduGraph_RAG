@@ -1,6 +1,7 @@
 package fu.coreservice.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Positive;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -23,4 +24,7 @@ public class ChatRequest {
     private String message;
 
     private List<String> conceptIds;
+
+    @Positive(message = "Reply message ID must be positive")
+    private Long replyToMessageId;
 }
