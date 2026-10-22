@@ -5,6 +5,7 @@ import fu.coreservice.dto.learningpath.LearningPathDetail;
 import fu.coreservice.dto.learningpath.LearningPathSummary;
 import fu.coreservice.entity.LearningPathMode;
 import fu.coreservice.entity.LearningPathStatus;
+import fu.coreservice.entity.PathStepStatus;
 import fu.coreservice.exception.AiCoreException;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
@@ -108,5 +109,37 @@ class LearningPathControllerTest {
         mvc.perform(post("/api/courses/7/learning-paths").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value("LEARNING_PATH_003"));
+    }
+
+    @Test
+    void patchesStatusAndSerializesUnlockFlag() throws Exception {
+        var step = new LearningPathDetail.Step(40L, "C1", "Concept", 1, 0,
+                null, PathStepStatus.COMPLETED, null, true);
+        when(service.updateStep(eq(19L), eq(40L), any())).thenReturn(
+                new LearningPathDetail(null, List.of(), List.of(step), List.of()));
+        mvc.perform(patch("/api/learning-paths/19/steps/40").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"COMPLETED\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.steps[0].status").value("COMPLETED"))
+                .andExpect(jsonPath("$.data.steps[0].isUnlocked").value(true));
+        verify(service).updateStep(eq(19L), eq(40L), argThat(r -> r.status() == PathStepStatus.COMPLETED));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"status\":null}", "{\"status\":\"UNKNOWN\"}"})
+    void rejectsMissingOrUnknownStepStatus(String body) throws Exception {
+        mvc.perform(patch("/api/learning-paths/19/steps/40").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void lockedStepReturnsConflict() throws Exception {
+        when(service.updateStep(eq(19L), eq(40L), any()))
+                .thenThrow(new AppException(ErrorCode.LEARNING_PATH_STEP_LOCKED));
+        mvc.perform(patch("/api/learning-paths/19/steps/40").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"COMPLETED\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("LEARNING_PATH_005"));
     }
 }

@@ -52,6 +52,11 @@ public enum ErrorCode {
     LEARNING_PATH_NOT_FOUND("LEARNING_PATH_001", "Learning path not found", HttpStatus.NOT_FOUND),
     LEARNING_PATH_EMPTY("LEARNING_PATH_002", "No concepts remain to create a learning path", HttpStatus.BAD_REQUEST),
     LEARNING_PATH_GRAPH_CHANGED("LEARNING_PATH_003", "Knowledge graph changed; preview the learning path again", HttpStatus.CONFLICT),
+    LEARNING_PATH_STEP_NOT_FOUND("LEARNING_PATH_004", "Step not found in this learning path", HttpStatus.NOT_FOUND),
+    LEARNING_PATH_STEP_LOCKED("LEARNING_PATH_005", "Complete all steps in earlier stages first", HttpStatus.CONFLICT),
+    LEARNING_PATH_NOT_ACTIVE("LEARNING_PATH_006", "This learning path is not active", HttpStatus.CONFLICT),
+    LEARNING_PATH_STEP_COMPLETED("LEARNING_PATH_007", "A completed step cannot be reopened", HttpStatus.CONFLICT),
+    LEARNING_PATH_STAGES_UNAVAILABLE("LEARNING_PATH_008", "Stage information is missing or invalid; create a new learning path", HttpStatus.CONFLICT),
 
     // Chat: do not disclose whether another user's session exists.
     CHAT_SESSION_NOT_FOUND("CHAT_001", "Chat session not found", HttpStatus.NOT_FOUND),

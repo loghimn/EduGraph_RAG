@@ -11,5 +11,5 @@ public record LearningPathDetail(
 ) {
     public record Step(Long stepId, String conceptId, String conceptLabel, Integer stepOrder,
                        Integer stageLevel, Boolean outsideDocument, PathStepStatus status,
-                       LocalDateTime completedAt) {}
+                       LocalDateTime completedAt, boolean isUnlocked) {}
 }
