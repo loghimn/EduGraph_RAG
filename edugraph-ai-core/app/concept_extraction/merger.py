@@ -92,6 +92,9 @@ def merge_concepts(new_concepts: List[Dict[str, Any]], db_concepts: List[Dict[st
     # DB records từ get_course_concepts dùng key 'name', còn logic merger expects 'canonical'.
     # Chuẩn hóa tại entrypoint để tránh KeyError: 'canonical'.
     for c in db_concepts:
+        if c.get("status") == "ARCHIVED":
+            # Keep archived concepts as merge targets (tombstones), never recreate them.
+            c["has_reviewed_edge"] = True
         if "canonical" not in c:
             c["canonical"] = c.get("name") or ""
     db_map = {c["key"]: c for c in db_concepts}

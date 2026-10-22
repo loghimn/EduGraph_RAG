@@ -6,6 +6,7 @@ from app.config import settings
 async def get_all_concepts_for_prereq(course_id: str) -> List[Dict[str, Any]]:
     query = """
     MATCH (c:Concept {course_id: $course_id})
+    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
     RETURN c.id AS id, c.name AS name, c.aliases AS aliases, c.embedding AS embedding
     """
     async with neo4j_client.driver.session() as session:
@@ -15,7 +16,7 @@ async def get_all_concepts_for_prereq(course_id: str) -> List[Dict[str, Any]]:
 async def get_chunk_cooccurrences(course_id: str) -> Dict[str, Set[str]]:
     query = """
     MATCH (c1:Concept {course_id: $course_id})<-[:MENTIONS]-(:Chunk)-[:MENTIONS]->(c2:Concept {course_id: $course_id})
-    WHERE c1 <> c2
+    WHERE coalesce(c1.status, 'ACTIVE') = 'ACTIVE' AND coalesce(c2.status, 'ACTIVE') = 'ACTIVE' AND c1 <> c2
     RETURN c1.id AS id, collect(DISTINCT c2.id) AS neighbors
     """
     async with neo4j_client.driver.session() as session:
@@ -30,6 +31,7 @@ async def get_existing_directed_edges(course_id: str) -> Dict[str, Dict[str, str
     """
     query = """
     MATCH (src:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(tgt:Concept {course_id: $course_id})
+    WHERE coalesce(src.status, 'ACTIVE') = 'ACTIVE' AND coalesce(tgt.status, 'ACTIVE') = 'ACTIVE'
     RETURN tgt.id AS tgt_id, src.id AS src_id, r.status AS status
     """
     async with neo4j_client.driver.session() as session:

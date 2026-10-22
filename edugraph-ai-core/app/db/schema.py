@@ -6,6 +6,7 @@ DDL_STATEMENTS = [
     "CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (n:Concept) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT concept_course_key IF NOT EXISTS FOR (n:Concept) REQUIRE n.course_key IS UNIQUE",
     
+    "CREATE CONSTRAINT concept_draft_id IF NOT EXISTS FOR (n:ConceptDraft) REQUIRE n.id IS UNIQUE",
     # Indexes
     "CREATE INDEX chunk_course IF NOT EXISTS FOR (n:Chunk) ON (n.course_id)",
     "CREATE INDEX chunk_doc IF NOT EXISTS FOR (n:Chunk) ON (n.doc_id)",

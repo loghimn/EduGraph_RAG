@@ -12,6 +12,9 @@ from app.db.repo import save_ingestion_transaction
 async def delete_document(course_id: str, doc_id: str):
     print(f"[{doc_id}] Đang dọn dẹp Document và các chunk...")
     query = """
+    MATCH (course:Course {id: $course_id})
+    SET course.concept_write_lock = coalesce(course.concept_write_lock, 0) + 1
+    WITH course
     MATCH (d:Document {id: $doc_id, course_id: $course_id})
     OPTIONAL MATCH (c:Chunk {doc_id: $doc_id})
     DETACH DELETE c
@@ -19,7 +22,9 @@ async def delete_document(course_id: str, doc_id: str):
     
     WITH count(c) AS _dummy
     OPTIONAL MATCH (orphan:Concept {course_id: $course_id})
-    WHERE NOT (orphan)<-[:MENTIONS]-()
+    WHERE coalesce(orphan.origin, 'AUTO') <> 'MANUAL'
+    AND coalesce(orphan.status, 'ACTIVE') <> 'ARCHIVED'
+    AND NOT (orphan)<-[:MENTIONS]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'CONFIRMED'}]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'MANUAL'}]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'REJECTED'}]-()

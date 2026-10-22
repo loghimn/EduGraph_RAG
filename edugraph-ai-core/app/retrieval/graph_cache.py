@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any, Tuple, List, Optional
 import networkx as nx
 
-from app.config import settings
 from app.db.neo4j_client import neo4j_client
 
 logger = logging.getLogger(__name__)
@@ -34,6 +33,7 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
     # 1. Lấy tất cả Concept của khóa học
     q_concepts = """
     MATCH (c:Concept {course_id: $course_id})
+    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
     RETURN c.id AS id, c.key AS key, c.name AS name,
            coalesce(c.aliases, []) AS aliases,
            coalesce(c.language, 'mixed') AS language,
@@ -42,13 +42,14 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
     # 2. Lấy cạnh PREREQUISITE_OF không phải REJECTED
     q_edges = """
     MATCH (src:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(tgt:Concept {course_id: $course_id})
-    WHERE r.status <> 'REJECTED'
+    WHERE coalesce(src.status, 'ACTIVE') = 'ACTIVE' AND coalesce(tgt.status, 'ACTIVE') = 'ACTIVE' AND r.status <> 'REJECTED'
     RETURN src.id AS src_id, tgt.id AS tgt_id, r.status AS status, 
            coalesce(r.score, 0.0) AS score, coalesce(r.evidence, '') AS evidence
     """
     # 3. Lấy evidence chunk có (Document.seq, Chunk.index) nhỏ nhất
     q_evidences = """
     MATCH (c:Concept {course_id: $course_id})<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
+    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
     OPTIONAL MATCH (d:Document {id: ch.doc_id, course_id: $course_id})
     RETURN c.id AS concept_id, ch.id AS chunk_id, ch.page AS page, 
            coalesce(d.seq, 0) AS doc_seq, coalesce(ch.index, 0) AS chunk_index,
@@ -80,13 +81,15 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
 
     for e in edges_data:
         # Bỏ self-loop nếu có
-        if e["src_id"] != e["tgt_id"]:
+        if e["src_id"] != e["tgt_id"] and e["src_id"] in G and e["tgt_id"] in G:
             G.add_edge(e["src_id"], e["tgt_id"], status=e["status"], score=e["score"], evidence=e["evidence"])
 
     # Map evidence (chọn theo (doc_seq, chunk_index) nhỏ nhất đã được sort)
     evidences: Dict[str, Dict[str, Any]] = {}
     for ev in ev_data:
         cid = ev["concept_id"]
+        if cid not in G:
+            continue
         if cid not in evidences:
             evidences[cid] = {
                 "chunk_id": ev["chunk_id"],
@@ -143,11 +146,8 @@ async def get_course_graph(
         }
         return G, current_version, evidences, conflicts
 
-    # 2. Nếu caller không truyền version, kiểm tra chu kỳ TTL
-    interval = getattr(settings, "GRAPH_VERSION_CHECK_INTERVAL", 10.0)
-    if not force_reload and cached and (now - cached["last_checked"] < interval):
-        return cached["graph"], cached["version"], cached["evidences"], cached["conflicts"]
-
+    # Always check the shared version when the caller has not supplied one.
+    # An archive on another worker must not remain visible until the old TTL expires.
     # Đọc version từ DB
     db_version = await get_course_version(course_id)
     if db_version is None:

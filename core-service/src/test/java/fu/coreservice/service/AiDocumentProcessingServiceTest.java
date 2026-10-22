@@ -1,5 +1,7 @@
 package fu.coreservice.service;
 
+import fu.coreservice.service.impl.AiDocumentProcessingServiceImpl;
+
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiDocumentStatusResponse;
 import fu.coreservice.dto.ai.AiIngestRequest;
@@ -52,7 +54,7 @@ class AiDocumentProcessingServiceTest {
     private TransactionTemplate transactionTemplate;
 
     @InjectMocks
-    private AiDocumentProcessingService service;
+    private AiDocumentProcessingServiceImpl service;
 
     private Document document;
     private DocumentProcessingJob job;

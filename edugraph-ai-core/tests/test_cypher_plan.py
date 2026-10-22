@@ -3,6 +3,31 @@ pytestmark = pytest.mark.integration
 from neo4j import AsyncGraphDatabase
 from app.db.neo4j_client import neo4j_client
 
+
+@pytest.mark.asyncio
+async def test_concept_evidence_query_compiles(monkeypatch):
+    """Compile the actual application query, without executing it or changing data."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.config import settings
+    from app.prerequisite.pipeline import get_concept_evidence
+
+    async with AsyncGraphDatabase.driver(
+        settings.NEO4J_URI,
+        auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
+        connection_timeout=5,
+        max_transaction_retry_time=5,
+    ) as driver:
+        async with driver.session() as real_session:
+            async def explain(query, **parameters):
+                return await real_session.run("EXPLAIN " + query, **parameters)
+
+            session = MagicMock()
+            session.__aenter__ = AsyncMock(return_value=session)
+            session.__aexit__ = AsyncMock(return_value=None)
+            session.run = AsyncMock(side_effect=explain)
+            monkeypatch.setattr(neo4j_client, "driver", MagicMock(session=MagicMock(return_value=session)))
+            assert await get_concept_evidence("__explain_only__") == {}
+
 @pytest.mark.asyncio
 async def test_cypher_plan_no_cartesian():
     # Câu query mới đã được tách thành 5 câu riêng rẽ, mình sẽ test 1 câu phức tạp nhất là MERGE mentions
