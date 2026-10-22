@@ -1,7 +1,7 @@
 package fu.coreservice.controller;
 
 import fu.coreservice.dto.ApiResponse;
-import fu.coreservice.dto.request.LearningPathPlanRequest;
+import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
 import fu.coreservice.service.AiRagService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -15,6 +15,7 @@ import java.util.Map;
 
 /**
  * Proxy POST /learning-paths/plan của AI core — frontend chỉ gọi qua Gateway.
+ * Chủ khóa học hoặc học viên đã enroll được lập lộ trình cho chính mình.
  * Payload/status từ Python được relay nguyên vẹn (kể cả 409warnings).
  */
 @RestController

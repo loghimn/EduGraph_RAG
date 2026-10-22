@@ -3,7 +3,7 @@ package fu.coreservice.service;
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
 import fu.coreservice.dto.ApiResponse;
-import fu.coreservice.dto.request.LearningPathPlanRequest;
+import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.User;
@@ -132,11 +132,11 @@ public class AiRagService {
 
     public ResponseEntity<ApiResponse<Map<String, Object>>> planLearningPath(Long courseId,
                                                                              LearningPathPlanRequest request) {
-        User owner = requireCourseOwner(courseId);
+        User learner = requireCourseAccess(courseId);
 
         AiLearningPathRequest aiRequest = AiLearningPathRequest.builder()
                 .courseId(String.valueOf(courseId))
-                .userId(String.valueOf(owner.getUserId()))
+                .userId(String.valueOf(learner.getUserId()))
                 .documentId(request.getDocumentId() == null ? null : String.valueOf(request.getDocumentId()))
                 .goalConceptIds(request.getGoalConceptIds())
                 .knownConceptIds(request.getKnownConceptIds())
@@ -165,20 +165,6 @@ public class AiRagService {
                     .data(e.getBody().isEmpty() ? null : e.getBody())
                     .build());
         }
-    }
-
-    private User requireCourseOwner(Long courseId) {
-        String email = SecurityUtils.getCurrentUserEmail();
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
-
-        Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-
-        if (!course.getUser().getUserId().equals(user.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
-        return user;
     }
 
     private User requireCourseAccess(Long courseId) {

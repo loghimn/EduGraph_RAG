@@ -6,7 +6,7 @@ import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.*;
 import fu.coreservice.service.impl.ChatSessionServiceImpl;
-import fu.coreservice.dto.request.ChatRequest;
+import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.dto.chat.ChatTurn;
 import fu.coreservice.dto.chat.ChatSource;
 import org.mockito.ArgumentCaptor;

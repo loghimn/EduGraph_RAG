@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiChatRequest;
 import fu.coreservice.dto.ai.AiChatHistoryMessage;
-import fu.coreservice.dto.request.ChatRequest;
+import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.entity.ChatMessageStatus;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
