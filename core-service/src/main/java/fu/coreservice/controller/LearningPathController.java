@@ -5,6 +5,7 @@ import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.learningpath.LearningPathDetail;
 import fu.coreservice.dto.learningpath.LearningPathSummary;
 import fu.coreservice.dto.learningpath.CreateLearningPathRequest;
+import fu.coreservice.dto.learningpath.UpdateLearningPathStepRequest;
 import fu.coreservice.entity.LearningPathStatus;
 import fu.coreservice.service.LearningPathService;
 import jakarta.validation.Valid;
@@ -40,5 +41,14 @@ public class LearningPathController {
     public ResponseEntity<ApiResponse<LearningPathDetail>> get(@PathVariable Long planId) {
         return ResponseEntity.ok(ApiResponse.<LearningPathDetail>builder().success(true)
                 .message("Learning path retrieved successfully").data(service.get(planId)).build());
+    }
+
+    @PatchMapping("/api/learning-paths/{planId}/steps/{stepId}")
+    public ResponseEntity<ApiResponse<LearningPathDetail>> updateStep(
+            @PathVariable Long planId, @PathVariable Long stepId,
+            @Valid @RequestBody UpdateLearningPathStepRequest request) {
+        return ResponseEntity.ok(ApiResponse.<LearningPathDetail>builder().success(true)
+                .message("Learning path step updated successfully")
+                .data(service.updateStep(planId, stepId, request)).build());
     }
 }

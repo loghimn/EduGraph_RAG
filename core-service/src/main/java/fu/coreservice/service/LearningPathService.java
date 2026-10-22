@@ -8,6 +8,7 @@ import fu.coreservice.dto.ai.AiLearningPathResult;
 import fu.coreservice.dto.learningpath.LearningPathDetail;
 import fu.coreservice.dto.learningpath.LearningPathSummary;
 import fu.coreservice.dto.learningpath.CreateLearningPathRequest;
+import fu.coreservice.dto.learningpath.UpdateLearningPathStepRequest;
 import fu.coreservice.entity.*;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
@@ -23,6 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.*;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -129,6 +132,55 @@ public class LearningPathService {
         return detail(plan, List.of());
     }
 
+    @Transactional
+    public LearningPathDetail updateStep(Long planId, Long stepId, UpdateLearningPathStepRequest request) {
+        User learner = currentUser();
+        if (request == null || request.status() == null || request.status() == PathStepStatus.SKIPPED) {
+            throw new AppException(ErrorCode.INVALID_REQUEST);
+        }
+        LearningPathPlan plan = planRepository.findOwnedForUpdate(planId, learner)
+                .orElseThrow(() -> new AppException(ErrorCode.LEARNING_PATH_NOT_FOUND));
+        requireAccess(plan.getCourse().getCourseId(), learner);
+        LearningPathStep step = plan.getSteps().stream().filter(s -> s.getStepId().equals(stepId)).findFirst()
+                .orElseThrow(() -> new AppException(ErrorCode.LEARNING_PATH_STEP_NOT_FOUND));
+        if (plan.getStatus() == LearningPathStatus.ARCHIVED) {
+            throw new AppException(ErrorCode.LEARNING_PATH_NOT_ACTIVE);
+        }
+        // Retrying a completion is safe and preserves the original timestamp.
+        if (step.getStatus() == PathStepStatus.COMPLETED) {
+            if (request.status() != PathStepStatus.COMPLETED) {
+                throw new AppException(ErrorCode.LEARNING_PATH_STEP_COMPLETED);
+            }
+            return detail(plan, List.of());
+        }
+        if (plan.getStatus() != LearningPathStatus.ACTIVE) {
+            throw new AppException(ErrorCode.LEARNING_PATH_NOT_ACTIVE);
+        }
+        if (!hasValidStages(plan)) throw new AppException(ErrorCode.LEARNING_PATH_STAGES_UNAVAILABLE);
+        if (!isUnlocked(plan, step)) throw new AppException(ErrorCode.LEARNING_PATH_STEP_LOCKED);
+
+        step.setStatus(request.status());
+        // Match database timestamp precision, including the response before reload.
+        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
+        step.setCompletedAt(request.status() == PathStepStatus.COMPLETED ? now : null);
+        if (plan.getSteps().stream().allMatch(s -> s.getStatus() == PathStepStatus.COMPLETED)) {
+            plan.setStatus(LearningPathStatus.COMPLETED);
+            plan.setCompletedAt(now);
+        }
+        planRepository.flush();
+        return detail(plan, List.of());
+    }
+
+    private boolean hasValidStages(LearningPathPlan plan) {
+        return plan.getSteps().stream().allMatch(s -> s.getStageLevel() != null && s.getStageLevel() >= 0);
+    }
+
+    private boolean isUnlocked(LearningPathPlan plan, LearningPathStep step) {
+        return plan.getStatus() != LearningPathStatus.ARCHIVED && hasValidStages(plan)
+                && plan.getSteps().stream().noneMatch(s -> s.getStageLevel() < step.getStageLevel()
+                        && s.getStatus() != PathStepStatus.COMPLETED);
+    }
+
     private LearningPathDetail detail(LearningPathPlan plan, List<String> warnings) {
         var orderedSteps = plan.getSteps().stream()
                 .sorted(Comparator.comparing(LearningPathStep::getStepOrder)).toList();
@@ -137,7 +189,7 @@ public class LearningPathService {
                 plan.getGoals().stream().map(LearningPathGoal::getNeo4jConceptId).sorted().toList(),
                 orderedSteps.stream().map(s -> new LearningPathDetail.Step(s.getStepId(), s.getNeo4jConceptId(),
                         s.getConceptLabel(), s.getStepOrder(), s.getStageLevel(), s.getOutsideDocument(),
-                        s.getStatus(), s.getCompletedAt())).toList(), warnings);
+                        s.getStatus(), s.getCompletedAt(), isUnlocked(plan, s))).toList(), warnings);
     }
 
     private LearningPathSummary summary(LearningPathPlan plan, long total, long completed) {

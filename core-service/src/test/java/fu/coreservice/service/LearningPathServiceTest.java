@@ -3,6 +3,8 @@ package fu.coreservice.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.learningpath.CreateLearningPathRequest;
+import fu.coreservice.dto.learningpath.UpdateLearningPathStepRequest;
+import fu.coreservice.dto.learningpath.LearningPathDetail;
 import fu.coreservice.entity.*;
 import fu.coreservice.exception.AiCoreException;
 import fu.coreservice.exception.AppException;
@@ -222,6 +224,159 @@ class LearningPathServiceTest {
         assertEquals(ErrorCode.INVALID_PARAMETER, assertThrows(AppException.class,
                 () -> service.list(courseId, null, 0, 101)).getErrorCode());
         verifyNoInteractions(ai);
+    }
+
+    @Test
+    void unlocksByStageRatherThanStepOrderAndCompletesPlan() {
+        Map<String, Object> result = new HashMap<>(generated(LearningPathMode.COURSE));
+        result.put("linear_order", List.of("C1", "C5", "C2"));
+        when(ai.createLearningPathPlan(any())).thenReturn(result);
+        var created = service.create(courseId, request(LearningPathMode.COURSE, null));
+        Long id = created.plan().planId();
+        assertEquals(List.of(true, false, true), created.steps().stream().map(s -> s.isUnlocked()).toList());
+        Long first = created.steps().get(0).stepId();
+        Long locked = created.steps().get(1).stepId();
+        Long laterButOpen = created.steps().get(2).stepId();
+        assertUpdateError(ErrorCode.LEARNING_PATH_STEP_LOCKED, id, locked, PathStepStatus.IN_PROGRESS);
+        assertUpdateError(ErrorCode.LEARNING_PATH_STEP_LOCKED, id, locked, PathStepStatus.COMPLETED);
+
+        service.updateStep(id, laterButOpen, update(PathStepStatus.COMPLETED));
+        assertFalse(service.get(id).steps().get(1).isUnlocked());
+        var stageFinished = service.updateStep(id, first, update(PathStepStatus.COMPLETED));
+        assertTrue(stageFinished.steps().get(1).isUnlocked());
+        assertEquals(LearningPathStatus.ACTIVE, stageFinished.plan().status());
+        assertNull(stageFinished.plan().completedAt());
+
+        var allFinished = service.updateStep(id, locked, update(PathStepStatus.COMPLETED));
+        assertEquals(LearningPathStatus.COMPLETED, allFinished.plan().status());
+        assertNotNull(allFinished.plan().completedAt());
+        assertEquals(3, allFinished.plan().completedSteps());
+        assertTrue(allFinished.steps().stream().allMatch(s -> s.completedAt() != null));
+        var retry = service.updateStep(id, locked, update(PathStepStatus.COMPLETED));
+        assertEquals(allFinished.steps(), retry.steps());
+        assertEquals(allFinished.plan().completedAt(), retry.plan().completedAt());
+        assertEquals(1, service.list(courseId, LearningPathStatus.COMPLETED, 0, 20).getTotalElements());
+        assertUpdateError(ErrorCode.LEARNING_PATH_STEP_COMPLETED, id, first, PathStepStatus.PENDING);
+    }
+
+    @Test
+    void supportsStartingAndResettingAnUnfinishedStepButNotSkippingOrReopening() {
+        var plan = createSavedPlan();
+        Long id = plan.plan().planId();
+        Long stepId = plan.steps().getFirst().stepId();
+        var started = service.updateStep(id, stepId, update(PathStepStatus.IN_PROGRESS));
+        assertEquals(PathStepStatus.IN_PROGRESS, started.steps().getFirst().status());
+        assertNull(started.steps().getFirst().completedAt());
+        var reset = service.updateStep(id, stepId, update(PathStepStatus.PENDING));
+        assertEquals(PathStepStatus.PENDING, reset.steps().getFirst().status());
+        assertUpdateError(ErrorCode.INVALID_REQUEST, id, stepId, PathStepStatus.SKIPPED);
+        assertUpdateError(ErrorCode.INVALID_REQUEST, id, stepId, null);
+        service.updateStep(id, stepId, update(PathStepStatus.COMPLETED));
+        assertUpdateError(ErrorCode.LEARNING_PATH_STEP_COMPLETED, id, stepId, PathStepStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void cannotUpdateAnotherLearnersPlanOrStepFromAnotherPlan() {
+        var first = createSavedPlan();
+        var other = createSavedPlan();
+        assertUpdateError(ErrorCode.LEARNING_PATH_STEP_NOT_FOUND, first.plan().planId(),
+                other.steps().getFirst().stepId(), PathStepStatus.COMPLETED);
+        login("owner@test.local");
+        assertUpdateError(ErrorCode.LEARNING_PATH_NOT_FOUND, first.plan().planId(),
+                first.steps().getFirst().stepId(), PathStepStatus.COMPLETED);
+        login(learnerEmail);
+        removeEnrollment();
+        assertUpdateError(ErrorCode.ACCESS_DENIED, first.plan().planId(),
+                first.steps().getFirst().stepId(), PathStepStatus.COMPLETED);
+        SecurityContextHolder.clearContext();
+        assertUpdateError(ErrorCode.UNAUTHORIZED, first.plan().planId(),
+                first.steps().getFirst().stepId(), PathStepStatus.COMPLETED);
+    }
+
+    @Test
+    void archivedPlansAndLegacyPlansWithoutStagesCannotBeUpdated() {
+        var archived = createSavedPlan();
+        tx.executeWithoutResult(status -> plans.findById(archived.plan().planId()).orElseThrow()
+                .setStatus(LearningPathStatus.ARCHIVED));
+        assertTrue(service.get(archived.plan().planId()).steps().stream().noneMatch(s -> s.isUnlocked()));
+        assertUpdateError(ErrorCode.LEARNING_PATH_NOT_ACTIVE, archived.plan().planId(),
+                archived.steps().getFirst().stepId(), PathStepStatus.COMPLETED);
+
+        var legacy = createSavedPlan();
+        tx.executeWithoutResult(status -> plans.findById(legacy.plan().planId()).orElseThrow()
+                .getSteps().getLast().setStageLevel(null));
+        assertTrue(service.get(legacy.plan().planId()).steps().stream().noneMatch(s -> s.isUnlocked()));
+        assertUpdateError(ErrorCode.LEARNING_PATH_STAGES_UNAVAILABLE, legacy.plan().planId(),
+                legacy.steps().getFirst().stepId(), PathStepStatus.COMPLETED);
+    }
+
+    @Test
+    void failedUpdateRollsBackBothFinalStepAndPlanCompletion() {
+        var plan = createSavedPlan();
+        Long id = plan.plan().planId();
+        service.updateStep(id, plan.steps().get(0).stepId(), update(PathStepStatus.COMPLETED));
+        service.updateStep(id, plan.steps().get(1).stepId(), update(PathStepStatus.COMPLETED));
+        doAnswer(invocation -> {
+            realPlans.flush();
+            throw new IllegalStateException("Simulated failure after update flush");
+        }).when(plans).flush();
+        assertThrows(IllegalStateException.class, () -> service.updateStep(id,
+                plan.steps().get(2).stepId(), update(PathStepStatus.COMPLETED)));
+        var loaded = service.get(id);
+        assertEquals(LearningPathStatus.ACTIVE, loaded.plan().status());
+        assertNull(loaded.plan().completedAt());
+        assertEquals(PathStepStatus.PENDING, loaded.steps().get(2).status());
+        assertNull(loaded.steps().get(2).completedAt());
+    }
+
+    @Test
+    void concurrentCompletionsDoNotMissFinalPlanCompletion() throws Exception {
+        var plan = createSavedPlan();
+        Long id = plan.plan().planId();
+        tx.executeWithoutResult(status -> plans.findById(id).orElseThrow().getSteps()
+                .forEach(step -> step.setStageLevel(0)));
+        service.updateStep(id, plan.steps().get(0).stepId(), update(PathStepStatus.COMPLETED));
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var tasks = new ArrayList<java.util.concurrent.Future<?>>();
+            for (int i : List.of(1, 2)) {
+                tasks.add(executor.submit(() -> {
+                    login(learnerEmail);
+                    try {
+                        ready.countDown();
+                        assertTrue(start.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                        service.updateStep(id, plan.steps().get(i).stepId(), update(PathStepStatus.COMPLETED));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    } finally {
+                        SecurityContextHolder.clearContext();
+                    }
+                }));
+            }
+            assertTrue(ready.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            start.countDown();
+            for (var task : tasks) task.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        var loaded = service.get(id);
+        assertEquals(3, loaded.plan().completedSteps());
+        assertEquals(LearningPathStatus.COMPLETED, loaded.plan().status());
+        assertNotNull(loaded.plan().completedAt());
+    }
+
+    private LearningPathDetail createSavedPlan() {
+        when(ai.createLearningPathPlan(any())).thenReturn(generated(LearningPathMode.COURSE));
+        return service.create(courseId, request(LearningPathMode.COURSE, null));
+    }
+
+    private UpdateLearningPathStepRequest update(PathStepStatus status) {
+        return new UpdateLearningPathStepRequest(status);
+    }
+
+    private void assertUpdateError(ErrorCode expected, Long planId, Long stepId, PathStepStatus status) {
+        assertEquals(expected, assertThrows(AppException.class,
+                () -> service.updateStep(planId, stepId, update(status))).getErrorCode());
     }
 
     private CreateLearningPathRequest request(LearningPathMode mode, Long version) {
