@@ -8,12 +8,15 @@ import fu.coreservice.dto.ai.AiIngestResponse;
 import fu.coreservice.exception.AiCoreException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,7 +65,29 @@ class AiCoreClientTest {
                 .andRespond(withStatus(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
                         .body("{\"detail\":{\"message\":\"Cycle conflict\"}}"));
         assertThatThrownBy(() -> client.conceptLifecycle(7L, 15L, "concept-a", "restore", 8L))
-                .isInstanceOf(AiCoreException.class);
+                .isInstanceOf(AiCoreException.class)
+                .satisfies(thrown -> {
+                    AiCoreException ex = (AiCoreException) thrown;
+                    assertThat(ex.getDetail()).isEqualTo("Cycle conflict");
+                    assertThat(ex.getHttpStatus()).isEqualTo(409);
+                    assertThat(ex.getBody()).containsEntry("detail", Map.of("message", "Cycle conflict"));
+                });
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {
+            "{\"detail\":{\"message\":42}}|{message=42}",
+            "{\"detail\":{\"reason\":\"Conflict\"}}|{reason=Conflict}",
+            "{\"detail\":[\"Conflict\"]}|[Conflict]",
+            "{\"detail\":\"Conflict\"}|Conflict"
+    }, delimiter = '|')
+    void errorDetail_preservesFallbackForOtherValues(String body, String expectedDetail) {
+        server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph"))
+                .andRespond(withStatus(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON).body(body));
+        assertThatThrownBy(() -> client.getKnowledgeGraph(7L))
+                .isInstanceOf(AiCoreException.class)
+                .satisfies(thrown -> assertThat(((AiCoreException) thrown).getDetail()).isEqualTo(expectedDetail));
         server.verify();
     }
 

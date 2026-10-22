@@ -268,7 +268,9 @@ public class AiCoreClient {
             try {
                 body = objectMapper.readValue(rawBody, new TypeReference<>() {});
                 Object rawDetail = body.get("detail");
-                if (rawDetail != null) {
+                if (rawDetail instanceof Map<?, ?> detailMap && detailMap.get("message") instanceof String message) {
+                    detail = message;
+                } else if (rawDetail != null) {
                     detail = String.valueOf(rawDetail);
                 }
             } catch (JsonProcessingException ignored) {

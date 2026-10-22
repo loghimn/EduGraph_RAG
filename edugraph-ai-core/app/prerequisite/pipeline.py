@@ -18,14 +18,7 @@ async def get_concept_evidence(course_id: str) -> Dict[str, List[str]]:
 
     MATCH (c:Concept {course_id: $course_id})<-[m:MENTIONS]-(ch:Chunk)
     WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
-
-    
-
-    ////sau này làm nhớ xóa  "OR ch.is_evidence = true" sau khi chạy Production moctest bên (tests/test_prerequisite_pipeline.py)
-
-
-
-    WHERE m.is_evidence = true OR ch.is_evidence = true
+      AND (m.is_evidence = true OR ch.is_evidence = true)
     WITH c, ch.text AS text
     ORDER BY ch.id
     RETURN c.id AS id, collect(text) AS evidence_texts
