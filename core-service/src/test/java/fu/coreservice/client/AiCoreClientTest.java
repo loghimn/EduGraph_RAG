@@ -42,6 +42,30 @@ class AiCoreClientTest {
         client = new AiCoreClient(properties, builder, new ObjectMapper(), false);
     }
 
+
+    @Test
+    void archiveConcept_forwardsDeleteVersionAndTrustedActor() {
+        server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph/concepts/concept-a?expected_version=8"))
+                .andExpect(method(HttpMethod.DELETE))
+                .andExpect(header("X-Internal-Key", "test-key"))
+                .andExpect(header("X-Actor-Id", "15"))
+                .andRespond(withSuccess("{\"status\":\"ARCHIVED\"}", MediaType.APPLICATION_JSON));
+        assertThat(client.conceptLifecycle(7L, 15L, "concept-a", "archive", 8L).get("status"))
+                .isEqualTo("ARCHIVED");
+        server.verify();
+    }
+
+    @Test
+    void restoreConcept_relaysCycleConflict() {
+        server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph/concepts/concept-a/restore?expected_version=8"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"detail\":{\"message\":\"Cycle conflict\"}}"));
+        assertThatThrownBy(() -> client.conceptLifecycle(7L, 15L, "concept-a", "restore", 8L))
+                .isInstanceOf(AiCoreException.class);
+        server.verify();
+    }
+
     @Test
     void triggerIngest_sendsInternalKeyAndSnakeCaseBody() {
         server.expect(once(), requestTo("http://localhost:8082/ingest"))

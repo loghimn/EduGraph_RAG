@@ -159,6 +159,31 @@ public class AiCoreClient {
         }
     }
 
+
+    public Map<String, Object> conceptLifecycle(Long courseId, Long actorId, String conceptId,
+                                                String action, Long expectedVersion) {
+        String base = "/courses/{courseId}/knowledge-graph";
+        try {
+            RestClient.RequestHeadersSpec<?> call;
+            switch (action) {
+                case "archived" -> call = restClient.get().uri(base + "/archived-concepts", courseId);
+                case "impact" -> call = restClient.get().uri(
+                        base + "/concepts/{conceptId}/deletion-impact", courseId, conceptId);
+                case "archive" -> call = restClient.delete().uri(
+                        base + "/concepts/{conceptId}?expected_version={version}", courseId, conceptId, expectedVersion);
+                case "restore" -> call = restClient.post().uri(
+                        base + "/concepts/{conceptId}/restore?expected_version={version}", courseId, conceptId, expectedVersion);
+                default -> throw new IllegalArgumentException("Unknown concept lifecycle action");
+            }
+            return call.header("X-Actor-Id", String.valueOf(actorId)).retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(courseId), e);
+        }
+    }
+
     public Map<String, Object> getKnowledgeGraph(Long courseId) {
         try {
             return restClient.get()

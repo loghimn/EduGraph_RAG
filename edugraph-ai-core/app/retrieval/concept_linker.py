@@ -25,6 +25,7 @@ async def get_course_concepts_for_linking(course_id: str) -> List[Dict[str, Any]
     """
     query = """
     MATCH (c:Concept {course_id: $course_id})
+    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
     RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases
     """
     async with neo4j_client.driver.session() as session:

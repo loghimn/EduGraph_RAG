@@ -14,7 +14,7 @@ async def clean_graph_cycles(course_id: str, proposed_edges: List[Dict[str, Any]
     # 1. Fetch current edges
     query = """
     MATCH (src:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(tgt:Concept {course_id: $course_id})
-    WHERE r.status IN ['CONFIRMED', 'MANUAL', 'AUTO']
+    WHERE coalesce(src.status, 'ACTIVE') = 'ACTIVE' AND coalesce(tgt.status, 'ACTIVE') = 'ACTIVE' AND r.status IN ['CONFIRMED', 'MANUAL', 'AUTO']
     RETURN src.id AS src_id, tgt.id AS tgt_id, r.status AS status, coalesce(r.score, 1.0) AS score
     ORDER BY src.id, tgt.id
     """

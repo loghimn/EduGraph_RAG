@@ -17,6 +17,7 @@ async def get_concept_evidence(course_id: str) -> Dict[str, List[str]]:
     query = """
 
     MATCH (c:Concept {course_id: $course_id})<-[m:MENTIONS]-(ch:Chunk)
+    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
 
     
 
@@ -57,7 +58,7 @@ async def run_prerequisite_pipeline(course_id: str):
     )
     
     # Map \u0111\u1ec3 tra c\u1ee9u target info nhanh
-    query = "MATCH (c:Concept {course_id: $course_id}) RETURN c.id AS id, c.name AS name, c.aliases AS aliases"
+    query = "MATCH (c:Concept {course_id: $course_id}) WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE' RETURN c.id AS id, c.name AS name, c.aliases AS aliases"
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, course_id=course_id)
         concept_data = await res.data()
@@ -122,18 +123,23 @@ async def run_prerequisite_pipeline(course_id: str):
 
 async def save_prerequisite_edges(course_id: str, edges: List[Dict[str, Any]], rescored_ids: List[str], cut_edges: List[Dict[str, str]]):
     query = """
+    MATCH (course:Course {id: $course_id})
+    SET course.concept_write_lock = coalesce(course.concept_write_lock, 0) + 1
+    WITH count(*) AS locked
     // 1. Delete AUTO edges that are no longer selected or were cut
     MATCH (s:Concept {course_id: $course_id})-[r:PREREQUISITE_OF {status: 'AUTO'}]->(t:Concept {course_id: $course_id})
-    WHERE (t.id IN $rescored_ids AND NOT any(e IN $edges WHERE e.source_id = s.id AND e.target_id = t.id))
-       OR any(ce IN $cut_edges WHERE ce.source_id = s.id AND ce.target_id = t.id)
+    WHERE coalesce(s.status, 'ACTIVE') = 'ACTIVE' AND coalesce(t.status, 'ACTIVE') = 'ACTIVE' AND ((t.id IN $rescored_ids AND NOT any(e IN $edges WHERE e.source_id = s.id AND e.target_id = t.id))
+       OR any(ce IN $cut_edges WHERE ce.source_id = s.id AND ce.target_id = t.id))
     DELETE r
     WITH count(r) AS deleted_auto
 
     // 2. Upsert new edges
     UNWIND $edges AS edge
     MATCH (src:Concept {id: edge.source_id, course_id: $course_id})
+    WHERE coalesce(src.status, 'ACTIVE') = 'ACTIVE'
     CALL (edge) {
         MATCH (tgt:Concept {id: edge.target_id, course_id: $course_id})
+        WHERE coalesce(tgt.status, 'ACTIVE') = 'ACTIVE'
         RETURN tgt
     }
     MERGE (src)-[r:PREREQUISITE_OF]->(tgt)

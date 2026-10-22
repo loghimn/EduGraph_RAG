@@ -36,10 +36,10 @@ The draft vector is removed after publication. Repeated publication returns the
 same concept ID without creating a second node or incrementing version again.
 
 UUID, key, course_key, order, creation metadata and origin=MANUAL are server-owned.
-Order is the current maximum concept order plus one. No evidence or prerequisite
+New manual nodes receive status=ACTIVE. Order is the current maximum concept order plus one. No evidence or prerequisite
 edges are fabricated. Manual nodes survive ingestion and document-deletion orphan
-cleanup. The local graph cache is invalidated; other workers observe version on
-their next version check under the existing cache policy.
+cleanup. The local graph cache is invalidated; other workers check the shared
+version on their next ordinary graph read.
 
 Errors: 403 unauthorized owner/internal key; 404 inaccessible/missing draft;
 409 duplicate name/key/alias; 410 expired draft; 422 invalid input.
@@ -52,7 +52,9 @@ Errors: 403 unauthorized owner/internal key; 404 inaccessible/missing draft;
 4. Publish the draft and refresh the course graph after success.
 
 This repository implements backend endpoints; no frontend button is included.
-Source selection, edge creation, concept editing/archive and fuzzy semantic
+Source selection, edge creation, concept editing and fuzzy semantic
 duplicate review are separate work. Duplicate checks here use normalized exact
 name/key/alias overlap. Run the usual AI-core startup schema initialization to
 install the ConceptDraft ID constraint.
+
+Archive and restore are described in [concept-lifecycle.md](concept-lifecycle.md).

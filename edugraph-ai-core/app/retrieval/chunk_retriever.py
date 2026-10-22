@@ -77,7 +77,7 @@ async def retrieve_chunks(
     if concept_ids:
         query_graph = """
         MATCH (c:Concept {course_id: $course_id})<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk {course_id: $course_id})
-        WHERE c.id IN $concept_ids
+        WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE' AND c.id IN $concept_ids
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """

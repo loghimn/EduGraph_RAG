@@ -78,3 +78,6 @@ app.include_router(knowledge_graph_router)
 
 from app.api.concept_creation import router as concept_creation_router
 app.include_router(concept_creation_router)
+
+from app.api.concept_lifecycle import router as concept_lifecycle_router
+app.include_router(concept_lifecycle_router)

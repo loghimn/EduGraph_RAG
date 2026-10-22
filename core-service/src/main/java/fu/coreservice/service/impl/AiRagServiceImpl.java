@@ -5,6 +5,7 @@ import fu.coreservice.service.AiRagService;
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
 import fu.coreservice.dto.ApiResponse;
+import fu.coreservice.dto.knowledgegraph.ConceptDraftRequest;
 import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
@@ -175,8 +176,9 @@ public class AiRagServiceImpl implements AiRagService {
 
     @Override
     public ResponseEntity<ApiResponse<Map<String, Object>>> createConceptDraft(
-            Long courseId, Map<String, Object> request) {
-        return writeConceptDraft(courseId, null, request);
+            Long courseId, ConceptDraftRequest request) {
+        return writeConceptDraft(courseId, null, Map.of(
+                "name", request.getName(), "aliases", request.getAliases(), "language", request.getLanguage()));
     }
 
     @Override
@@ -187,13 +189,7 @@ public class AiRagServiceImpl implements AiRagService {
 
     private ResponseEntity<ApiResponse<Map<String, Object>>> writeConceptDraft(
             Long courseId, String draftId, Map<String, Object> request) {
-        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
-                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
-        Course course = courseRepository.findById(courseId)
-                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-        if (!course.getUser().getUserId().equals(user.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        User user = requireCourseOwner(courseId);
         try {
             Map<String, Object> result = aiCoreClient.postConceptDraft(
                     courseId, user.getUserId(), draftId, request);
@@ -202,6 +198,51 @@ public class AiRagServiceImpl implements AiRagService {
                     .data(result).build());
         } catch (AiCoreException e) {
             return relayAiCoreError(e, courseId, "Concept creation failed");
+        }
+    }
+
+
+    private User requireCourseOwner(Long courseId) {
+        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
+        if (!course.getUser().getUserId().equals(user.getUserId())) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+        return user;
+    }
+
+    @Override
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getConceptDeletionImpact(Long courseId, String conceptId) {
+        return conceptLifecycle(courseId, conceptId, "impact", null);
+    }
+
+    @Override
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getArchivedConcepts(Long courseId) {
+        return conceptLifecycle(courseId, null, "archived", null);
+    }
+
+    @Override
+    public ResponseEntity<ApiResponse<Map<String, Object>>> archiveConcept(Long courseId, String conceptId, Long expectedVersion) {
+        return conceptLifecycle(courseId, conceptId, "archive", expectedVersion);
+    }
+
+    @Override
+    public ResponseEntity<ApiResponse<Map<String, Object>>> restoreConcept(Long courseId, String conceptId, Long expectedVersion) {
+        return conceptLifecycle(courseId, conceptId, "restore", expectedVersion);
+    }
+
+    private ResponseEntity<ApiResponse<Map<String, Object>>> conceptLifecycle(
+            Long courseId, String conceptId, String action, Long expectedVersion) {
+        User owner = requireCourseOwner(courseId);
+        try {
+            Map<String, Object> result = aiCoreClient.conceptLifecycle(
+                    courseId, owner.getUserId(), conceptId, action, expectedVersion);
+            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
+                    .success(true).message("Concept operation completed").data(result).build());
+        } catch (AiCoreException e) {
+            return relayAiCoreError(e, courseId, "Concept operation failed");
         }
     }
 

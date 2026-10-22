@@ -114,7 +114,7 @@ async def publish_draft(course_id: str, draft_id: str,
             CREATE (n:Concept {id: $id, course_id: $course_id, course_key: $course_key,
                 key: $key, name: $name, aliases: $aliases, language: $language,
                 embedding: $embedding, embedding_model: $embedding_model, order: next_order,
-                origin: 'MANUAL', created_by: $actor, created_at: timestamp()})
+                origin: 'MANUAL', status: 'ACTIVE', created_by: $actor, created_at: timestamp()})
             SET course.version = coalesce(course.version, 0) + 1
             WITH n, course
             MATCH (d:ConceptDraft {id: $draft_id})
