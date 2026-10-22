@@ -2,7 +2,7 @@ package fu.coreservice.service;
 
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
-import fu.coreservice.dto.request.LearningPathPlanRequest;
+import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.User;

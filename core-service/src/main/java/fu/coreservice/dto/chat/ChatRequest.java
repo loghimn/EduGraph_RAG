@@ -1,4 +1,4 @@
-package fu.coreservice.dto.request;
+package fu.coreservice.dto.chat;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;

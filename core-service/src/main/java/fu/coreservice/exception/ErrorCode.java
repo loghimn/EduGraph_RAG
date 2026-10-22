@@ -49,6 +49,10 @@ public enum ErrorCode {
     AI_CORE_UNAVAILABLE("AI_001", "AI service is unavailable", HttpStatus.SERVICE_UNAVAILABLE),
     AI_CORE_ERROR("AI_002", "AI service request failed", HttpStatus.BAD_GATEWAY),
 
+    LEARNING_PATH_NOT_FOUND("LEARNING_PATH_001", "Learning path not found", HttpStatus.NOT_FOUND),
+    LEARNING_PATH_EMPTY("LEARNING_PATH_002", "No concepts remain to create a learning path", HttpStatus.BAD_REQUEST),
+    LEARNING_PATH_GRAPH_CHANGED("LEARNING_PATH_003", "Knowledge graph changed; preview the learning path again", HttpStatus.CONFLICT),
+
     // Chat: do not disclose whether another user's session exists.
     CHAT_SESSION_NOT_FOUND("CHAT_001", "Chat session not found", HttpStatus.NOT_FOUND),
     CHAT_REPLY_NOT_FOUND("CHAT_002", "Reply message not found in this session", HttpStatus.NOT_FOUND),

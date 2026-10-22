@@ -1,6 +1,6 @@
 package fu.coreservice.controller;
 
-import fu.coreservice.dto.request.ChatRequest;
+import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.chat.ChatMessageResponse;

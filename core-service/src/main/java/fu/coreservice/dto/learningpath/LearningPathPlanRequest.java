@@ -1,4 +1,4 @@
-package fu.coreservice.dto.request;
+package fu.coreservice.dto.learningpath;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

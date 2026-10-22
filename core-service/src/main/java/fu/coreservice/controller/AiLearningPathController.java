@@ -1,7 +1,7 @@
 package fu.coreservice.controller;
 
 import fu.coreservice.dto.ApiResponse;
-import fu.coreservice.dto.request.LearningPathPlanRequest;
+import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
 import fu.coreservice.service.AiRagService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;

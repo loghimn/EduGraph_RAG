@@ -4,7 +4,7 @@ import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.chat.ChatMessageResponse;
 import fu.coreservice.dto.chat.ChatSessionCreateRequest;
 import fu.coreservice.dto.chat.ChatSessionResponse;
-import fu.coreservice.dto.request.ChatRequest;
+import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.entity.ChatMessageStatus;
 import fu.coreservice.dto.chat.ChatSource;
 import fu.coreservice.dto.chat.ChatTurn;

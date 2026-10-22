@@ -7,7 +7,7 @@ import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.*;
 import fu.coreservice.service.ChatSessionService;
-import fu.coreservice.dto.request.ChatRequest;
+import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.dto.ai.AiChatHistoryMessage;
 import fu.coreservice.dto.chat.ChatSource;
 import fu.coreservice.dto.chat.ChatTurn;
