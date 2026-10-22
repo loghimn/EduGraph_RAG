@@ -119,7 +119,8 @@ async def save_ingestion_transaction(
     // 5. Dọn dẹp Concept mồ côi CỦA KHÓA HỌC (chạy sau khi ghi mentions mới)
     // Concept không có MENTIONS và không có PREREQUISITE duyệt.
     OPTIONAL MATCH (orphan:Concept {course_id: $course_id})
-    WHERE NOT (orphan)<-[:MENTIONS]-()
+    WHERE coalesce(orphan.origin, 'AUTO') <> 'MANUAL'
+    AND NOT (orphan)<-[:MENTIONS]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'CONFIRMED'}]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'MANUAL'}]-()
     // Xóa cả cạnh AUTO gắn với nó, rồi xóa nó
@@ -241,7 +242,8 @@ async def save_ingestion_transaction(
         # 5. Dọn dẹp Concept mồ côi
         res = await tx.run("""
         OPTIONAL MATCH (orphan:Concept {course_id: $course_id})
-        WHERE NOT (orphan)<-[:MENTIONS]-()
+        WHERE coalesce(orphan.origin, 'AUTO') <> 'MANUAL'
+        AND NOT (orphan)<-[:MENTIONS]-()
         AND NOT (orphan)-[:PREREQUISITE_OF {status: 'CONFIRMED'}]-()
         AND NOT (orphan)-[:PREREQUISITE_OF {status: 'MANUAL'}]-()
         AND NOT (orphan)-[:PREREQUISITE_OF {status: 'REJECTED'}]-()

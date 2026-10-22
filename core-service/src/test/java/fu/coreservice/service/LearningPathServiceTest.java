@@ -1,5 +1,7 @@
 package fu.coreservice.service;
 
+import fu.coreservice.service.impl.LearningPathServiceImpl;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.learningpath.CreateLearningPathRequest;
@@ -66,7 +68,7 @@ class LearningPathServiceTest {
         realPlans = repositories.getRepository(LearningPathPlanRepository.class);
         plans = mock(LearningPathPlanRepository.class, delegatesTo(realPlans));
         ai = mock(AiCoreClient.class);
-        var target = new LearningPathService(ai, new ObjectMapper(), users,
+        var target = new LearningPathServiceImpl(ai, new ObjectMapper(), users,
                 repositories.getRepository(CourseRepository.class), enrollments,
                 repositories.getRepository(DocumentRepository.class), plans,
                 repositories.getRepository(LearningPathStepRepository.class), manager);

@@ -76,3 +76,5 @@ app.include_router(learning_paths_router)
 from app.api.knowledge_graph import router as knowledge_graph_router
 app.include_router(knowledge_graph_router)
 
+from app.api.concept_creation import router as concept_creation_router
+app.include_router(concept_creation_router)

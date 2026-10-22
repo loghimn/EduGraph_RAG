@@ -136,6 +136,29 @@ public class AiCoreClient {
         }
     }
 
+
+    public Map<String, Object> postConceptDraft(Long courseId, Long actorId,
+                                               String draftId, Map<String, Object> request) {
+        try {
+            String path = "/courses/{courseId}/knowledge-graph/concept-drafts";
+            var call = restClient.post();
+            if (draftId == null) {
+                call.uri(path, courseId);
+            } else {
+                call.uri(path + "/{draftId}/publish", courseId, draftId);
+            }
+            return call.header("X-Actor-Id", String.valueOf(actorId))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(courseId), e);
+        }
+    }
+
     public Map<String, Object> getKnowledgeGraph(Long courseId) {
         try {
             return restClient.get()

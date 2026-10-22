@@ -1,5 +1,7 @@
 package fu.coreservice.service;
 
+import fu.coreservice.service.impl.AiRagServiceImpl;
+
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
 import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
@@ -50,7 +52,29 @@ class AiRagServiceTest {
     private DocumentRepository documentRepository;
 
     @InjectMocks
-    private AiRagService service;
+    private AiRagServiceImpl service;
+
+
+    @Test
+    void createConceptDraft_forwardsOwnerIdentity() {
+        User owner = authenticate(15L);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
+        Map<String, Object> request = Map.of("name", "HTTP Requests");
+        when(aiCoreClient.postConceptDraft(7L, 15L, null, request)).thenReturn(Map.of("draft_id", "draft-1"));
+        assertEquals(200, service.createConceptDraft(7L, request).getStatusCode().value());
+        verify(aiCoreClient).postConceptDraft(7L, 15L, null, request);
+    }
+
+    @Test
+    void publishConceptDraft_deniesNonOwner() {
+        authenticate(22L);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(
+                Course.builder().user(User.builder().userId(15L).build()).build()));
+        AppException error = assertThrows(AppException.class,
+                () -> service.publishConceptDraft(7L, "draft-1"));
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, error.getErrorCode());
+        verifyNoInteractions(aiCoreClient);
+    }
 
     @AfterEach
     void clearSecurityContext() {
