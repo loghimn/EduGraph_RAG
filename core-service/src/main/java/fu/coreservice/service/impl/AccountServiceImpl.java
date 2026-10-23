@@ -1,9 +1,8 @@
 package fu.coreservice.service.impl;
 
 import fu.coreservice.service.AccountService;
-import fu.coreservice.service.PasswordResetMailer;
+import fu.coreservice.service.PasswordResetDispatcher;
 
-import org.springframework.mail.MailException;
 
 import fu.coreservice.dto.auth.ChangePasswordRequest;
 import fu.coreservice.dto.auth.ForgotPasswordRequest;
@@ -18,24 +17,19 @@ import fu.coreservice.repository.UserRepository;
 import fu.coreservice.repository.UserSessionRepository;
 import fu.coreservice.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.time.LocalDateTime;
-import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class AccountServiceImpl implements AccountService {
     private final UserRepository users;
     private final UserSessionRepository sessions;
     private final PasswordEncoder encoder;
-    private final PasswordResetMailer mailer;
-    private static final SecureRandom RANDOM = new SecureRandom();
+    private final PasswordResetDispatcher resetDispatcher;
 
     @Override
     @Transactional
@@ -60,28 +54,9 @@ public class AccountServiceImpl implements AccountService {
     }
 
     @Override
-    @Transactional
     public void forgotPassword(ForgotPasswordRequest request) {
-        User user = users.findLockedByEmail(request.email().strip()).orElse(null);
-        LocalDateTime now = LocalDateTime.now();
-        // A persistent per-account cooldown applies across application instances.
-        if (user == null || !Boolean.TRUE.equals(user.getIsActive())
-                || (user.getResetRequestedAt() != null && user.getResetRequestedAt().plusMinutes(1).isAfter(now))) return;
-        String otp;
-        do {
-            otp = String.format(Locale.ROOT, "%06d", RANDOM.nextInt(1_000_000));
-        } while (user.getPasswordResetOtpHash() != null && encoder.matches(otp, user.getPasswordResetOtpHash()));
-        user.setPasswordResetOtpHash(encoder.encode(otp));
-        user.setPasswordResetOtpExpiresAt(now.plusMinutes(5));
-        user.setPasswordResetOtpAttempts(0);
-        user.setResetRequestedAt(now);
-        try {
-            mailer.send(user.getEmail(), otp);
-        } catch (MailException ex) {
-            // Never log the OTP, password or mail-provider exception text.
-            clearOtp(user);
-            log.warn("Password reset email delivery failed for userId={}", user.getUserId());
-        }
+        // Queue every valid email before any account lookup or BCrypt work.
+        resetDispatcher.dispatch(request.email().strip());
     }
 
     @Override

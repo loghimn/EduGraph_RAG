@@ -34,7 +34,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         final String authHeader = request.getHeader("Authorization");
 
-        if (request.getServletPath().startsWith("/api/")) {
+        if (request.getServletPath().startsWith("/api/")
+                && authHeader != null && authHeader.startsWith("Bearer ")) {
             SecurityContextHolder.clearContext();
         }
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {

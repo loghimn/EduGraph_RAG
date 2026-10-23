@@ -1,6 +1,11 @@
 package fu.coreservice.service;
 
 import fu.coreservice.service.impl.AccountServiceImpl;
+import fu.coreservice.service.impl.PasswordResetDispatcherImpl;
+import org.springframework.mail.MailSendException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import fu.coreservice.dto.auth.ForgotPasswordRequest;
 import fu.coreservice.dto.auth.ResetPasswordRequest;
 import fu.coreservice.entity.User;
@@ -11,6 +16,7 @@ import fu.coreservice.exception.InvalidResetOtpException;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.repository.UserSessionRepository;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Configuration;
 import org.junit.jupiter.api.AfterEach;
@@ -37,11 +43,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.ArgumentMatchers.anyString;
 
 class AccountResetPersistenceTest {
     private SessionFactory factory;
     private AccountService service;
     private PasswordResetMailer mailer;
+    private Queue<Runnable> pending;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(4);
     private static final String EMAIL = "reset@example.com";
 
@@ -63,8 +74,12 @@ class AccountResetPersistenceTest {
         EntityManager shared = SharedEntityManagerCreator.createSharedEntityManager(factory);
         JpaRepositoryFactory repositories = new JpaRepositoryFactory(shared);
         mailer = mock(PasswordResetMailer.class);
+        pending = new ConcurrentLinkedQueue<>();
+        PasswordResetDispatcher dispatcher = new PasswordResetDispatcherImpl(
+                repositories.getRepository(UserRepository.class), encoder, mailer,
+                task -> pending.add(task), new JpaTransactionManager(factory));
         AccountServiceImpl target = new AccountServiceImpl(repositories.getRepository(UserRepository.class),
-                repositories.getRepository(UserSessionRepository.class), encoder, mailer);
+                repositories.getRepository(UserSessionRepository.class), encoder, dispatcher);
         TransactionInterceptor interceptor = new TransactionInterceptor();
         interceptor.setTransactionManager(new JpaTransactionManager(factory));
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
@@ -138,6 +153,7 @@ class AccountResetPersistenceTest {
             user.setResetRequestedAt(LocalDateTime.now().minusMinutes(2));
         });
         service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+        pending.remove().run();
         ArgumentCaptor<String> otp = ArgumentCaptor.forClass(String.class);
         verify(mailer).send(eq(EMAIL), otp.capture());
         assertThat(otp.getValue()).matches("[0-9]{6}");
@@ -150,4 +166,67 @@ class AccountResetPersistenceTest {
         assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(EMAIL, otp.getValue(), "new-password")))
                 .isInstanceOf(InvalidResetOtpException.class);
     }
+    @Test void forgotReturnsBeforeDatabaseWorkOrSmtpAndWorkerSendsOnlyCommittedOtp() {
+        doAnswer(invocation -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            String otp = invocation.getArgument(1);
+            factory.inTransaction(session -> {
+                User user = session.createQuery("from User", User.class).getSingleResult();
+                // Acquiring this lock confirms SMTP does not retain the preparation lock.
+                session.lock(user, LockModeType.PESSIMISTIC_WRITE);
+                assertThat(encoder.matches(otp, user.getPasswordResetOtpHash())).isTrue();
+            });
+            return null;
+        }).when(mailer).send(eq(EMAIL), anyString());
+        service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+        verifyNoInteractions(mailer);
+        assertThat(pending).hasSize(1);
+        factory.inTransaction(session -> assertThat(session.createQuery("from User", User.class)
+                .getSingleResult().getResetRequestedAt()).isNull());
+        pending.remove().run();
+        verify(mailer).send(eq(EMAIL), anyString());
+    }
+
+    @Test void mailFailureClearsCommittedOtpInSeparateTransaction() {
+        doThrow(new MailSendException("provider failure")).when(mailer).send(anyString(), anyString());
+        service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+        pending.remove().run();
+        factory.inTransaction(session -> {
+            User user = session.createQuery("from User", User.class).getSingleResult();
+            assertThat(user.getPasswordResetOtpHash()).isNull();
+            assertThat(user.getPasswordResetOtpExpiresAt()).isNull();
+            assertThat(user.getResetRequestedAt()).isNotNull();
+        });
+    }
+
+    @Test void lateMailFailureCannotClearANewerOtp() {
+        String newerHash = encoder.encode("654321");
+        doAnswer(invocation -> {
+            factory.inTransaction(session -> {
+                User user = session.createQuery("from User", User.class).getSingleResult();
+                user.setPasswordResetOtpHash(newerHash);
+                user.setPasswordResetOtpAttempts(2);
+            });
+            throw new MailSendException("older delivery failed");
+        }).when(mailer).send(anyString(), anyString());
+        service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+        pending.remove().run();
+        factory.inTransaction(session -> {
+            User user = session.createQuery("from User", User.class).getSingleResult();
+            assertThat(user.getPasswordResetOtpHash()).isEqualTo(newerHash);
+            assertThat(user.getPasswordResetOtpAttempts()).isEqualTo(2);
+        });
+    }
+
+    @Test void unknownAndCooldownAccountsQueueWorkWithoutSendingMail() {
+        factory.inTransaction(session -> session.createQuery("from User", User.class).getSingleResult()
+                .setResetRequestedAt(LocalDateTime.now()));
+        service.forgotPassword(new ForgotPasswordRequest(EMAIL));
+        service.forgotPassword(new ForgotPasswordRequest("unknown@example.com"));
+        assertThat(pending).hasSize(2);
+        pending.remove().run();
+        pending.remove().run();
+        verifyNoInteractions(mailer);
+    }
+
 }
