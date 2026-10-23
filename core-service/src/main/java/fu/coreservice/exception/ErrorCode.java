@@ -14,6 +14,9 @@ public enum ErrorCode {
     INVALID_REFRESH_TOKEN("AUTH_005", "Invalid refresh token", HttpStatus.UNAUTHORIZED),
     REFRESH_TOKEN_EXPIRED("AUTH_006", "Refresh token expired", HttpStatus.UNAUTHORIZED),
 
+    INVALID_RESET_OTP("AUTH_007", "OTP is invalid, expired or has exceeded the attempt limit", HttpStatus.BAD_REQUEST),
+    CURRENT_PASSWORD_INCORRECT("AUTH_008", "Current password is incorrect", HttpStatus.BAD_REQUEST),
+
     // Validation
     VALIDATION_FAILED("VALIDATION_001", "Validation failed", HttpStatus.BAD_REQUEST),
 
