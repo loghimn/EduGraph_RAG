@@ -81,13 +81,14 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
+    @Transactional
     public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
+        // Serialize credential verification and issuance with password changes.
+        User user = userRepository.findLockedByEmail(request.getEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_CREDENTIALS));
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
         );
-
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         if (!user.getIsActive()) {
             throw new AppException(ErrorCode.ACCOUNT_DISABLED);
@@ -113,6 +114,10 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public AuthResponse refreshAccessToken(RefreshTokenRequest request) {
         String refreshToken = request.getRefreshToken();
+        String email = userSessionRepository.findEmailByRefreshToken(refreshToken)
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_REFRESH_TOKEN));
+        User user = userRepository.findLockedByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_REFRESH_TOKEN));
         UserSession session = userSessionRepository.findByRefreshToken(refreshToken)
                 .orElseThrow(() -> new AppException(ErrorCode.INVALID_REFRESH_TOKEN));
 
@@ -121,7 +126,7 @@ public class AuthServiceImpl implements AuthService {
             throw new AppException(ErrorCode.REFRESH_TOKEN_EXPIRED);
         }
 
-        User user = session.getUser();
+        if (!Boolean.TRUE.equals(user.getIsActive())) throw new AppException(ErrorCode.ACCOUNT_DISABLED);
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
         String newAccessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
         String newRefreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());

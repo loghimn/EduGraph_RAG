@@ -15,6 +15,9 @@ import java.util.Optional;
 @Repository
 public interface UserSessionRepository extends JpaRepository<UserSession, Long> {
 
+    @Query("select s.user.email from UserSession s where s.refreshToken = :token")
+    Optional<String> findEmailByRefreshToken(@Param("token") String token);
+
     Optional<UserSession> findByRefreshToken(String refreshToken);
 
     List<UserSession> findByUser(User user);

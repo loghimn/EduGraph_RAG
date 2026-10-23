@@ -1,5 +1,7 @@
 package fu.coreservice.config;
 
+import fu.coreservice.utils.TokenHashUtils;
+
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
@@ -50,6 +52,7 @@ public class JwtService {
     public String generateAccessToken(UserDetails userDetails, Long userId, String role) {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put(TOKEN_TYPE_CLAIM, TOKEN_TYPE_ACCESS);
+        extraClaims.put("credential", TokenHashUtils.hash(userDetails.getPassword()));
         extraClaims.put("userId", userId);
         extraClaims.put("role", role);
         return generateToken(extraClaims, userDetails, accessTokenExpiration);
@@ -81,7 +84,10 @@ public class JwtService {
     public boolean isTokenValid(String token, UserDetails userDetails) {
         try {
             final String username = extractUsername(token);
-            return isAccessToken(token)
+            return userDetails.isEnabled()
+                    && TokenHashUtils.hash(userDetails.getPassword()).equals(
+                        extractClaim(token, claims -> claims.get("credential", String.class)))
+                    && isAccessToken(token)
                     && (username.equals(userDetails.getUsername()))
                     && !isTokenExpired(token);
         } catch (Exception e) {

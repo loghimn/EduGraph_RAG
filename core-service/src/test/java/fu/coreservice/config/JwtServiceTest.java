@@ -97,6 +97,22 @@ class JwtServiceTest {
         assertThat(jwtService.isTokenValid(token, otherUser)).isFalse();
     }
 
+    @Test
+    void passwordReplacementRevokesExistingAccessToken() {
+        String token = jwtService.generateAccessToken(userDetails, 1L, "USER");
+        UserDetails changed = User.withUsername(EMAIL).password("new-hash").roles("USER").build();
+        assertThat(jwtService.isTokenValid(token, changed)).isFalse();
+        String fresh = jwtService.generateAccessToken(changed, 1L, "USER");
+        assertThat(jwtService.isTokenValid(fresh, changed)).isTrue();
+    }
+
+    @Test
+    void disabledAccountCannotUseAccessToken() {
+        String token = jwtService.generateAccessToken(userDetails, 1L, "USER");
+        UserDetails disabled = User.withUsername(EMAIL).password("password").roles("USER").disabled(true).build();
+        assertThat(jwtService.isTokenValid(token, disabled)).isFalse();
+    }
+
     private String buildTokenWithoutTypeClaim() {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put("userId", 1L);

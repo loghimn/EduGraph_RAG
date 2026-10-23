@@ -38,6 +38,18 @@ public class User {
     @Builder.Default
     private Boolean isActive = true;
 
+    @Column(name = "password_reset_otp_hash", length = 255)
+    private String passwordResetOtpHash;
+
+    @Column(name = "password_reset_otp_expires_at")
+    private LocalDateTime passwordResetOtpExpiresAt;
+
+    @Column(name = "password_reset_otp_attempts")
+    @Builder.Default
+    private Integer passwordResetOtpAttempts = 0;
+
+    private LocalDateTime resetRequestedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
