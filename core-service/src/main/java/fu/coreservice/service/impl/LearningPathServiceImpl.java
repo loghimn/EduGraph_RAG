@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.LearnerMasteryService;
+
 import fu.coreservice.service.LearningPathService;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,6 +45,7 @@ public class LearningPathServiceImpl implements LearningPathService {
     private final LearningPathPlanRepository planRepository;
     private final LearningPathStepRepository stepRepository;
     private final PlatformTransactionManager transactionManager;
+    private final LearnerMasteryService masteryService;
 
     // No database transaction is held while waiting for Python.
     @Override
@@ -56,10 +59,11 @@ public class LearningPathServiceImpl implements LearningPathService {
         LearningPathMode mode = !goals.isEmpty() ? LearningPathMode.GOAL
                 : request.documentId() != null ? LearningPathMode.DOCUMENT : LearningPathMode.COURSE;
 
+        List<String> known = request.knownConceptIds() == null ? masteryService.knownConcepts(courseId) : distinct(request.knownConceptIds());
         var raw = aiCoreClient.createLearningPathPlan(AiLearningPathRequest.builder()
                 .courseId(courseId.toString()).userId(access.user().getUserId().toString())
                 .documentId(request.documentId() == null ? null : request.documentId().toString())
-                .goalConceptIds(goals).knownConceptIds(distinct(request.knownConceptIds()))
+                .goalConceptIds(goals).knownConceptIds(known)
                 .includeExternalPrereqs(!Boolean.FALSE.equals(request.includeExternalPrereqs()))
                 .assumeKnownPrerequisites(!Boolean.FALSE.equals(request.assumeKnownPrerequisites()))
                 .build());
@@ -99,6 +103,7 @@ public class LearningPathServiceImpl implements LearningPathService {
                         .outsideDocument(located.step().outsideDocument()).build());
             }
             LearningPathPlan saved = planRepository.saveAndFlush(plan);
+            masteryService.initialize(courseId, generated.linearOrder(), known);
             return detail(saved, generated.warnings() == null ? List.of()
                     : generated.warnings().stream().filter(Objects::nonNull).toList());
         });
@@ -166,6 +171,7 @@ public class LearningPathServiceImpl implements LearningPathService {
         if (!isUnlocked(plan, step)) throw new AppException(ErrorCode.LEARNING_PATH_STEP_LOCKED);
 
         step.setStatus(request.status());
+        masteryService.updateFromStep(plan.getCourse().getCourseId(), step.getNeo4jConceptId(), request.status());
         // Match database timestamp precision, including the response before reload.
         LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
         step.setCompletedAt(request.status() == PathStepStatus.COMPLETED ? now : null);

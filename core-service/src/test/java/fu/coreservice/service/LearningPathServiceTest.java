@@ -1,6 +1,7 @@
 package fu.coreservice.service;
 
 import fu.coreservice.service.impl.LearningPathServiceImpl;
+import fu.coreservice.service.impl.LearnerMasteryServiceImpl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.client.AiCoreClient;
@@ -48,13 +49,14 @@ class LearningPathServiceTest {
     private String learnerEmail;
     private UserRepository users;
     private CourseEnrollmentRepository enrollments;
+    private LearnerMasteryService mastery;
 
     @BeforeEach
     void setup() {
         factory = new Configuration().addAnnotatedClass(User.class).addAnnotatedClass(Course.class)
                 .addAnnotatedClass(Document.class).addAnnotatedClass(CourseEnrollment.class)
                 .addAnnotatedClass(LearningPathPlan.class).addAnnotatedClass(LearningPathGoal.class)
-                .addAnnotatedClass(LearningPathStep.class)
+                .addAnnotatedClass(LearningPathStep.class).addAnnotatedClass(LearnerMastery.class).addAnnotatedClass(LearnerMasteryHistory.class)
                 .setProperty("hibernate.connection.driver_class", "org.h2.Driver")
                 .setProperty("hibernate.connection.url", "jdbc:h2:mem:" + UUID.randomUUID() + ";MODE=PostgreSQL")
                 .setProperty("hibernate.hbm2ddl.auto", "create-drop")
@@ -68,10 +70,14 @@ class LearningPathServiceTest {
         realPlans = repositories.getRepository(LearningPathPlanRepository.class);
         plans = mock(LearningPathPlanRepository.class, delegatesTo(realPlans));
         ai = mock(AiCoreClient.class);
+        mastery = new LearnerMasteryServiceImpl(repositories.getRepository(LearnerMasteryRepository.class),
+                repositories.getRepository(LearnerMasteryHistoryRepository.class), users,
+                repositories.getRepository(CourseRepository.class), enrollments);
         var target = new LearningPathServiceImpl(ai, new ObjectMapper(), users,
                 repositories.getRepository(CourseRepository.class), enrollments,
                 repositories.getRepository(DocumentRepository.class), plans,
-                repositories.getRepository(LearningPathStepRepository.class), manager);
+                repositories.getRepository(LearningPathStepRepository.class), manager,
+                mastery);
         ProxyFactory proxy = new ProxyFactory(target);
         proxy.setProxyTargetClass(true);
         proxy.addAdvice(new TransactionInterceptor(manager, new AnnotationTransactionAttributeSource()));
@@ -367,6 +373,37 @@ class LearningPathServiceTest {
         assertNotNull(loaded.plan().completedAt());
     }
 
+    @Test
+    void persistsMasteryHistoryAndUsesDefaultsWithoutOverridingExplicitEmptyList() {
+        var plan = createSavedPlan();
+        tx.executeWithoutResult(t -> {
+            assertEquals(3, mastery.list(courseId).size());
+            assertTrue(mastery.list(courseId).stream().allMatch(m -> m.status() == MasteryStatus.NOT_STARTED));
+            assertEquals(1, mastery.history(courseId, "C2").size());
+            assertNull(mastery.history(courseId, "C2").get(0).oldStatus());
+        });
+        var step = plan.steps().stream().filter(s -> s.conceptId().equals("C2")).findFirst().orElseThrow();
+        service.updateStep(plan.plan().planId(), step.stepId(), update(PathStepStatus.COMPLETED));
+        tx.executeWithoutResult(t -> {
+            assertEquals(List.of("C2"), mastery.knownConcepts(courseId));
+            assertEquals(2, mastery.history(courseId, "C2").size());
+        });
+        service.updateStep(plan.plan().planId(), step.stepId(), update(PathStepStatus.COMPLETED));
+        doAnswer(call -> {
+            assertEquals(List.of("C2"), ((fu.coreservice.dto.ai.AiLearningPathRequest) call.getArgument(0)).getKnownConceptIds());
+            return generated(LearningPathMode.COURSE);
+        }).when(ai).createLearningPathPlan(any());
+        service.create(courseId, request(LearningPathMode.COURSE, null));
+        doAnswer(call -> {
+            assertEquals(List.of(), ((fu.coreservice.dto.ai.AiLearningPathRequest) call.getArgument(0)).getKnownConceptIds());
+            return generated(LearningPathMode.COURSE);
+        }).when(ai).createLearningPathPlan(any());
+        service.create(courseId, new CreateLearningPathRequest("Explicit", null, null, List.of(), null, null, null));
+        tx.executeWithoutResult(t -> {
+            assertEquals(List.of("C2"), mastery.knownConcepts(courseId));
+            assertEquals(2, mastery.history(courseId, "C2").size());
+        });
+    }
     private LearningPathDetail createSavedPlan() {
         when(ai.createLearningPathPlan(any())).thenReturn(generated(LearningPathMode.COURSE));
         return service.create(courseId, request(LearningPathMode.COURSE, null));

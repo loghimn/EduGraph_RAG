@@ -51,6 +51,8 @@ class AiRagServiceTest {
     private CourseEnrollmentRepository courseEnrollmentRepository;
     @Mock
     private DocumentRepository documentRepository;
+    @Mock
+    private LearnerMasteryService masteryService;
 
     @InjectMocks
     private AiRagServiceImpl service;
