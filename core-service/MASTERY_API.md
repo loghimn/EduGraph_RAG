@@ -17,6 +17,8 @@ Both `POST /api/courses/{courseId}/learning-path/plan` (preview) and
 `POST /api/courses/{courseId}/learning-paths` (save) use these defaults.
 Only a successful saved plan initializes missing step concepts as `NOT_STARTED`.
 Submitted known concepts are saved as self-rated `MASTERED` after successful save.
+Default known concepts read before the AI call are used only for generation;
+they are not written back as new ratings when saving the plan.
 Existing step mastery is preserved. Python's existing `known_concept_ids` contract
 is unchanged.
 
@@ -40,6 +42,10 @@ activity on another plan does not downgrade a mastered concept.
 
 Returns `historyId`, `oldStatus`, `newStatus`, `changedBy`, `changedAt`.
 Creation has null `oldStatus`. Repeating the same status adds no history.
+Automatically initialized and step-derived statuses have `selfRated: false`.
+Explicit mastery updates and submitted known selections have `selfRated: true`.
+Explicitly confirming an unchanged status updates this flag without adding a
+status-history entry.
 Mastery, history, and saved-plan/step changes commit or roll back together.
 Writes are serialized per learner to prevent duplicate initialization and lost
 history when different learning paths update the same concept concurrently.

@@ -379,6 +379,7 @@ class LearningPathServiceTest {
         tx.executeWithoutResult(t -> {
             assertEquals(3, mastery.list(courseId).size());
             assertTrue(mastery.list(courseId).stream().allMatch(m -> m.status() == MasteryStatus.NOT_STARTED));
+            assertTrue(mastery.list(courseId).stream().allMatch(m -> Boolean.FALSE.equals(m.selfRated())));
             assertEquals(1, mastery.history(courseId, "C2").size());
             assertNull(mastery.history(courseId, "C2").get(0).oldStatus());
         });
@@ -387,6 +388,8 @@ class LearningPathServiceTest {
         tx.executeWithoutResult(t -> {
             assertEquals(List.of("C2"), mastery.knownConcepts(courseId));
             assertEquals(2, mastery.history(courseId, "C2").size());
+            assertFalse(mastery.list(courseId).stream().filter(m -> m.conceptId().equals("C2"))
+                    .findFirst().orElseThrow().selfRated());
         });
         service.updateStep(plan.plan().planId(), step.stepId(), update(PathStepStatus.COMPLETED));
         doAnswer(call -> {
@@ -404,6 +407,48 @@ class LearningPathServiceTest {
             assertEquals(2, mastery.history(courseId, "C2").size());
         });
     }
+    @Test
+    void defaultKnownSnapshotDoesNotOverwriteRatingChangedDuringAiCall() {
+        createSavedPlan();
+        tx.executeWithoutResult(t -> mastery.update(courseId, "C2", MasteryStatus.MASTERED));
+        doAnswer(call -> {
+            assertEquals(List.of("C2"), ((fu.coreservice.dto.ai.AiLearningPathRequest)
+                    call.getArgument(0)).getKnownConceptIds());
+            tx.executeWithoutResult(t -> mastery.update(courseId, "C2", MasteryStatus.NOT_STARTED));
+            return generated(LearningPathMode.COURSE);
+        }).when(ai).createLearningPathPlan(any());
+
+        service.create(courseId, request(LearningPathMode.COURSE, null));
+
+        tx.executeWithoutResult(t -> {
+            assertTrue(mastery.knownConcepts(courseId).isEmpty());
+            assertEquals(3, mastery.history(courseId, "C2").size());
+            assertEquals(MasteryStatus.NOT_STARTED, mastery.list(courseId).stream()
+                    .filter(m -> m.conceptId().equals("C2")).findFirst().orElseThrow().status());
+        });
+    }
+
+    @Test
+    void explicitRatingsAndKnownSelectionsAreSelfRatedWithoutDuplicateStatusHistory() {
+        createSavedPlan();
+        tx.executeWithoutResult(t -> {
+            assertTrue(mastery.update(courseId, "C1", MasteryStatus.NOT_STARTED).selfRated());
+            assertEquals(1, mastery.history(courseId, "C1").size());
+            assertTrue(mastery.update(courseId, "C1", MasteryStatus.IN_PROGRESS).selfRated());
+            mastery.updateFromStep(courseId, "C1", PathStepStatus.COMPLETED);
+            assertFalse(mastery.list(courseId).stream().filter(m -> m.conceptId().equals("C1"))
+                    .findFirst().orElseThrow().selfRated());
+        });
+        service.create(courseId, new CreateLearningPathRequest("Explicit", null, null,
+                List.of("C1", "C2"), null, null, null));
+        tx.executeWithoutResult(t -> {
+            assertTrue(mastery.list(courseId).stream().filter(m -> Set.of("C1", "C2").contains(m.conceptId()))
+                    .allMatch(m -> m.status() == MasteryStatus.MASTERED && Boolean.TRUE.equals(m.selfRated())));
+            assertEquals(3, mastery.history(courseId, "C1").size());
+            assertEquals(2, mastery.history(courseId, "C2").size());
+        });
+    }
+
     private LearningPathDetail createSavedPlan() {
         when(ai.createLearningPathPlan(any())).thenReturn(generated(LearningPathMode.COURSE));
         return service.create(courseId, request(LearningPathMode.COURSE, null));

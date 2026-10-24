@@ -55,10 +55,10 @@ public class LearnerMasteryServiceImpl implements LearnerMasteryService {
         Map<String, LearnerMastery> existing = new HashMap<>();
         masteries.findByLearnerAndCourse(user, course).forEach(m -> existing.put(m.getNeo4jConceptId(), m));
         for (String id : new LinkedHashSet<>(conceptIds)) {
-            if (!existing.containsKey(id)) existing.put(id, change(user, course, id, null, MasteryStatus.NOT_STARTED));
+            if (!existing.containsKey(id)) existing.put(id, change(user, course, id, null, MasteryStatus.NOT_STARTED, UpdateSource.INITIALIZATION));
         }
         for (String id : new LinkedHashSet<>(knownIds)) {
-            change(user, course, id, existing.get(id), MasteryStatus.MASTERED);
+            change(user, course, id, existing.get(id), MasteryStatus.MASTERED, UpdateSource.SELF_RATING);
         }
     }
 
@@ -71,7 +71,7 @@ public class LearnerMasteryServiceImpl implements LearnerMasteryService {
         // Only concepts already registered by a saved learning path can be edited directly.
         LearnerMastery mastery = masteries.findByLearnerAndCourseAndNeo4jConceptId(user, course, conceptId)
                 .orElseThrow(() -> new AppException(ErrorCode.INVALID_REQUEST));
-        return view(change(user, course, conceptId, mastery, status));
+        return view(change(user, course, conceptId, mastery, status, UpdateSource.SELF_RATING));
     }
 
     @Override
@@ -88,15 +88,25 @@ public class LearnerMasteryServiceImpl implements LearnerMasteryService {
             default -> MasteryStatus.NOT_STARTED;
         };
         if (next == MasteryStatus.NOT_STARTED && mastery != null) return;
-        change(user, course, conceptId, mastery, next);
+        change(user, course, conceptId, mastery, next, UpdateSource.STEP_PROGRESS);
     }
 
-    private LearnerMastery change(User user, Course course, String id, LearnerMastery mastery, MasteryStatus status) {
+    private enum UpdateSource { INITIALIZATION, STEP_PROGRESS, SELF_RATING }
+
+    private LearnerMastery change(User user, Course course, String id, LearnerMastery mastery,
+                                 MasteryStatus status, UpdateSource source) {
         MasteryStatus old = mastery == null ? null : mastery.getMasteryStatus();
-        if (old == status) return mastery;
+        if (old == status) {
+            // An explicit rating can confirm a derived status without a status-history entry.
+            if (source == UpdateSource.SELF_RATING && !Boolean.TRUE.equals(mastery.getIsSelfRated())) {
+                mastery.setIsSelfRated(true);
+                return masteries.saveAndFlush(mastery);
+            }
+            return mastery;
+        }
         if (mastery == null) mastery = LearnerMastery.builder().learner(user).course(course).neo4jConceptId(id).build();
         mastery.setMasteryStatus(status);
-        mastery.setIsSelfRated(true);
+        mastery.setIsSelfRated(source == UpdateSource.SELF_RATING);
         mastery = masteries.saveAndFlush(mastery);
         histories.save(LearnerMasteryHistory.builder().mastery(mastery).oldStatus(old).newStatus(status)
                 .changedBy("LEARNER").build());

@@ -103,7 +103,8 @@ public class LearningPathServiceImpl implements LearningPathService {
                         .outsideDocument(located.step().outsideDocument()).build());
             }
             LearningPathPlan saved = planRepository.saveAndFlush(plan);
-            masteryService.initialize(courseId, generated.linearOrder(), known);
+            masteryService.initialize(courseId, generated.linearOrder(),
+                    request.knownConceptIds() == null ? List.of() : known);
             return detail(saved, generated.warnings() == null ? List.of()
                     : generated.warnings().stream().filter(Objects::nonNull).toList());
         });
