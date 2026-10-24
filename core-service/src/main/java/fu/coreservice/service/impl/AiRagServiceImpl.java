@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.LearnerMasteryService;
+
 import fu.coreservice.service.AiRagService;
 
 import fu.coreservice.client.AiCoreClient;
@@ -45,6 +47,7 @@ public class AiRagServiceImpl implements AiRagService {
     private final CourseRepository courseRepository;
     private final CourseEnrollmentRepository courseEnrollmentRepository;
     private final DocumentRepository documentRepository;
+    private final LearnerMasteryService masteryService;
 
     @Override
     public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraph(Long courseId) {
@@ -145,7 +148,7 @@ public class AiRagServiceImpl implements AiRagService {
                 .userId(String.valueOf(learner.getUserId()))
                 .documentId(request.getDocumentId() == null ? null : String.valueOf(request.getDocumentId()))
                 .goalConceptIds(request.getGoalConceptIds())
-                .knownConceptIds(request.getKnownConceptIds())
+                .knownConceptIds(request.getKnownConceptIds() == null ? masteryService.knownConcepts(courseId) : request.getKnownConceptIds())
                 .includeExternalPrereqs(request.getIncludeExternalPrereqs() == null || request.getIncludeExternalPrereqs())
                 .assumeKnownPrerequisites(request.getAssumeKnownPrerequisites() == null || request.getAssumeKnownPrerequisites())
                 .build();
