@@ -3,6 +3,7 @@ package fu.coreservice.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
@@ -46,6 +47,7 @@ public class DocumentProcessingJob {
 
     /** Số lần đã retry (không tính lần chạy đầu tiên). */
     @Column(name = "retry_count", nullable = false)
+    @ColumnDefault("0")
     @Builder.Default
     private int retryCount = 0;
 

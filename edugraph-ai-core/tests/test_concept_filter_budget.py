@@ -48,7 +48,7 @@ async def test_single_oversized_chunk_translates_evidence_offsets(bounded_filter
     text = "A" * 80 + "B" * 80
     concepts, stats = await filtering.process_chunk_group(0, [chunk(7, text)], [[]])
     assert bounded_filter.await_count == 2
-    assert [(c["evidence_start"], c["evidence_end"]) for c in concepts] == [(0, 80), (80, 160)]
+    assert [(c["evidence_start"], c["evidence_end"]) for c in concepts] == [(0, 120), (40, 160)]
     assert all(c["evidence_chunk_id"] == "doc_chunk_7" for c in concepts)
     assert stats["total_returned"] == 2
 

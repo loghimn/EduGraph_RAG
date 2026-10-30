@@ -29,9 +29,9 @@ async def get_concept_evidence(course_id: str) -> Dict[str, List[str]]:
         data = await result.data()
         return {r["id"]: r["evidence_texts"] for r in data}
 
-async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set = None):
+async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set = None, changed_concept_ids: set = None):
     logger.info(f"Bắt đầu pipeline tiên quyết cho {course_id}...")
-    if new_concept_ids:
+    if new_concept_ids is not None or changed_concept_ids is not None:
         logger.info(
             f"[{course_id}] Incremental mode: {len(new_concept_ids)} concept mới "
             f"→ chỉ re-judge concept bị ảnh hưởng"
@@ -54,12 +54,13 @@ async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set = None)
     #   (a) Bản thân là concept mới, HOẶC
     #   (b) Có ít nhất 1 candidate mới trong danh sách ứng viên của nó.
     # Concept cũ hoàn toàn không liên quan → bỏ qua, giữ nguyên cạnh cũ trên DB.
-    if new_concept_ids:
+    if new_concept_ids is not None or changed_concept_ids is not None:
+        affected_ids = set(new_concept_ids or ()) | set(changed_concept_ids or ())
         filtered_dict = {}
         skipped = 0
         for tgt_id, cands in candidates_dict.items():
             cand_ids = {c["id"] for c in cands}
-            if tgt_id in new_concept_ids or cand_ids & new_concept_ids:
+            if tgt_id in affected_ids or cand_ids & affected_ids:
                 filtered_dict[tgt_id] = cands
             else:
                 skipped += 1

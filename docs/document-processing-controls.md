@@ -1,7 +1,7 @@
 # Document processing controls
 
-Run the updated Java core-service and Python AI core together. No additional
-Supabase columns are needed for this change; the existing PAUSED/CANCELLED status
+Run the updated Java core-service and Python AI core together. This change adds the `retry_count` column to `document_processing_jobs` (`INTEGER NOT NULL DEFAULT 0`);
+no other additional Supabase columns are needed. The existing PAUSED/CANCELLED status
 values and processing-job columns must already be available.
 
 The AI core supports **one worker/process**. Run, for example:

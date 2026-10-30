@@ -73,12 +73,19 @@ class DocumentControlServiceTest {
     void cancelConfirmsPythonStopBeforeDeletingStorage() {
         when(jobs.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
                 .thenReturn(Optional.of(job));
-        service.cancelDocument(1L, 10L);
-        InOrder order = inOrder(python, storage);
-        order.verify(python).cancelDocument(10L, 1L, 7L);
-        order.verify(storage).deleteFile("course/1/a.pdf");
-        assertEquals(UploadStatus.CANCELLED, document.getDocStatus());
-        assertEquals(JobStatus.CANCELLED, job.getJobStatus());
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.cancelDocument(1L, 10L);
+            verify(python).cancelDocument(10L, 1L, 7L);
+            assertEquals(UploadStatus.CANCELLED, document.getDocStatus());
+            assertEquals(JobStatus.CANCELLED, job.getJobStatus());
+            var callbacks = org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            assertEquals(1, callbacks.size());
+            callbacks.forEach(callback -> callback.afterCommit());
+            verify(storage).deleteFile("course/1/a.pdf");
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

@@ -334,14 +334,29 @@ public class DocumentServiceImpl implements DocumentService {
                     documentProcessingJobRepository.save(job);
                 });
 
-        // Dọn dẹp Supabase (best-effort, không throw nếu file đã bị xóa)
-        if (document.getFileUrlPath() != null) {
+        // Dọn dẹp Supabase (best-effort, không throw nếu file đã bị xóa).
+        // Chạy sau commit để tránh mất file khi transaction rollback.
+        String storagePath = document.getFileUrlPath();
+        Runnable deleteStorage = () -> {
+            if (storagePath == null) {
+                return;
+            }
             try {
-                supabaseStorageService.deleteFile(document.getFileUrlPath());
+                supabaseStorageService.deleteFile(storagePath);
             } catch (Exception e) {
                 log.warn("Failed to delete Supabase file during cancel. documentId={}, path={}, reason={}",
-                        documentId, document.getFileUrlPath(), e.getMessage());
+                        documentId, storagePath, e.getMessage());
             }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    deleteStorage.run();
+                }
+            });
+        } else {
+            deleteStorage.run();
         }
 
         log.info("Document cancelled. documentId={}", documentId);

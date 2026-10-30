@@ -237,6 +237,18 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
                 final_mentions[pair] = m
         mentions = list(final_mentions.values())
 
+        # Concepts whose mentions/evidence changed in this ingestion. Existing
+        # targets that gained new evidence must be re-judged even when the new
+        # concept is absent from their capped candidate list.
+        mentioned_keys = {m.get("concept_key") for m in mentions if m.get("concept_key")}
+        changed_concept_ids = set()
+        for c in db_concepts:
+            if c.get("key") in mentioned_keys and c.get("id"):
+                changed_concept_ids.add(c["id"])
+        for nc in merged_new:
+            if nc.get("merge_target_id"):
+                changed_concept_ids.add(nc["merge_target_id"])
+
         await update_heartbeat(doc_id)
 
         # Cuối cùng, Ghi 1 transaction
@@ -277,6 +289,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             "dropped_concepts": dropped_concepts,
             "merge_candidates": merge_cands,
             "new_concept_ids": new_concept_ids,
+            "changed_concept_ids": changed_concept_ids,
             "stats": {
                 "dropped_evidence": total_dropped_no_ev,
                 "total_returned": total_returned

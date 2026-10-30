@@ -104,9 +104,35 @@ async def process_chunk_group(group_idx: int, chunks: List[Dict[str, Any]], cand
         # evidence offsets back into the original text after processing each half.
         if len(chunks) == 1 and len(chunks[0]["text"]) > 1:
             text = chunks[0]["text"]
+            # Split near a suitable text boundary so a concept whose name and
+            # explanation straddle the middle still lands in one part. Keep a
+            # small overlap between the two parts for context, and translate
+            # evidence offsets using each part's actual start position.
             middle = len(text) // 2
+            boundary = middle
+            window = min(50, middle, len(text) - middle)
+            for i in range(middle, max(0, middle - window) - 1, -1):
+                if text[i].isspace():
+                    boundary = i
+                    break
+            else:
+                for i in range(middle, min(len(text), middle + window)):
+                    if text[i].isspace():
+                        boundary = i
+                        break
+                else:
+                    boundary = middle
+            overlap = min(50, len(text) // 4) if len(text) >= 4 else 0
+            if overlap <= 0:
+                overlap = 0
+            first_end = min(len(text), boundary + overlap)
+            second_start = max(0, boundary - overlap)
+            if second_start >= first_end:
+                second_start = boundary
             results = []
-            for start, end in ((0, middle), (middle, len(text))):
+            for start, end in ((0, first_end), (second_start, len(text))):
+                if end <= start:
+                    continue
                 part = dict(chunks[0], text=text[start:end])
                 concepts, stats = await process_chunk_group(
                     group_idx, [part], candidates_group[:1])
