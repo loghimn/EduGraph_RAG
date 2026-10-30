@@ -136,6 +136,31 @@ public class AiCoreClient {
         }
     }
 
+    /**
+     * DELETE /documents/{doc_id}?course_id=...&user_id=... — yêu cầu Python xóa
+     * Chunk, Concept orphan và cạnh liên quan khỏi Neo4j graph.
+     */
+    public void cancelDocument(Long documentId, Long courseId, Long userId) {
+        try {
+            restClient.delete()
+                    .uri("/documents/{documentId}?course_id={courseId}&user_id={userId}",
+                            documentId, courseId, userId)
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Cancelled document in AI core. documentId={}", documentId);
+        } catch (RestClientResponseException e) {
+            // 404 = chưa ingest lần nào → bỏ qua (graph chưa có data)
+            if (e.getStatusCode().value() == 404) {
+                log.info("Document not found in AI core graph (not yet ingested). documentId={}", documentId);
+                return;
+            }
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            // AI core offline → log cảnh báo nhưng không block cancel ở Java side
+            log.warn("AI core unreachable during cancel. documentId={}, reason={}", documentId, e.getMessage());
+        }
+    }
+
 
     public Map<String, Object> postConceptDraft(Long courseId, Long actorId,
                                                String draftId, Map<String, Object> request) {

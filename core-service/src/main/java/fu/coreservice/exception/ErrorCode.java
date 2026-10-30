@@ -43,6 +43,13 @@ public enum ErrorCode {
     FILE_TOO_LARGE("DOCUMENT_006", "File size must not exceed 40 MB", HttpStatus.CONTENT_TOO_LARGE),
     INVALID_FILE_TYPE("DOCUMENT_007", "Invalid !!! Only PDF, DOCX, PPTX and TXT files", HttpStatus.BAD_REQUEST),
     FILE_NAME_EMPTY("DOCUMENT_008", "File name must not be empty", HttpStatus.BAD_REQUEST),
+    DOCUMENT_ALREADY_PROCESSING("DOCUMENT_009", "Document is currently being processed", HttpStatus.CONFLICT),
+    DOCUMENT_PAUSED("DOCUMENT_010", "Document processing is paused", HttpStatus.CONFLICT),
+    DOCUMENT_CANCELLED("DOCUMENT_011", "Document has been cancelled", HttpStatus.CONFLICT),
+    RETRY_NOT_ALLOWED("DOCUMENT_012", "Retry is only allowed for documents in FAILED or PAUSED state", HttpStatus.CONFLICT),
+    CANCEL_NOT_ALLOWED("DOCUMENT_013", "Only documents in PENDING, PROCESSING or PAUSED state can be cancelled", HttpStatus.CONFLICT),
+    PAUSE_NOT_ALLOWED("DOCUMENT_014", "Only documents in PROCESSING state can be paused", HttpStatus.CONFLICT),
+    USER_ERROR_NO_RETRY("DOCUMENT_015", "This error type cannot be retried (user-side issue)", HttpStatus.UNPROCESSABLE_ENTITY),
 
     // Common
     INVALID_REQUEST("COMMON_001", "Invalid request", HttpStatus.BAD_REQUEST),

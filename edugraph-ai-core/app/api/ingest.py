@@ -43,10 +43,13 @@ async def _background_ingest(doc_id: str, course_id: str, filename: str):
         import time as _time
         t0 = _time.perf_counter()
         logger.info(f"[{doc_id}] ► Bước 1/2: trích xuất concept...")
-        await extraction_pipeline.process_document_pipeline(doc_id, course_id, filename)
+        extraction_result = await extraction_pipeline.process_document_pipeline(doc_id, course_id, filename)
+        # Lấy danh sách concept mới để chạy prereq theo incremental mode
+        new_concept_ids = (extraction_result or {}).get("new_concept_ids", None)
         logger.info(
             f"[{doc_id}] ► Bước 2/2: tiên quyết... "
             f"(trích xuất mất {_time.perf_counter() - t0:.1f}s)"
+            + (f" | {len(new_concept_ids)} concept mới" if new_concept_ids else " | full mode")
         )
         async with neo4j_client.driver.session() as session:
             await session.run(
@@ -59,12 +62,13 @@ async def _background_ingest(doc_id: str, course_id: str, filename: str):
                 doc_id=doc_id,
                 course_id=course_id
             )
-        await prereq_pipeline.run_prerequisite_pipeline(course_id)
+        await prereq_pipeline.run_prerequisite_pipeline(course_id, new_concept_ids=new_concept_ids)
         logger.info(f"[{doc_id}] ===== HOÀN TẤT cả 2 bước =====")
-        
+
         query = "MATCH (d:Document {id: $doc_id, course_id: $course_id}) SET d.status = 'DONE', d.updated_at = timestamp()"
         async with neo4j_client.driver.session() as session:
             await session.run(query, doc_id=doc_id, course_id=course_id)
+
     except Exception as e:
         logger.exception(f"[{doc_id}] ✖ LỖI background ingest: {e}")
         query = """
