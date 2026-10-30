@@ -1,6 +1,9 @@
 """Document task ownership for the supported single-worker AI core deployment."""
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentTasks:
@@ -27,7 +30,9 @@ class DocumentTasks:
                 self.tasks.pop(document_id, None)
             # Retrieve unexpected errors so background failures are never unobserved.
             if not completed.cancelled():
-                completed.exception()
+                exc = completed.exception()
+                if exc is not None:
+                    logger.exception("Background document task failed", exc_info=exc)
 
         task.add_done_callback(finished)
 

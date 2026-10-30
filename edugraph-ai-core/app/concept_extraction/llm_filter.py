@@ -125,10 +125,10 @@ async def process_chunk_group(group_idx: int, chunks: List[Dict[str, Any]], cand
             overlap = min(50, len(text) // 4) if len(text) >= 4 else 0
             if overlap <= 0:
                 overlap = 0
-            first_end = min(len(text), boundary + overlap)
-            second_start = max(0, boundary - overlap)
+            first_end = max(1, min(len(text) - 1, boundary + overlap))
+            second_start = max(1, min(len(text) - 1, boundary - overlap))
             if second_start >= first_end:
-                second_start = boundary
+                second_start = max(1, first_end - 1)
             results = []
             for start, end in ((0, first_end), (second_start, len(text))):
                 if end <= start:

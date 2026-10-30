@@ -158,14 +158,19 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
             if (USER_ERROR_HTTP_STATUSES.contains(status)) {
                 return ErrorCategory.USER_ERROR;
             }
-        }
-        // Kiểm tra từ khóa trong message
-        String msg = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
-        for (String keyword : USER_ERROR_KEYWORDS) {
-            if (msg.contains(keyword)) {
-                return ErrorCategory.USER_ERROR;
+            // Chỉ áp dụng keyword matching cho lỗi Python 4xx; lỗi 5xx/infra
+            // không được phân loại USER_ERROR dù message chứa từ khóa.
+            if (status < 500) {
+                String msg = ace.getDetail() == null ? "" : ace.getDetail().toLowerCase();
+                for (String keyword : USER_ERROR_KEYWORDS) {
+                    if (msg.contains(keyword)) {
+                        return ErrorCategory.USER_ERROR;
+                    }
+                }
             }
+            return ErrorCategory.SYSTEM_ERROR;
         }
+        // Lỗi không phải từ Python (network/infra) → luôn retryable
         return ErrorCategory.SYSTEM_ERROR;
     }
 

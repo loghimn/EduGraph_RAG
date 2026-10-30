@@ -29,11 +29,12 @@ async def get_concept_evidence(course_id: str) -> Dict[str, List[str]]:
         data = await result.data()
         return {r["id"]: r["evidence_texts"] for r in data}
 
-async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set = None, changed_concept_ids: set = None):
+async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set | None = None, changed_concept_ids: set | None = None):
     logger.info(f"Bắt đầu pipeline tiên quyết cho {course_id}...")
     if new_concept_ids is not None or changed_concept_ids is not None:
         logger.info(
-            f"[{course_id}] Incremental mode: {len(new_concept_ids)} concept mới "
+            f"[{course_id}] Incremental mode: {len(new_concept_ids or ())} new, "
+            f"{len(changed_concept_ids or ())} changed concepts "
             f"→ chỉ re-judge concept bị ảnh hưởng"
         )
 
