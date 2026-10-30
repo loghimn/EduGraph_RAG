@@ -267,20 +267,20 @@ public class DocumentServiceImpl implements DocumentService {
     /**
      * Tạm dừng pipeline AI đang xử lý tài liệu.
      * Chỉ cho phép khi document đang ở trạng thái PROCESSING.
-     * Python AI-core sẽ đặt cờ cancel trên Neo4j; lần poll tiếp theo sẽ sync lại.
+     * Chờ Python dừng tác vụ trước khi lưu PAUSED.
      */
     @Override
     @Transactional
     public DocumentResponse pauseProcessing(Long courseId, Long documentId) {
         getCourseOwnedByCurrentInstructor(courseId);
 
-        Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId, courseId)
-                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+        Document document = getDocumentForUpdate(courseId, documentId);
 
         if (document.getDocStatus() != UploadStatus.PROCESSING) {
             throw new AppException(ErrorCode.PAUSE_NOT_ALLOWED);
         }
 
+        aiCoreClient.pauseDocument(documentId, courseId, getCurrentUser().getUserId());
         document.setDocStatus(UploadStatus.PAUSED);
         documentRepository.save(document);
 
@@ -301,9 +301,8 @@ public class DocumentServiceImpl implements DocumentService {
 
     /**
      * Hủy bỏ hoàn toàn tài liệu:
-     * 1. Xóa file khỏi Supabase Storage.
-     * 2. Yêu cầu Python xóa Chunk/Concept/edge liên quan trên Neo4j.
-     * 3. Xóa Document record khỏi Postgres (cascade xóa job).
+     * Dừng Python và dọn graph trước khi xóa file Storage.
+     * Giữ Document/job ở CANCELLED để lưu lịch sử.
      *
      * Cho phép khi status là PENDING, PROCESSING, PAUSED hoặc FAILED.
      */
@@ -313,8 +312,7 @@ public class DocumentServiceImpl implements DocumentService {
         User currentUser = getCurrentUser();
         getCourseOwnedByCurrentInstructor(courseId);
 
-        Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId, courseId)
-                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+        Document document = getDocumentForUpdate(courseId, documentId);
 
         UploadStatus currentStatus = document.getDocStatus();
         if (currentStatus == UploadStatus.COMPLETED) {
@@ -324,7 +322,8 @@ public class DocumentServiceImpl implements DocumentService {
             throw new AppException(ErrorCode.DOCUMENT_CANCELLED);
         }
 
-        // Đánh dấu CANCELLED trước để syncProcessingDocuments bỏ qua
+        // The row lock serializes cancellation against trigger/retry/poll writes.
+        aiCoreClient.cancelDocument(documentId, courseId, currentUser.getUserId());
         document.setDocStatus(UploadStatus.CANCELLED);
         documentRepository.save(document);
 
@@ -345,9 +344,6 @@ public class DocumentServiceImpl implements DocumentService {
             }
         }
 
-        // Dọn dẹp Neo4j graph (best-effort qua AI core)
-        aiCoreClient.cancelDocument(documentId, courseId, currentUser.getUserId());
-
         log.info("Document cancelled. documentId={}", documentId);
         return mapToResponse(document);
     }
@@ -367,8 +363,7 @@ public class DocumentServiceImpl implements DocumentService {
         User currentUser = getCurrentUser();
         getCourseOwnedByCurrentInstructor(courseId);
 
-        Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId, courseId)
-                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+        Document document = getDocumentForUpdate(courseId, documentId);
 
         UploadStatus status = document.getDocStatus();
         if (status != UploadStatus.FAILED && status != UploadStatus.PAUSED) {
@@ -401,6 +396,15 @@ public class DocumentServiceImpl implements DocumentService {
         document = documentRepository.findById(documentId).orElseThrow();
         log.info("Document retry triggered. documentId={}", documentId);
         return mapToResponse(document);
+    }
+
+    private Document getDocumentForUpdate(Long courseId, Long documentId) {
+        Document document = documentRepository.findForUpdate(documentId)
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+        if (!document.getCourse().getCourseId().equals(courseId)) {
+            throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
+        }
+        return document;
     }
 
     private MediaType parseMediaType(String contentType) {

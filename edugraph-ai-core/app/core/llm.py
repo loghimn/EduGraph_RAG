@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 llm_telemetry = []
 
+
+def estimate_request_tokens(prompt: str, json_mode: bool = False) -> int:
+    """Use the same input/output reservation for batching and rate limiting."""
+    output_tokens = settings.LLM_JSON_MAX_OUTPUT_TOKENS if json_mode else 900
+    return len(prompt) // 4 + output_tokens
+
 # Lỗi tạm thời (transient) nên retry với exponential backoff trước khi fallback.
 # QUAN TRỌNG: openai SDK KHÔNG ném httpx.* — nó wrap lại thành openai.* exception.
 #   - APIConnectionError: lỗi mạng/timeout (APITimeoutError là subclass của nó)
@@ -114,7 +120,7 @@ class LLMClient:
         estimated_output = (
             settings.LLM_JSON_MAX_OUTPUT_TOKENS if json_mode else 900
         )
-        estimated_tokens = (len(prompt) // 4) + estimated_output
+        estimated_tokens = estimate_request_tokens(prompt, json_mode)
         kwargs = _completion_request_kwargs(model, prompt, json_mode, estimated_output)
         
         await token_limiter.wait_and_deduct(estimated_tokens)

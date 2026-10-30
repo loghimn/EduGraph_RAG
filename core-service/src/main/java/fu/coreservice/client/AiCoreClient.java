@@ -19,13 +19,14 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.client.MultipartBodyBuilder;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.io.IOException;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collections;
@@ -66,8 +67,12 @@ public class AiCoreClient {
                 .defaultHeader("X-Internal-Key", properties.getInternalKey());
 
         if (configureTimeouts) {
-            SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-            requestFactory.setConnectTimeout(Duration.ofMillis(properties.getConnectTimeoutMs()));
+            // HttpURLConnection (SimpleClientHttpRequestFactory) rejects PATCH
+            // before sending it, masking a healthy AI core as AI_001.
+            HttpClient httpClient = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofMillis(properties.getConnectTimeoutMs()))
+                    .build();
+            JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
             requestFactory.setReadTimeout(Duration.ofMillis(properties.getReadTimeoutMs()));
             builder.requestFactory(requestFactory);
         }
@@ -101,7 +106,7 @@ public class AiCoreClient {
     }
 
     /**
-     * POST /ingest — yêu cầu Python chạy pipeline (BackgroundTasks, trả ack ngay).
+     * POST /ingest — yêu cầu Python chạy pipeline (managed task, trả ack ngay).
      */
     public AiIngestResponse triggerIngest(AiIngestRequest request) {
         try {
@@ -136,6 +141,20 @@ public class AiCoreClient {
         }
     }
 
+    public void pauseDocument(Long documentId, Long courseId, Long userId) {
+        try {
+            restClient.patch()
+                    .uri("/documents/{documentId}/pause?course_id={courseId}&user_id={userId}",
+                            documentId, courseId, userId)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(documentId), e);
+        }
+    }
+
     /**
      * DELETE /documents/{doc_id}?course_id=...&user_id=... — yêu cầu Python xóa
      * Chunk, Concept orphan và cạnh liên quan khỏi Neo4j graph.
@@ -156,8 +175,8 @@ public class AiCoreClient {
             }
             throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (RestClientException e) {
-            // AI core offline → log cảnh báo nhưng không block cancel ở Java side
-            log.warn("AI core unreachable during cancel. documentId={}, reason={}", documentId, e.getMessage());
+            // Do not delete Storage or report cancellation until Python confirms stop.
+            throw unavailable(String.valueOf(documentId), e);
         }
     }
 

@@ -4,6 +4,7 @@ import time
 from typing import Dict, Any, List
 from app.db.neo4j_client import neo4j_client
 from app.config import settings
+from app.core.document_tasks import gather_owned
 
 from app.prerequisite.candidate_pairs import build_candidate_pairs
 from app.prerequisite.llm_judge import judge_prerequisites
@@ -111,7 +112,7 @@ async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set = None)
     for tgt_id, cands in candidates_dict.items():
         tasks.append(process_target(tgt_id, cands))
 
-    results = await asyncio.gather(*tasks)
+    results = await gather_owned(*tasks)
 
     for edges in results:
         all_proposed_edges.extend(edges)

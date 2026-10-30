@@ -8,6 +8,7 @@ from app.core.embedding import embed_model
 from app.core.text_utils import normalize_text_unaccent
 from app.config import settings
 from app.db.neo4j_client import neo4j_client
+from app.core.document_tasks import gather_owned, to_thread_owned
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         return chunks, len(pages)
 
     t_io = time.perf_counter()
-    chunks, num_pages = await asyncio.to_thread(_cpu_bound_text_prep)
+    chunks, num_pages = await to_thread_owned(_cpu_bound_text_prep)
     logger.info(
         f"[{doc_id}] ✔ Load/Clean/Chunk xong: {num_pages} trang → {len(chunks)} chunks "
         f"({time.perf_counter() - t_io:.2f}s)"
@@ -98,7 +99,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
 
     # KeyBERT Candidates (to_thread)
     t_cand = time.perf_counter()
-    candidates = await asyncio.to_thread(extract_candidates, chunks, embeddings)
+    candidates = await to_thread_owned(extract_candidates, chunks, embeddings)
     logger.info(
         f"[{doc_id}] ✔ KeyBERT candidates xong: {sum(len(c) for c in candidates)} ứng viên "
         f"({time.perf_counter() - t_cand:.2f}s)"
@@ -132,7 +133,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         tasks.append(process_and_report(i, group_chunks, group_cands))
 
     t_llm = time.perf_counter()
-    group_results = await asyncio.gather(*tasks)
+    group_results = await gather_owned(*tasks)
     logger.info(
         f"[{doc_id}] ✔ LLM filter xong ({time.perf_counter() - t_llm:.2f}s)"
     )
@@ -187,7 +188,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
 
         # Gộp và xử lý
         t_merge = time.perf_counter()
-        merged_new, merge_cands = await asyncio.to_thread(merge_concepts, new_concepts, db_concepts)
+        merged_new, merge_cands = await to_thread_owned(merge_concepts, new_concepts, db_concepts)
         logger.info(
             f"[{doc_id}] ✔ Merge xong: {len(new_concepts)} → {len(merged_new)} concept mới "
             f"({time.perf_counter() - t_merge:.2f}s)"
@@ -218,7 +219,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         # MENTIONS (b): từ Scanner
         all_concepts = db_concepts + merged_new
         final_mentions = {}
-        scanned_mentions = await asyncio.to_thread(scan_mentions, chunks, all_concepts)
+        scanned_mentions = await to_thread_owned(scan_mentions, chunks, all_concepts)
         logger.info(
             f"[{doc_id}] ✔ Scan mentions: {len(scanned_mentions)} từ scanner + {len(mentions)} từ LLM"
         )

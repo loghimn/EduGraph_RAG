@@ -1,9 +1,11 @@
 import asyncio
 import os
 import json
+import logging
 from typing import List, Dict, Any, Tuple
 from app.config import settings
-from app.core.llm import llm_client
+from app.core.llm import llm_client, estimate_request_tokens
+from app.core.rate_limiter import token_limiter
 from app.core.cache import cache, generate_cache_key
 from app.core.text_utils import normalize_text_unaccent
 from app.concept_extraction.mention_scanner import verify_and_map_evidence
@@ -25,6 +27,22 @@ PROMPT_TEMPLATE = "\n".join([line for line in PROMPT_LINES if not line.startswit
 
 # Giới hạn số gọi LLM song song
 semaphore = asyncio.Semaphore(settings.LLM_CONCURRENCY)
+logger = logging.getLogger(__name__)
+
+# Leave room for the JSON formatting repair instruction appended by generate().
+JSON_REPAIR_RESERVE_TOKENS = 128
+
+
+def combine_group_results(results):
+    concepts = []
+    stats = {"total_returned": 0, "dropped_no_evidence": 0,
+             "dropped_format": 0, "dropped_list": []}
+    for group_concepts, group_stats in results:
+        concepts.extend(group_concepts)
+        for key in ("total_returned", "dropped_no_evidence", "dropped_format"):
+            stats[key] += group_stats[key]
+        stats["dropped_list"].extend(group_stats["dropped_list"])
+    return concepts, stats
 
 def determine_language(canonical: str, aliases: List[str], llm_lang: str) -> str:
     """Xác định mixed dựa vào dấu tiếng Việt hoặc heuristic."""
@@ -64,10 +82,44 @@ async def process_chunk_group(group_idx: int, chunks: List[Dict[str, Any]], cand
             flat_candidates.update(candidates_group[i])
             
     merged_text = "\n\n".join(text_blocks)
-    merged_candidates = ", ".join(list(flat_candidates))
+    merged_candidates = ", ".join(sorted(flat_candidates))
     
     # 2. Thay thế vào prompt
     prompt = PROMPT_TEMPLATE.replace("<<TEXT>>", merged_text).replace("<<CANDIDATES>>", merged_candidates)
+
+    # Split before generate(): switching providers cannot fix a local TPM overflow.
+    estimated = estimate_request_tokens(prompt, json_mode=True)
+    if estimated + JSON_REPAIR_RESERVE_TOKENS > token_limiter.tpm_limit:
+        logger.info("Splitting concept group %s: estimated=%s, limit=%s, chunks=%s",
+                    group_idx, estimated, token_limiter.tpm_limit, len(chunks))
+        if len(chunks) > 1:
+            middle = len(chunks) // 2
+            results = []
+            for start, end in ((0, middle), (middle, len(chunks))):
+                results.append(await process_chunk_group(
+                    group_idx, chunks[start:end], candidates_group[start:end]))
+            return combine_group_results(results)
+
+        # A single long chunk can also overflow. Keep its identity and translate
+        # evidence offsets back into the original text after processing each half.
+        if len(chunks) == 1 and len(chunks[0]["text"]) > 1:
+            text = chunks[0]["text"]
+            middle = len(text) // 2
+            results = []
+            for start, end in ((0, middle), (middle, len(text))):
+                part = dict(chunks[0], text=text[start:end])
+                concepts, stats = await process_chunk_group(
+                    group_idx, [part], candidates_group[:1])
+                for concept in concepts:
+                    concept["evidence_start"] += start
+                    concept["evidence_end"] += start
+                results.append((concepts, stats))
+            return combine_group_results(results)
+
+        raise ValueError(
+            "Concept filter prompt cannot fit the token budget even after splitting. "
+            "Reduce candidate/template size or LLM_JSON_MAX_OUTPUT_TOKENS."
+        )
     
     # 3. Cache key
     cache_data = {"text": merged_text, "candidates": sorted(list(flat_candidates))}

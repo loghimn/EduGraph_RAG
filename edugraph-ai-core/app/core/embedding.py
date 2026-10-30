@@ -2,6 +2,7 @@ import asyncio
 import torch
 from sentence_transformers import SentenceTransformer
 from app.config import settings
+from app.core.document_tasks import to_thread_owned
 
 class EmbeddingModel:
     _instance = None
@@ -56,7 +57,7 @@ class EmbeddingModel:
             while batch_size >= 1:
                 try:
                     # Chạy qua to_thread để không chặn event loop
-                    embeddings = await asyncio.to_thread(
+                    embeddings = await to_thread_owned(
                         self._model.encode, texts, batch_size=batch_size, normalize_embeddings=True
                     )
                     return embeddings.tolist() if hasattr(embeddings, 'tolist') else embeddings

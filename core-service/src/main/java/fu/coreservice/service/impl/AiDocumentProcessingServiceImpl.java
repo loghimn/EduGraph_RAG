@@ -21,8 +21,9 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Optional;
@@ -63,11 +64,12 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     @Override
     public void triggerPipelineAsync(Long courseId, Long documentId, Long ownerId, String filename,
                                      MediaType mediaType, Resource content) {
-        pipelineExecutor.submit(() -> runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0));
+        Long jobId = findLatestJob(documentId).map(DocumentProcessingJob::getDocumentProcessingJobId).orElse(null);
+        pipelineExecutor.submit(() -> runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0, false, jobId));
     }
 
     private void runPipeline(Long courseId, Long documentId, Long ownerId, String filename,
-                             MediaType mediaType, Resource content, int attemptNumber) {
+                             MediaType mediaType, Resource content, int attemptNumber, boolean restart, Long jobId) {
         try {
             // Retry backoff: 0s, 5s, 15s trước khi thử lại
             if (attemptNumber > 0) {
@@ -75,16 +77,40 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                 log.info("Retrying AI pipeline. documentId={}, attempt={}, backoffMs={}", documentId, attemptNumber, backoffMs);
                 Thread.sleep(backoffMs);
             }
-            aiCoreClient.storeDocumentFile(documentId, filename, mediaType, content);
-            aiCoreClient.triggerIngest(AiIngestRequest.builder()
+            // Hold the same row lock as pause/cancel through the upstream calls.
+            // A queued/backoff worker must not restart a cancelled document.
+            transactionTemplate.executeWithoutResult(tx -> {
+                Document document = documentRepository.findForUpdate(documentId).orElse(null);
+                if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
+                    return;
+                }
+                try {
+                    aiCoreClient.storeDocumentFile(documentId, filename, mediaType, content);
+                } catch (AiCoreException e) {
+                    // An earlier /ingest ACK may have timed out. Python rejects
+                    // overwriting a running file; /ingest safely acknowledges it.
+                    if (e.getHttpStatus() != 409) {
+                        throw e;
+                    }
+                }
+                aiCoreClient.triggerIngest(AiIngestRequest.builder()
                     .documentId(String.valueOf(documentId))
                     .courseId(String.valueOf(courseId))
                     .userId(String.valueOf(ownerId))
                     .filename(filename)
+                    .restart(restart)
+                    .runId(String.valueOf(jobId))
                     .build());
+                document.setDocStatus(UploadStatus.PROCESSING);
+                documentRepository.save(document);
+                findLatestJob(documentId).ifPresent(job -> {
+                    job.setJobStatus(JobStatus.RUNNING);
+                    documentProcessingJobRepository.save(job);
+                });
+            });
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            markFailed(documentId, "Pipeline interrupted during retry backoff", ErrorCategory.SYSTEM_ERROR);
+            markFailed(documentId, "Pipeline interrupted during retry backoff", ErrorCategory.SYSTEM_ERROR, jobId);
             return;
         } catch (RuntimeException e) {
             ErrorCategory category = classifyError(e);
@@ -94,40 +120,27 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                 // SYSTEM_ERROR + còn lượt retry → thử lại
                 log.warn("AI pipeline failed (attempt {}/{}), will retry. documentId={}, reason={}",
                         attemptNumber + 1, MAX_RETRY_ATTEMPTS + 1, documentId, e.getMessage());
-                incrementRetryCount(documentId);
-                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, attemptNumber + 1);
+                incrementRetryCount(documentId, jobId);
+                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, attemptNumber + 1, restart, jobId);
             } else {
                 // USER_ERROR hoặc đã hết retry → FAILED vĩnh viễn
                 log.error("AI pipeline trigger failed permanently. documentId={}, category={}, attempt={}, reason={}",
                         documentId, category, attemptNumber + 1, e.getMessage());
-                markFailed(documentId, e.getMessage(), category);
+                markFailed(documentId, e.getMessage(), category, jobId);
             }
             return;
         }
 
-        markProcessing(documentId);
-        log.info("AI pipeline processing. documentId={}", documentId);
     }
 
-    private void markProcessing(Long documentId) {
+    private void markFailed(Long documentId, String message, ErrorCategory category, Long jobId) {
         transactionTemplate.executeWithoutResult(status -> {
-            documentRepository.findById(documentId).ifPresent(document -> {
-                document.setDocStatus(UploadStatus.PROCESSING);
-                documentRepository.save(document);
-            });
-            findLatestJob(documentId).ifPresent(job -> {
-                job.setJobStatus(JobStatus.RUNNING);
-                documentProcessingJobRepository.save(job);
-            });
-        });
-    }
-
-    private void markFailed(Long documentId, String message, ErrorCategory category) {
-        transactionTemplate.executeWithoutResult(status -> {
-            documentRepository.findById(documentId).ifPresent(document -> {
-                document.setDocStatus(UploadStatus.FAILED);
-                documentRepository.save(document);
-            });
+            Document document = documentRepository.findForUpdate(documentId).orElse(null);
+            if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
+                return;
+            }
+            document.setDocStatus(UploadStatus.FAILED);
+            documentRepository.save(document);
             findLatestJob(documentId).ifPresent(job -> {
                 job.setJobStatus(JobStatus.FAILED);
                 job.setErrorMessage(truncate(message));
@@ -141,7 +154,7 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     private ErrorCategory classifyError(RuntimeException e) {
         // AiCoreException mang HTTP status gốc từ Python
         if (e instanceof fu.coreservice.exception.AiCoreException ace) {
-            int status = ace.getStatus();
+            int status = ace.getHttpStatus();
             if (USER_ERROR_HTTP_STATUSES.contains(status)) {
                 return ErrorCategory.USER_ERROR;
             }
@@ -162,13 +175,17 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                 .orElse(0);
     }
 
-    private void incrementRetryCount(Long documentId) {
-        transactionTemplate.executeWithoutResult(status ->
-                findLatestJob(documentId).ifPresent(job -> {
-                    job.setRetryCount(job.getRetryCount() + 1);
-                    documentProcessingJobRepository.save(job);
-                })
-        );
+    private void incrementRetryCount(Long documentId, Long jobId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Document document = documentRepository.findForUpdate(documentId).orElse(null);
+            if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
+                return;
+            }
+            findLatestJob(documentId).ifPresent(job -> {
+                job.setRetryCount(job.getRetryCount() + 1);
+                documentProcessingJobRepository.save(job);
+            });
+        });
     }
 
     /**
@@ -178,21 +195,36 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     public void triggerPipelineRetry(Long courseId, Long documentId, Long ownerId, String filename,
                                      MediaType mediaType, Resource content) {
         // Tạo job mới để track lần retry này
-        transactionTemplate.executeWithoutResult(status -> {
-            documentRepository.findById(documentId).ifPresent(document -> {
-                document.setDocStatus(UploadStatus.PENDING);
-                documentRepository.save(document);
-                DocumentProcessingJob newJob = DocumentProcessingJob.builder()
-                        .document(document)
-                        .jobType(JobType.NONE)
-                        .jobStatus(JobStatus.QUEUED)
-                        .retryCount(0)
-                        .build();
-                documentProcessingJobRepository.save(newJob);
-            });
+        Long jobId = transactionTemplate.execute(status -> {
+            Document document = documentRepository.findForUpdate(documentId).orElseThrow();
+            document.setDocStatus(UploadStatus.PENDING);
+            documentRepository.save(document);
+            DocumentProcessingJob newJob = DocumentProcessingJob.builder()
+                    .document(document)
+                    .jobType(JobType.NONE)
+                    .jobStatus(JobStatus.QUEUED)
+                    .retryCount(0)
+                    .build();
+            return documentProcessingJobRepository.save(newJob).getDocumentProcessingJobId();
         });
-        // Chạy pipeline từ đầu (attempt=0)
-        pipelineExecutor.submit(() -> runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0));
+        // The outer retry transaction owns the row lock. Launch only after commit.
+        Runnable trigger = () -> pipelineExecutor.submit(() -> runPipeline(
+                courseId, documentId, ownerId, filename, mediaType, content, 0, true, jobId));
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    trigger.run();
+                }
+            });
+        } else {
+            trigger.run();
+        }
+    }
+
+    private boolean isCurrentJob(Long documentId, Long jobId) {
+        return jobId != null && findLatestJob(documentId)
+                .map(job -> jobId.equals(job.getDocumentProcessingJobId())).orElse(false);
     }
 
     private Optional<DocumentProcessingJob> findLatestJob(Long documentId) {
@@ -212,27 +244,22 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
      * Mapping: DONE -> COMPLETED, FAILED -> FAILED, PROCESSING/UPLOADED -> giữ nguyên.
      * Bỏ qua document CANCELLED hoặc PAUSED (không cho AI core override trạng thái đã set).
      */
-    @Transactional
     @Scheduled(fixedDelayString = "${ai-core.status-poll-interval-ms:15000}")
     @Override
     public void syncProcessingDocuments() {
         List<Document> processingDocuments = documentRepository.findByDocStatus(UploadStatus.PROCESSING);
         for (Document document : processingDocuments) {
             Long documentId = document.getDocumentId();
-            Long courseId = document.getCourse().getCourseId();
-
-            // Reload để lấy status mới nhất (tránh race condition với pause/cancel)
-            UploadStatus currentStatus = documentRepository.findById(documentId)
-                    .map(Document::getDocStatus)
-                    .orElse(null);
-            if (currentStatus == UploadStatus.CANCELLED || currentStatus == UploadStatus.PAUSED) {
-                log.debug("Skipping sync for {} document. documentId={}", currentStatus, documentId);
-                continue;
-            }
-
             try {
-                AiDocumentStatusResponse status = aiCoreClient.getDocumentStatus(documentId, courseId);
-                applyStatus(document, status);
+                transactionTemplate.executeWithoutResult(tx -> {
+                    Document current = documentRepository.findForUpdate(documentId).orElse(null);
+                    if (current == null || current.getDocStatus() != UploadStatus.PROCESSING) {
+                        return;
+                    }
+                    AiDocumentStatusResponse status = aiCoreClient.getDocumentStatus(
+                            documentId, current.getCourse().getCourseId());
+                    applyStatus(current, status);
+                });
             } catch (AppException e) {
                 // AI core không phản hồi — giữ nguyên trạng thái, thử lại ở lần poll sau
                 log.warn("Skipping status sync, AI core unavailable. documentId={}", documentId);
@@ -248,6 +275,17 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
         JobType currentStep = parseCurrentStep(status, document.getDocumentId());
         Optional<DocumentProcessingJob> latestJob = findLatestJob(document.getDocumentId());
         switch (pythonStatus) {
+            case "PAUSED" -> {
+                document.setDocStatus(UploadStatus.PAUSED);
+                documentRepository.save(document);
+                latestJob.ifPresent(job -> {
+                    job.setJobStatus(JobStatus.PAUSED);
+                    documentProcessingJobRepository.save(job);
+                });
+            }
+            // A cancel request may have timed out after Python stopped. Leave
+            // Java retryable until DELETE is repeated and Storage is cleaned up.
+            case "CANCELLED" -> log.warn("Python cancelled document {}; repeat DELETE to finish Storage cleanup", document.getDocumentId());
             case "DONE" -> {
                 document.setDocStatus(UploadStatus.COMPLETED);
                 documentRepository.save(document);
