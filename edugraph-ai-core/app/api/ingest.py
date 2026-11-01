@@ -130,7 +130,8 @@ async def ingest_document(
             ):
                 raise HTTPException(status_code=409, detail="Document is paused; explicit retry required")
             await session.run(
-                "MATCH (d:Document {id: $doc_id, course_id: $course_id}) SET d.run_id = $run_id",
+                "MATCH (d:Document {id: $doc_id, course_id: $course_id}) "
+                "SET d.status = 'PROCESSING', d.run_id = $run_id, d.error = null, d.updated_at = timestamp()",
                 doc_id=req.document_id, course_id=req.course_id, run_id=req.run_id)
         document_tasks.start(req.document_id, lambda: _background_ingest(
             req.document_id, req.course_id, req.filename))

@@ -168,6 +168,16 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             f"[{doc_id}] ✔ Đã nạp {len(db_concepts)} concept hiện có của course để merge"
         )
 
+        # Capture concepts previously mentioned by this document before its old
+        # chunks/mentions are replaced, so prerequisite inference can re-judge
+        # concepts that lose evidence during re-ingestion.
+        async with neo4j_client.driver.session() as session:
+            _res = await session.run(
+                "MATCH (ch:Chunk {doc_id: $doc_id})-[:MENTIONS]->(c:Concept {course_id: $course_id}) "
+                "RETURN DISTINCT c.id AS id",
+                doc_id=doc_id, course_id=course_id)
+            old_mentioned_concept_ids = {r["id"] for r in await _res.data() if r.get("id")}
+
         # Embed concepts before merging so cross-language cosine matching can run.
         concept_texts_to_embed = []
         for nc in new_concepts:
@@ -241,7 +251,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         # targets that gained new evidence must be re-judged even when the new
         # concept is absent from their capped candidate list.
         mentioned_keys = {m.get("concept_key") for m in mentions if m.get("concept_key")}
-        changed_concept_ids = set()
+        changed_concept_ids = set(old_mentioned_concept_ids)
         for c in db_concepts:
             if c.get("key") in mentioned_keys and c.get("id"):
                 changed_concept_ids.add(c["id"])

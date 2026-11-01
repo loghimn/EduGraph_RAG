@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 
 /**
  * Điều phối pipeline xử lý tài liệu trên AI core (Python):
@@ -51,6 +52,9 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     private final TransactionTemplate transactionTemplate;
 
     private final ExecutorService pipelineExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+    private static final int MAX_PIPELINE_CONCURRENCY = 4;
+    private final Semaphore pipelineConcurrency = new Semaphore(MAX_PIPELINE_CONCURRENCY);
 
     private static final int MAX_RETRY_ATTEMPTS = 3;
     // Lỗi Python 4xx do người dùng — KHÔNG retry (permanent)
@@ -77,9 +81,13 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                 log.info("Retrying AI pipeline. documentId={}, attempt={}, backoffMs={}", documentId, attemptNumber, backoffMs);
                 Thread.sleep(backoffMs);
             }
-            // Hold the same row lock as pause/cancel through the upstream calls.
-            // A queued/backoff worker must not restart a cancelled document.
-            transactionTemplate.executeWithoutResult(tx -> {
+            // Limit concurrent workers inside the locked (transaction + HTTP upload)
+            // section so they cannot exhaust the JDBC connection pool.
+            pipelineConcurrency.acquire();
+            try {
+                // Hold the same row lock as pause/cancel through the upstream calls.
+                // A queued/backoff worker must not restart a cancelled document.
+                transactionTemplate.executeWithoutResult(tx -> {
                 Document document = documentRepository.findForUpdate(documentId).orElse(null);
                 if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
                     return;
@@ -108,6 +116,9 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                     documentProcessingJobRepository.save(job);
                 });
             });
+            } finally {
+                pipelineConcurrency.release();
+            }
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             markFailed(documentId, "Pipeline interrupted during retry backoff", ErrorCategory.SYSTEM_ERROR, jobId);
