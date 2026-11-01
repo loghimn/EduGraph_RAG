@@ -69,6 +69,12 @@ async def _background_ingest(doc_id: str, course_id: str, filename: str):
                 course_id=course_id
             )
         await prereq_pipeline.run_prerequisite_pipeline(course_id, new_concept_ids=new_concept_ids, changed_concept_ids=changed_concept_ids)
+        # Clear persisted affected IDs now that prerequisite inference succeeded.
+        async with neo4j_client.driver.session() as session:
+            await session.run(
+                "MATCH (d:Document {id: $doc_id, course_id: $course_id}) "
+                "SET d.pending_affected_concept_ids = null",
+                doc_id=doc_id, course_id=course_id)
         logger.info(f"[{doc_id}] ===== HOÀN TẤT cả 2 bước =====")
 
         query = "MATCH (d:Document {id: $doc_id, course_id: $course_id}) SET d.status = 'DONE', d.updated_at = timestamp()"

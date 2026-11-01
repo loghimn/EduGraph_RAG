@@ -60,7 +60,8 @@ async def save_ingestion_transaction(
     course_id: str,
     chunks: List[Dict[str, Any]],
     concepts: List[Dict[str, Any]],
-    mentions: List[Dict[str, Any]]
+    mentions: List[Dict[str, Any]],
+    affected_concept_ids: List[str] = None
 ):
     """
     Ghi MỘT transaction duy nhất bằng execute_write (idempotent).
@@ -264,6 +265,12 @@ async def save_ingestion_transaction(
         """, course_id=course_id)
         deleted_orphans = (await res.consume()).counters.nodes_deleted
         
+        res = await tx.run("""
+        MATCH (d:Document {id: $doc_id, course_id: $course_id})
+        SET d.pending_affected_concept_ids = $affected
+        """, doc_id=doc_id, course_id=course_id, affected=list(affected_concept_ids) if affected_concept_ids else None)
+        await res.consume()
+
         res = await tx.run("""
         MERGE (course:Course {id: $course_id})
         SET course.version = coalesce(course.version, 0) + 1

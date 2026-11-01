@@ -177,6 +177,13 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
                 "RETURN DISTINCT c.id AS id",
                 doc_id=doc_id, course_id=course_id)
             old_mentioned_concept_ids = {r["id"] for r in await _res.data() if r.get("id")}
+            _pres = await session.run(
+                "MATCH (d:Document {id: $doc_id, course_id: $course_id}) "
+                "RETURN d.pending_affected_concept_ids AS ids",
+                doc_id=doc_id, course_id=course_id)
+            _prow = await _pres.single()
+            if _prow and _prow.get("ids"):
+                old_mentioned_concept_ids |= set(_prow["ids"])
 
         # Embed concepts before merging so cross-language cosine matching can run.
         concept_texts_to_embed = []
@@ -276,7 +283,8 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             course_id=course_id,
             chunks=chunks,
             concepts=merged_new,
-            mentions=mentions
+            mentions=mentions,
+            affected_concept_ids=list(changed_concept_ids)
         )
 
         logger.info(
