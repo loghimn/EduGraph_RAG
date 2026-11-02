@@ -31,10 +31,12 @@ async def lifespan(app: FastAPI):
     from app.api.ingest import recover_processing_documents
     await recover_processing_documents()
     
-    yield
-    
-    # Cleanup
-    await neo4j_client.close()
+    try:
+        yield
+    finally:
+        from app.core.document_tasks import document_tasks
+        await document_tasks.shutdown()
+        await neo4j_client.close()
 
 app = FastAPI(title="EduGraph AI Core", lifespan=lifespan)
 

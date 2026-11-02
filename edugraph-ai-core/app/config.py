@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # Embedding Config
     EMBEDDING_DEVICE: Literal["auto", "cuda", "cpu"] = "auto"
-    EMBED_BATCH_SIZE: int = 8
+    EMBED_BATCH_SIZE: int = 32
 
     # Extraction Constants
     CHUNK_TOKENS: int = 500

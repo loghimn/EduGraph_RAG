@@ -167,6 +167,51 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
         }
     }
 
+    @Override
+    public void deleteFile(String filePath) {
+        String url = supabaseStorageConfig.getUrl()
+                + "/storage/v1/object/"
+                + supabaseStorageConfig.getBucketName()
+                + "/" + filePath;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("apikey", supabaseStorageConfig.getSecretKey());
+        headers.set("Authorization", "Bearer " + supabaseStorageConfig.getSecretKey());
+
+        try {
+            supabaseRestTemplate.exchange(url, HttpMethod.DELETE, new HttpEntity<>(headers), String.class);
+            log.info("Deleted file from Supabase. path={}", filePath);
+        } catch (RestClientException e) {
+            log.warn("Failed to delete file from Supabase (best-effort). path={}, reason={}", filePath, e.getMessage());
+        }
+    }
+
+    @Override
+    public byte[] downloadFile(String filePath) {
+        String url = supabaseStorageConfig.getUrl()
+                + "/storage/v1/object/"
+                + supabaseStorageConfig.getBucketName()
+                + "/" + filePath;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("apikey", supabaseStorageConfig.getSecretKey());
+        headers.set("Authorization", "Bearer " + supabaseStorageConfig.getSecretKey());
+
+        try {
+            ResponseEntity<byte[]> response = supabaseRestTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(headers), byte[].class);
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                throw new AppException(ErrorCode.FILE_READ_FAILED);
+            }
+            log.info("Downloaded file from Supabase for retry. path={}, bytes={}", filePath,
+                    response.getBody().length);
+            return response.getBody();
+        } catch (RestClientException e) {
+            log.error("Failed to download file from Supabase for retry. path={}, reason={}", filePath, e.getMessage());
+            throw new AppException(ErrorCode.FILE_READ_FAILED);
+        }
+    }
+
     private String getFileExtension(String filename) {
 
         if (filename == null || filename.isBlank()) {

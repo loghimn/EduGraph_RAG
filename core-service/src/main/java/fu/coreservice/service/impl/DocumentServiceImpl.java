@@ -1,5 +1,6 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.document.DocumentDownloadResponse;
 import fu.coreservice.dto.document.DocumentProcessingResponse;
@@ -45,6 +46,7 @@ public class DocumentServiceImpl implements DocumentService {
     private final SupabaseStorageService supabaseStorageService;
     private final UserRepository userRepository;
     private final AiDocumentProcessingService aiDocumentProcessingService;
+    private final AiCoreClient aiCoreClient;
 
     @Override
     @Transactional
@@ -203,12 +205,15 @@ public class DocumentServiceImpl implements DocumentService {
                 .build();
     }
 
+    private User getCurrentUser() {
+        String email = SecurityUtils.getCurrentUserEmail();
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+    }
+
     private void getCourseOwnedByCurrentInstructor(Long courseId) {
 
-        String email = SecurityUtils.getCurrentUserEmail();
-
-        User currentUser = userRepository.findByEmail(email)
-                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        User currentUser = getCurrentUser();
 
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
@@ -253,6 +258,168 @@ public class DocumentServiceImpl implements DocumentService {
         } else {
             trigger.run();
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pause
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Tạm dừng pipeline AI đang xử lý tài liệu.
+     * Chỉ cho phép khi document đang ở trạng thái PROCESSING.
+     * Chờ Python dừng tác vụ trước khi lưu PAUSED.
+     */
+    @Override
+    @Transactional
+    public DocumentResponse pauseProcessing(Long courseId, Long documentId) {
+        getCourseOwnedByCurrentInstructor(courseId);
+
+        Document document = getDocumentForUpdate(courseId, documentId);
+
+        if (document.getDocStatus() != UploadStatus.PROCESSING) {
+            throw new AppException(ErrorCode.PAUSE_NOT_ALLOWED);
+        }
+
+        aiCoreClient.pauseDocument(documentId, courseId, getCurrentUser().getUserId());
+        document.setDocStatus(UploadStatus.PAUSED);
+        documentRepository.save(document);
+
+        documentProcessingJobRepository
+                .findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(documentId)
+                .ifPresent(job -> {
+                    job.setJobStatus(JobStatus.PAUSED);
+                    documentProcessingJobRepository.save(job);
+                });
+
+        log.info("Document processing paused. documentId={}", documentId);
+        return mapToResponse(document);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Cancel
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Hủy bỏ hoàn toàn tài liệu:
+     * Dừng Python và dọn graph trước khi xóa file Storage.
+     * Giữ Document/job ở CANCELLED để lưu lịch sử.
+     *
+     * Cho phép khi status là PENDING, PROCESSING, PAUSED hoặc FAILED.
+     */
+    @Override
+    @Transactional
+    public DocumentResponse cancelDocument(Long courseId, Long documentId) {
+        User currentUser = getCurrentUser();
+        getCourseOwnedByCurrentInstructor(courseId);
+
+        Document document = getDocumentForUpdate(courseId, documentId);
+
+        UploadStatus currentStatus = document.getDocStatus();
+        if (currentStatus == UploadStatus.COMPLETED) {
+            throw new AppException(ErrorCode.CANCEL_NOT_ALLOWED);
+        }
+        if (currentStatus == UploadStatus.CANCELLED) {
+            throw new AppException(ErrorCode.DOCUMENT_CANCELLED);
+        }
+
+        // The row lock serializes cancellation against trigger/retry/poll writes.
+        aiCoreClient.cancelDocument(documentId, courseId, currentUser.getUserId());
+        document.setDocStatus(UploadStatus.CANCELLED);
+        documentRepository.save(document);
+
+        documentProcessingJobRepository
+                .findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(documentId)
+                .ifPresent(job -> {
+                    job.setJobStatus(JobStatus.CANCELLED);
+                    documentProcessingJobRepository.save(job);
+                });
+
+        // Dọn dẹp Supabase (best-effort, không throw nếu file đã bị xóa).
+        // Chạy sau commit để tránh mất file khi transaction rollback.
+        String storagePath = document.getFileUrlPath();
+        Runnable deleteStorage = () -> {
+            if (storagePath == null) {
+                return;
+            }
+            try {
+                supabaseStorageService.deleteFile(storagePath);
+            } catch (Exception e) {
+                log.warn("Failed to delete Supabase file during cancel. documentId={}, path={}, reason={}",
+                        documentId, storagePath, e.getMessage());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    deleteStorage.run();
+                }
+            });
+        } else {
+            deleteStorage.run();
+        }
+
+        log.info("Document cancelled. documentId={}", documentId);
+        return mapToResponse(document);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Retry
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Thử lại pipeline AI cho tài liệu bị FAILED hoặc PAUSED.
+     * Từ chối nếu lỗi trước đó là USER_ERROR (không thể sửa bằng retry).
+     * File được tải lại từ Supabase Storage để truyền sang Python.
+     */
+    @Override
+    @Transactional
+    public DocumentResponse retryProcessing(Long courseId, Long documentId) {
+        User currentUser = getCurrentUser();
+        getCourseOwnedByCurrentInstructor(courseId);
+
+        Document document = getDocumentForUpdate(courseId, documentId);
+
+        UploadStatus status = document.getDocStatus();
+        if (status != UploadStatus.FAILED && status != UploadStatus.PAUSED) {
+            throw new AppException(ErrorCode.RETRY_NOT_ALLOWED);
+        }
+
+        // Kiểm tra loại lỗi — USER_ERROR không được retry
+        documentProcessingJobRepository
+                .findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(documentId)
+                .ifPresent(job -> {
+                    if (job.getErrorCategory() == ErrorCategory.USER_ERROR) {
+                        throw new AppException(ErrorCode.USER_ERROR_NO_RETRY);
+                    }
+                });
+
+        String filename = document.getFileName() != null ? document.getFileName() : "document";
+        MediaType mediaType = parseMediaType(document.getFileType());
+
+        // Tải lại nội dung file từ Supabase để truyền cho Python
+        byte[] fileBytes = supabaseStorageService.downloadFile(document.getFileUrlPath());
+        Resource content = new ByteArrayResource(fileBytes) {
+            @Override public String getFilename() { return filename; }
+        };
+
+        // triggerPipelineRetry tạo job mới + reset status về PENDING trước khi chạy
+        aiDocumentProcessingService.triggerPipelineRetry(
+                courseId, documentId, currentUser.getUserId(), filename, mediaType, content);
+
+        // Reload để trả status mới nhất
+        document = documentRepository.findById(documentId).orElseThrow();
+        log.info("Document retry triggered. documentId={}", documentId);
+        return mapToResponse(document);
+    }
+
+    private Document getDocumentForUpdate(Long courseId, Long documentId) {
+        Document document = documentRepository.findForUpdate(documentId)
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+        if (!document.getCourse().getCourseId().equals(courseId)) {
+            throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
+        }
+        return document;
     }
 
     private MediaType parseMediaType(String contentType) {

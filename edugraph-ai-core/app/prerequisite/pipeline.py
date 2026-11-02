@@ -4,6 +4,7 @@ import time
 from typing import Dict, Any, List
 from app.db.neo4j_client import neo4j_client
 from app.config import settings
+from app.core.document_tasks import gather_owned
 
 from app.prerequisite.candidate_pairs import build_candidate_pairs
 from app.prerequisite.llm_judge import judge_prerequisites
@@ -28,9 +29,15 @@ async def get_concept_evidence(course_id: str) -> Dict[str, List[str]]:
         data = await result.data()
         return {r["id"]: r["evidence_texts"] for r in data}
 
-async def run_prerequisite_pipeline(course_id: str):
-    logger.info(f"B\u1eaft \u0111\u1ea7u pipeline ti\u00ean quy\u1ebft cho {course_id}...")
-    
+async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set | None = None, changed_concept_ids: set | None = None):
+    logger.info(f"Bắt đầu pipeline tiên quyết cho {course_id}...")
+    if new_concept_ids is not None or changed_concept_ids is not None:
+        logger.info(
+            f"[{course_id}] Incremental mode: {len(new_concept_ids or ())} new, "
+            f"{len(changed_concept_ids or ())} changed concepts "
+            f"→ chỉ re-judge concept bị ảnh hưởng"
+        )
+
     t_start = time.perf_counter()
 
     # 1. candidate_pairs
@@ -43,38 +50,62 @@ async def run_prerequisite_pipeline(course_id: str):
         f"({num_with_cands} co ung vien, tong {total_cands} cap) ({time.perf_counter() - t0:.2f}s)"
     )
 
+    # ── INCREMENTAL FILTER ───────────────────────────────────────────────────────
+    # Chỉ re-judge target concept nếu:
+    #   (a) Bản thân là concept mới, HOẶC
+    #   (b) Có ít nhất 1 candidate mới trong danh sách ứng viên của nó.
+    # Concept cũ hoàn toàn không liên quan → bỏ qua, giữ nguyên cạnh cũ trên DB.
+    if new_concept_ids is not None or changed_concept_ids is not None:
+        affected_ids = set(new_concept_ids or ()) | set(changed_concept_ids or ())
+        filtered_dict = {}
+        skipped = 0
+        for tgt_id, cands in candidates_dict.items():
+            cand_ids = {c["id"] for c in cands}
+            if tgt_id in affected_ids or cand_ids & affected_ids:
+                filtered_dict[tgt_id] = cands
+            else:
+                skipped += 1
+        logger.info(
+            f"[{course_id}] Incremental filter: {len(filtered_dict)} cần judge, "
+            f"{skipped} concept cũ bỏ qua (giữ cạnh cũ)"
+        )
+        candidates_dict = filtered_dict
+    # ────────────────────────────────────────────────────────────────────────────
+
     t0 = time.perf_counter()
     evidence_dict = await get_concept_evidence(course_id)
     logger.info(
         f"[{course_id}] Evidence: {len(evidence_dict)} concept co evidence "
         f"({time.perf_counter() - t0:.2f}s)"
     )
-    
-    # Map \u0111\u1ec3 tra c\u1ee9u target info nhanh
+
+    # Map để tra cứu target info nhanh
     query = "MATCH (c:Concept {course_id: $course_id}) WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE' RETURN c.id AS id, c.name AS name, c.aliases AS aliases"
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, course_id=course_id)
         concept_data = await res.data()
     concept_map = {c["id"]: c for c in concept_data}
-    
+
     all_proposed_edges = []
-    
+
     async def process_target(tgt_id: str, cands: List[Dict[str, Any]]):
         if not cands:
             return []
-            
+        if tgt_id not in concept_map:
+            return []
+
         tgt_obj = concept_map[tgt_id]
         tgt_evidences = evidence_dict.get(tgt_id, [])
-        
+
         # 2. llm_judge
         llm_results = await judge_prerequisites(tgt_obj, cands, tgt_evidences)
-        
+
         # 3. rule_signals
         rule_scores = {}
         for cand in cands:
             score = evaluate_rule_signals(tgt_obj["name"], cand["name"], tgt_evidences)
             rule_scores[cand["id"]] = score
-            
+
         # 4. fusion
         edges = fuse_scores(tgt_id, llm_results, rule_scores)
         return edges
@@ -82,15 +113,16 @@ async def run_prerequisite_pipeline(course_id: str):
     tasks = []
     for tgt_id, cands in candidates_dict.items():
         tasks.append(process_target(tgt_id, cands))
-        
-    results = await asyncio.gather(*tasks)
-    
+
+    results = await gather_owned(*tasks)
+
     for edges in results:
         all_proposed_edges.extend(edges)
 
     logger.info(
         f"[{course_id}] Judge + Fusion xong: {len(all_proposed_edges)} canh de xuat"
     )
+
         
     # 5. graph_cleaner
     t_clean = time.perf_counter()
