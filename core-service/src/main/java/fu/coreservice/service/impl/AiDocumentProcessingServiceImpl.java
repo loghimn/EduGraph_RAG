@@ -7,9 +7,11 @@ import fu.coreservice.dto.ai.AiDocumentStatusResponse;
 import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.DocumentProcessingJob;
+import fu.coreservice.entity.ErrorCategory;
 import fu.coreservice.entity.JobStatus;
 import fu.coreservice.entity.JobType;
 import fu.coreservice.entity.UploadStatus;
+import fu.coreservice.exception.AiCoreException;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.repository.DocumentProcessingJobRepository;
 import fu.coreservice.repository.DocumentRepository;
@@ -19,13 +21,16 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 
 /**
  * Điều phối pipeline xử lý tài liệu trên AI core (Python):
@@ -48,57 +53,223 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
 
     private final ExecutorService pipelineExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
+    private static final int MAX_PIPELINE_CONCURRENCY = 4;
+    private final Semaphore pipelineConcurrency = new Semaphore(MAX_PIPELINE_CONCURRENCY);
+
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    // Lỗi Python 4xx do người dùng — KHÔNG retry (permanent)
+    private static final Set<Integer> USER_ERROR_HTTP_STATUSES = Set.of(400, 413, 415, 422);
+    // Từ khóa trong error message chỉ USER_ERROR
+    private static final Set<String> USER_ERROR_KEYWORDS = Set.of(
+            "unsupported file", "file is empty", "scanned pdf", "password", "encrypted",
+            "file exceeds", "invalid file", "file name must", "path traversal"
+    );
+
     @Override
     public void triggerPipelineAsync(Long courseId, Long documentId, Long ownerId, String filename,
                                      MediaType mediaType, Resource content) {
-        pipelineExecutor.submit(() -> runPipeline(courseId, documentId, ownerId, filename, mediaType, content));
+        Long jobId = findLatestJob(documentId).map(DocumentProcessingJob::getDocumentProcessingJobId).orElse(null);
+        pipelineExecutor.submit(() -> {
+            try {
+                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0, false, jobId);
+            } catch (Throwable t) {
+                log.error("Background AI pipeline task failed unexpectedly. documentId={}, jobId={}",
+                        documentId, jobId, t);
+                try {
+                    markFailed(documentId,
+                            t.getMessage() == null ? String.valueOf(t) : t.getMessage(),
+                            ErrorCategory.SYSTEM_ERROR, jobId);
+                } catch (Exception markEx) {
+                    log.error("Failed to mark document FAILED after pipeline crash. documentId={}, jobId={}",
+                            documentId, jobId, markEx);
+                }
+            }
+        });
     }
 
     private void runPipeline(Long courseId, Long documentId, Long ownerId, String filename,
-                             MediaType mediaType, Resource content) {
+                             MediaType mediaType, Resource content, int attemptNumber, boolean restart, Long jobId) {
         try {
-            aiCoreClient.storeDocumentFile(documentId, filename, mediaType, content);
-            aiCoreClient.triggerIngest(AiIngestRequest.builder()
+            // Retry backoff: 0s, 5s, 15s trước khi thử lại
+            if (attemptNumber > 0) {
+                long backoffMs = attemptNumber == 1 ? 5_000L : 15_000L;
+                log.info("Retrying AI pipeline. documentId={}, attempt={}, backoffMs={}", documentId, attemptNumber, backoffMs);
+                Thread.sleep(backoffMs);
+            }
+            // Limit concurrent workers inside the locked (transaction + HTTP upload)
+            // section so they cannot exhaust the JDBC connection pool.
+            pipelineConcurrency.acquire();
+            try {
+                // Hold the same row lock as pause/cancel through the upstream calls.
+                // A queued/backoff worker must not restart a cancelled document.
+                transactionTemplate.executeWithoutResult(tx -> {
+                Document document = documentRepository.findForUpdate(documentId).orElse(null);
+                if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
+                    return;
+                }
+                try {
+                    aiCoreClient.storeDocumentFile(documentId, filename, mediaType, content);
+                } catch (AiCoreException e) {
+                    // An earlier /ingest ACK may have timed out. Python rejects
+                    // overwriting a running file; /ingest safely acknowledges it.
+                    if (e.getHttpStatus() != 409) {
+                        throw e;
+                    }
+                }
+                aiCoreClient.triggerIngest(AiIngestRequest.builder()
                     .documentId(String.valueOf(documentId))
                     .courseId(String.valueOf(courseId))
                     .userId(String.valueOf(ownerId))
                     .filename(filename)
+                    .restart(restart)
+                    .runId(String.valueOf(jobId))
                     .build());
+                document.setDocStatus(UploadStatus.PROCESSING);
+                documentRepository.save(document);
+                findLatestJob(documentId).ifPresent(job -> {
+                    job.setJobStatus(JobStatus.RUNNING);
+                    documentProcessingJobRepository.save(job);
+                });
+            });
+            } finally {
+                pipelineConcurrency.release();
+            }
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            markFailed(documentId, "Pipeline interrupted during retry backoff", ErrorCategory.SYSTEM_ERROR, jobId);
+            return;
         } catch (RuntimeException e) {
-            log.error("AI pipeline trigger failed. documentId={}, reason={}", documentId, e.getMessage());
-            markFailed(documentId, e.getMessage());
+            ErrorCategory category = classifyError(e);
+            int retryCount = getRetryCount(documentId);
+
+            if (category == ErrorCategory.SYSTEM_ERROR && retryCount < MAX_RETRY_ATTEMPTS) {
+                // SYSTEM_ERROR + còn lượt retry → thử lại
+                log.warn("AI pipeline failed (attempt {}/{}), will retry. documentId={}, reason={}",
+                        attemptNumber + 1, MAX_RETRY_ATTEMPTS + 1, documentId, e.getMessage());
+                incrementRetryCount(documentId, jobId);
+                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, attemptNumber + 1, restart, jobId);
+            } else {
+                // USER_ERROR hoặc đã hết retry → FAILED vĩnh viễn
+                log.error("AI pipeline trigger failed permanently. documentId={}, category={}, attempt={}, reason={}",
+                        documentId, category, attemptNumber + 1, e.getMessage());
+                markFailed(documentId, e.getMessage(), category, jobId);
+            }
             return;
         }
 
-        markProcessing(documentId);
-        log.info("AI pipeline processing. documentId={}", documentId);
     }
 
-    private void markProcessing(Long documentId) {
+    private void markFailed(Long documentId, String message, ErrorCategory category, Long jobId) {
         transactionTemplate.executeWithoutResult(status -> {
-            documentRepository.findById(documentId).ifPresent(document -> {
-                document.setDocStatus(UploadStatus.PROCESSING);
-                documentRepository.save(document);
-            });
-            findLatestJob(documentId).ifPresent(job -> {
-                job.setJobStatus(JobStatus.RUNNING);
-                documentProcessingJobRepository.save(job);
-            });
-        });
-    }
-
-    private void markFailed(Long documentId, String message) {
-        transactionTemplate.executeWithoutResult(status -> {
-            documentRepository.findById(documentId).ifPresent(document -> {
-                document.setDocStatus(UploadStatus.FAILED);
-                documentRepository.save(document);
-            });
+            Document document = documentRepository.findForUpdate(documentId).orElse(null);
+            if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
+                return;
+            }
+            document.setDocStatus(UploadStatus.FAILED);
+            documentRepository.save(document);
             findLatestJob(documentId).ifPresent(job -> {
                 job.setJobStatus(JobStatus.FAILED);
                 job.setErrorMessage(truncate(message));
+                job.setErrorCategory(category);
                 documentProcessingJobRepository.save(job);
             });
         });
+    }
+
+    /** Phân loại lỗi: USER_ERROR (không retry) hay SYSTEM_ERROR (có thể retry). */
+    private ErrorCategory classifyError(RuntimeException e) {
+        // AiCoreException mang HTTP status gốc từ Python
+        if (e instanceof fu.coreservice.exception.AiCoreException ace) {
+            int status = ace.getHttpStatus();
+            if (USER_ERROR_HTTP_STATUSES.contains(status)) {
+                return ErrorCategory.USER_ERROR;
+            }
+            // Chỉ áp dụng keyword matching cho lỗi Python 4xx; lỗi 5xx/infra
+            // không được phân loại USER_ERROR dù message chứa từ khóa.
+            if (status < 500) {
+                String msg = ace.getDetail() == null ? "" : ace.getDetail().toLowerCase();
+                for (String keyword : USER_ERROR_KEYWORDS) {
+                    if (msg.contains(keyword)) {
+                        return ErrorCategory.USER_ERROR;
+                    }
+                }
+            }
+            return ErrorCategory.SYSTEM_ERROR;
+        }
+        // Lỗi không phải từ Python (network/infra) → luôn retryable
+        return ErrorCategory.SYSTEM_ERROR;
+    }
+
+    private int getRetryCount(Long documentId) {
+        return findLatestJob(documentId)
+                .map(DocumentProcessingJob::getRetryCount)
+                .orElse(0);
+    }
+
+    private void incrementRetryCount(Long documentId, Long jobId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Document document = documentRepository.findForUpdate(documentId).orElse(null);
+            if (document == null || document.getDocStatus() != UploadStatus.PENDING || !isCurrentJob(documentId, jobId)) {
+                return;
+            }
+            findLatestJob(documentId).ifPresent(job -> {
+                job.setRetryCount(job.getRetryCount() + 1);
+                documentProcessingJobRepository.save(job);
+            });
+        });
+    }
+
+    /**
+     * Trigger retry thủ công (từ API /retry): tạo job mới, chạy lại pipeline.
+     */
+    @Override
+    public void triggerPipelineRetry(Long courseId, Long documentId, Long ownerId, String filename,
+                                     MediaType mediaType, Resource content) {
+        // Tạo job mới để track lần retry này
+        Long jobId = transactionTemplate.execute(status -> {
+            Document document = documentRepository.findForUpdate(documentId).orElseThrow();
+            document.setDocStatus(UploadStatus.PENDING);
+            documentRepository.save(document);
+            DocumentProcessingJob newJob = DocumentProcessingJob.builder()
+                    .document(document)
+                    .jobType(JobType.NONE)
+                    .jobStatus(JobStatus.QUEUED)
+                    .retryCount(0)
+                    .build();
+            return documentProcessingJobRepository.save(newJob).getDocumentProcessingJobId();
+        });
+        // The outer retry transaction owns the row lock. Launch only after commit.
+        Runnable trigger = () -> pipelineExecutor.submit(() -> {
+            try {
+                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0, true, jobId);
+            } catch (Throwable t) {
+                log.error("Background AI pipeline retry task failed unexpectedly. documentId={}, jobId={}",
+                        documentId, jobId, t);
+                try {
+                    markFailed(documentId,
+                            t.getMessage() == null ? String.valueOf(t) : t.getMessage(),
+                            ErrorCategory.SYSTEM_ERROR, jobId);
+                } catch (Exception markEx) {
+                    log.error("Failed to mark document FAILED after pipeline retry crash. documentId={}, jobId={}",
+                            documentId, jobId, markEx);
+                }
+            }
+        });
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    trigger.run();
+                }
+            });
+        } else {
+            trigger.run();
+        }
+    }
+
+    private boolean isCurrentJob(Long documentId, Long jobId) {
+        return jobId != null && findLatestJob(documentId)
+                .map(job -> jobId.equals(job.getDocumentProcessingJobId())).orElse(false);
     }
 
     private Optional<DocumentProcessingJob> findLatestJob(Long documentId) {
@@ -116,18 +287,24 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     /**
      * Đồng bộ định kỳ Document.status từ Neo4j (Python) sang Postgres.
      * Mapping: DONE -> COMPLETED, FAILED -> FAILED, PROCESSING/UPLOADED -> giữ nguyên.
+     * Bỏ qua document CANCELLED hoặc PAUSED (không cho AI core override trạng thái đã set).
      */
-    @Transactional
     @Scheduled(fixedDelayString = "${ai-core.status-poll-interval-ms:15000}")
     @Override
     public void syncProcessingDocuments() {
         List<Document> processingDocuments = documentRepository.findByDocStatus(UploadStatus.PROCESSING);
         for (Document document : processingDocuments) {
             Long documentId = document.getDocumentId();
-            Long courseId = document.getCourse().getCourseId();
             try {
-                AiDocumentStatusResponse status = aiCoreClient.getDocumentStatus(documentId, courseId);
-                applyStatus(document, status);
+                transactionTemplate.executeWithoutResult(tx -> {
+                    Document current = documentRepository.findForUpdate(documentId).orElse(null);
+                    if (current == null || current.getDocStatus() != UploadStatus.PROCESSING) {
+                        return;
+                    }
+                    AiDocumentStatusResponse status = aiCoreClient.getDocumentStatus(
+                            documentId, current.getCourse().getCourseId());
+                    applyStatus(current, status);
+                });
             } catch (AppException e) {
                 // AI core không phản hồi — giữ nguyên trạng thái, thử lại ở lần poll sau
                 log.warn("Skipping status sync, AI core unavailable. documentId={}", documentId);
@@ -137,11 +314,23 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
         }
     }
 
+
     private void applyStatus(Document document, AiDocumentStatusResponse status) {
         String pythonStatus = status == null || status.getStatus() == null ? "" : status.getStatus();
         JobType currentStep = parseCurrentStep(status, document.getDocumentId());
         Optional<DocumentProcessingJob> latestJob = findLatestJob(document.getDocumentId());
         switch (pythonStatus) {
+            case "PAUSED" -> {
+                document.setDocStatus(UploadStatus.PAUSED);
+                documentRepository.save(document);
+                latestJob.ifPresent(job -> {
+                    job.setJobStatus(JobStatus.PAUSED);
+                    documentProcessingJobRepository.save(job);
+                });
+            }
+            // A cancel request may have timed out after Python stopped. Leave
+            // Java retryable until DELETE is repeated and Storage is cleaned up.
+            case "CANCELLED" -> log.warn("Python cancelled document {}; repeat DELETE to finish Storage cleanup", document.getDocumentId());
             case "DONE" -> {
                 document.setDocStatus(UploadStatus.COMPLETED);
                 documentRepository.save(document);

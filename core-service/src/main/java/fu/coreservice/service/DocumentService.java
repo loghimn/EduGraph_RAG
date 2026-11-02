@@ -15,4 +15,22 @@ public interface DocumentService {
     DocumentResponse getDocumentById(Long courseId, Long documentId);
     DocumentProcessingResponse getDocumentProcessingStatus(Long courseId, Long documentId);
     DocumentDownloadResponse downloadDocument(Long courseId, Long documentId);
+
+    /**
+     * Tạm dừng pipeline AI đang xử lý tài liệu.
+     * Chỉ cho phép khi document đang ở trạng thái PROCESSING.
+     */
+    DocumentResponse pauseProcessing(Long courseId, Long documentId);
+
+    /**
+     * Hủy bỏ hoàn toàn tài liệu (xóa file khỏi Supabase + Neo4j graph).
+     * Cho phép khi document ở PENDING, PROCESSING, PAUSED hoặc FAILED.
+     */
+    DocumentResponse cancelDocument(Long courseId, Long documentId);
+
+    /**
+     * Retry pipeline AI cho tài liệu bị FAILED hoặc PAUSED.
+     * Từ chối nếu lỗi thuộc loại USER_ERROR (lỗi file, định dạng...).
+     */
+    DocumentResponse retryProcessing(Long courseId, Long documentId);
 }

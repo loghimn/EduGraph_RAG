@@ -3,6 +3,7 @@ package fu.coreservice.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
@@ -35,6 +36,20 @@ public class DocumentProcessingJob {
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
+
+    /**
+     * Phân loại lỗi: USER_ERROR (không retry) hoặc SYSTEM_ERROR (có thể retry).
+     * Null khi chưa có lỗi hoặc job đang chạy.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "error_category")
+    private ErrorCategory errorCategory;
+
+    /** Số lần đã retry (không tính lần chạy đầu tiên). */
+    @Column(name = "retry_count", nullable = false)
+    @ColumnDefault("0")
+    @Builder.Default
+    private int retryCount = 0;
 
     @Column(name = "execution_time_ms")
     private Long executionTimeMs;

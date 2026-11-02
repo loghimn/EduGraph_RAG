@@ -29,4 +29,9 @@ public class AiIngestRequest {
     private String userId;
 
     private String filename;
+
+    private boolean restart;
+
+    @JsonProperty("run_id")
+    private String runId;
 }

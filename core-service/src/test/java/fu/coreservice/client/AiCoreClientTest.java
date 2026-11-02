@@ -17,6 +17,9 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 import java.util.Map;
+import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicReference;
+import com.sun.net.httpserver.HttpServer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,6 +48,46 @@ class AiCoreClientTest {
         client = new AiCoreClient(properties, builder, new ObjectMapper(), false);
     }
 
+
+    @Test
+    void pauseDocument_realTransportSupportsPatch() throws Exception {
+        HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> receivedMethod = new AtomicReference<>();
+        AtomicReference<String> receivedKey = new AtomicReference<>();
+        AtomicReference<String> receivedUri = new AtomicReference<>();
+        upstream.createContext("/documents/10/pause", exchange -> {
+            receivedMethod.set(exchange.getRequestMethod());
+            receivedKey.set(exchange.getRequestHeaders().getFirst("X-Internal-Key"));
+            receivedUri.set(exchange.getRequestURI().toString());
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        upstream.start();
+        try {
+            AiCoreProperties properties = new AiCoreProperties();
+            properties.setBaseUrl("http://127.0.0.1:" + upstream.getAddress().getPort());
+            properties.setInternalKey("test-key");
+            properties.setConnectTimeoutMs(2000);
+            properties.setReadTimeoutMs(2000);
+            AiCoreClient realClient = new AiCoreClient(properties, RestClient.builder(), new ObjectMapper());
+            realClient.pauseDocument(10L, 1L, 7L);
+            assertThat(receivedMethod.get()).isEqualTo("PATCH");
+            assertThat(receivedKey.get()).isEqualTo("test-key");
+            assertThat(receivedUri.get()).isEqualTo("/documents/10/pause?course_id=1&user_id=7");
+        } finally {
+            upstream.stop(0);
+        }
+    }
+
+    @Test
+    void pauseDocument_forwardsStopCommandAndOwnership() {
+        server.expect(requestTo("http://localhost:8082/documents/10/pause?course_id=1&user_id=7"))
+                .andExpect(method(HttpMethod.PATCH))
+                .andExpect(header("X-Internal-Key", "test-key"))
+                .andRespond(withSuccess("{\"status\":\"paused\"}", MediaType.APPLICATION_JSON));
+        client.pauseDocument(10L, 1L, 7L);
+        server.verify();
+    }
 
     @Test
     void archiveConcept_forwardsDeleteVersionAndTrustedActor() {

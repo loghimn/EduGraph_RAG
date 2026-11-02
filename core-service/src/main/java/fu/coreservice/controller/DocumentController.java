@@ -142,4 +142,62 @@ public class DocumentController {
         );
     }
 
+    @Operation(
+            summary = "Pause document processing",
+            description = "Pauses AI pipeline processing for a document currently in PROCESSING state. "
+                    + "The document can be retried later."
+    )
+    @PatchMapping("/{courseId}/documents/{documentId}/pause")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ResponseEntity<ApiResponse<DocumentResponse>> pauseProcessing(
+            @PathVariable Long courseId,
+            @PathVariable Long documentId
+    ) {
+        DocumentResponse response = documentService.pauseProcessing(courseId, documentId);
+        return ResponseEntity.ok(ApiResponse.<DocumentResponse>builder()
+                .success(true)
+                .message("Document processing paused")
+                .data(response)
+                .build());
+    }
+
+    @Operation(
+            summary = "Cancel and delete a document",
+            description = "Cancels processing and permanently deletes the document file from storage "
+                    + "and its data from the knowledge graph. "
+                    + "Allowed when status is PENDING, PROCESSING, PAUSED, or FAILED."
+    )
+    @DeleteMapping("/{courseId}/documents/{documentId}")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ResponseEntity<ApiResponse<DocumentResponse>> cancelDocument(
+            @PathVariable Long courseId,
+            @PathVariable Long documentId
+    ) {
+        DocumentResponse response = documentService.cancelDocument(courseId, documentId);
+        return ResponseEntity.ok(ApiResponse.<DocumentResponse>builder()
+                .success(true)
+                .message("Document cancelled and removed")
+                .data(response)
+                .build());
+    }
+
+    @Operation(
+            summary = "Retry document processing",
+            description = "Retries AI pipeline for a document in FAILED or PAUSED state. "
+                    + "Rejected if the previous failure was a user-side error (corrupted file, wrong format, etc.)."
+    )
+    @PostMapping("/{courseId}/documents/{documentId}/retry")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ResponseEntity<ApiResponse<DocumentResponse>> retryProcessing(
+            @PathVariable Long courseId,
+            @PathVariable Long documentId
+    ) {
+        DocumentResponse response = documentService.retryProcessing(courseId, documentId);
+        return ResponseEntity.ok(ApiResponse.<DocumentResponse>builder()
+                .success(true)
+                .message("Document processing retry triggered")
+                .data(response)
+                .build());
+    }
+
 }

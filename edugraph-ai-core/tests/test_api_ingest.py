@@ -45,7 +45,7 @@ def test_ingest_merges_nodes_200(mock_neo4j):
     mock_rec_doc = AsyncMock()
     mock_rec_doc.single.return_value = {"status": "UPLOADED"}
 
-    mock_session.run.side_effect = [mock_rec_course, mock_rec_doc]
+    mock_session.run.side_effect = [mock_rec_course, mock_rec_doc, AsyncMock()]
 
     response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "user1"})
     assert response.status_code == 200
@@ -170,7 +170,8 @@ def test_document_status_404(mock_neo4j):
     assert response.status_code == 404
 
 @patch("app.api.ingest.neo4j_client")
-def test_delete_processing_409(mock_neo4j):
+@patch("app.api.ingest.delete_document", new_callable=AsyncMock)
+def test_delete_processing_stops_and_cleans_graph(mock_delete, mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
     
@@ -180,10 +181,11 @@ def test_delete_processing_409(mock_neo4j):
     mock_rec_doc = AsyncMock()
     mock_rec_doc.single.return_value = {"status": "PROCESSING"}
     
-    mock_session.run.side_effect = [mock_rec_course, mock_rec_doc]
+    mock_session.run.side_effect = [mock_rec_course, mock_rec_doc, AsyncMock()]
     
     response = client.delete("/documents/doc-processing?course_id=c1&user_id=user1", headers={"X-Internal-Key": "test-internal-api-key"})
-    assert response.status_code == 409
+    assert response.status_code == 200
+    mock_delete.assert_awaited_once_with("c1", "doc-processing")
 
 @pytest.mark.asyncio
 @patch("app.api.ingest.neo4j_client")
