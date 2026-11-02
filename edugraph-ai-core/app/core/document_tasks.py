@@ -44,11 +44,22 @@ class DocumentTasks:
             if self.tasks.get(document_id) is task:
                 self.tasks.pop(document_id, None)
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, timeout: float = 30.0) -> None:
         tasks = list(self.tasks.values())
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        if tasks:
+            done, pending = await asyncio.wait(tasks, timeout=timeout)
+            for task in pending:
+                logger.warning("Document task did not finish during shutdown: %s",
+                               task.get_name())
+            for task in done:
+                if not task.cancelled():
+                    exc = task.exception()
+                    if exc is not None:
+                        logger.exception(
+                            "Background document task failed during shutdown",
+                            exc_info=exc)
         self.tasks.clear()
 
 

@@ -1,8 +1,6 @@
 # Document processing controls
 
-Run the updated Java core-service and Python AI core together. This change adds the `retry_count` column to `document_processing_jobs` (`INTEGER NOT NULL DEFAULT 0`);
-no other additional Supabase columns are needed. The existing PAUSED/CANCELLED status
-values and processing-job columns must already be available.
+Run the updated Java core-service and Python AI core together. This change adds two columns to `document_processing_jobs`: `retry_count` (`INTEGER NOT NULL DEFAULT 0`) and `error_category` (`VARCHAR`, nullable, stores the `ErrorCategory` enum name). The `PAUSED` and `CANCELLED` values are also new — added to the `JobStatus` and `UploadStatus` enums by this change — so environments using `ddl-auto: validate`/`none` must add them too.
 
 The AI core supports **one worker/process**. Run, for example:
 

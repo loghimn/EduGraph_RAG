@@ -69,7 +69,22 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     public void triggerPipelineAsync(Long courseId, Long documentId, Long ownerId, String filename,
                                      MediaType mediaType, Resource content) {
         Long jobId = findLatestJob(documentId).map(DocumentProcessingJob::getDocumentProcessingJobId).orElse(null);
-        pipelineExecutor.submit(() -> runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0, false, jobId));
+        pipelineExecutor.submit(() -> {
+            try {
+                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0, false, jobId);
+            } catch (Throwable t) {
+                log.error("Background AI pipeline task failed unexpectedly. documentId={}, jobId={}",
+                        documentId, jobId, t);
+                try {
+                    markFailed(documentId,
+                            t.getMessage() == null ? String.valueOf(t) : t.getMessage(),
+                            ErrorCategory.SYSTEM_ERROR, jobId);
+                } catch (Exception markEx) {
+                    log.error("Failed to mark document FAILED after pipeline crash. documentId={}, jobId={}",
+                            documentId, jobId, markEx);
+                }
+            }
+        });
     }
 
     private void runPipeline(Long courseId, Long documentId, Long ownerId, String filename,
@@ -224,8 +239,22 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
             return documentProcessingJobRepository.save(newJob).getDocumentProcessingJobId();
         });
         // The outer retry transaction owns the row lock. Launch only after commit.
-        Runnable trigger = () -> pipelineExecutor.submit(() -> runPipeline(
-                courseId, documentId, ownerId, filename, mediaType, content, 0, true, jobId));
+        Runnable trigger = () -> pipelineExecutor.submit(() -> {
+            try {
+                runPipeline(courseId, documentId, ownerId, filename, mediaType, content, 0, true, jobId);
+            } catch (Throwable t) {
+                log.error("Background AI pipeline retry task failed unexpectedly. documentId={}, jobId={}",
+                        documentId, jobId, t);
+                try {
+                    markFailed(documentId,
+                            t.getMessage() == null ? String.valueOf(t) : t.getMessage(),
+                            ErrorCategory.SYSTEM_ERROR, jobId);
+                } catch (Exception markEx) {
+                    log.error("Failed to mark document FAILED after pipeline retry crash. documentId={}, jobId={}",
+                            documentId, jobId, markEx);
+                }
+            }
+        });
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
