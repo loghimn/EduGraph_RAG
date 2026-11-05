@@ -40,7 +40,7 @@ class HistoryMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    course_id: str
+    course_id: Optional[str] = None
     user_id: str
     message: str
     concept_ids: Optional[List[str]] = None
@@ -62,7 +62,7 @@ def format_sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 async def chat_explain_stream_generator(
-    course_id: str,
+    course_id: Optional[str],
     message: str,
     concept_ids: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
@@ -78,7 +78,7 @@ async def chat_explain_stream_generator(
 
 
 async def _chat_explain_events(
-    course_id: str,
+    course_id: Optional[str],
     message: str,
     concept_ids: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
@@ -168,7 +168,8 @@ async def chat_endpoint(
     x_internal_key: str = Header(...)
 ):
     verify_internal_key(x_internal_key)
-    await verify_course_exists(req.course_id)
+    if req.course_id is not None:
+        await verify_course_exists(req.course_id)
 
     return StreamingResponse(
         chat_explain_stream_generator(req.course_id, req.message, req.concept_ids,

@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from rapidfuzz import fuzz
 
 from app.config import settings
@@ -19,14 +19,17 @@ def extract_ngrams(tokens: List[str], max_n: int = 4) -> List[Tuple[str, int, in
             ngrams.append((ngram, i, i+n))
     return ngrams
 
-async def get_course_concepts_for_linking(course_id: str) -> List[Dict[str, Any]]:
+async def get_course_concepts_for_linking(course_id: Optional[str]) -> List[Dict[str, Any]]:
     """
     Tải tên và aliases của concepts trong course để phục vụ linker.
     """
     query = """
-    MATCH (c:Concept {course_id: $course_id})
+    MATCH (c:Concept)
     WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
-    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases
+      AND ($course_id IS NULL OR c.course_id = $course_id)
+    OPTIONAL MATCH (course:Course {id: c.course_id})
+    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
+           c.course_id AS course_id, course.name AS course_name
     """
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, course_id=course_id)
@@ -65,7 +68,9 @@ def link_concepts_from_data(
             "unaccent_name": unaccent_name,
             "aliases": aliases,
             "norm_aliases": norm_aliases,
-            "unaccent_aliases": unaccent_aliases
+            "unaccent_aliases": unaccent_aliases,
+            "course_id": c.get("course_id"),
+            "course_name": c.get("course_name"),
         }
 
     # 2. Tokenize message cho n-grams
@@ -112,7 +117,9 @@ def link_concepts_from_data(
 
         if len(unaccent_hit_ids) > 1:
             # Khớp không dấu mà ra nhiều concept -> gửi clarify (SPEC §8)
-            candidates = [{"id": cid, "name": concept_map[cid]["name"]} for cid in unaccent_hit_ids]
+            candidates = [{"id": cid, "name": concept_map[cid]["name"],
+                           "course_id": concept_map[cid].get("course_id"),
+                           "course_name": concept_map[cid].get("course_name")} for cid in unaccent_hit_ids]
             return {"concept_ids": [], "clarify": candidates}
         elif len(unaccent_hit_ids) == 1:
             linked_ids.add(unaccent_hit_ids[0])
@@ -152,7 +159,7 @@ def link_concepts_from_data(
     # No lexical match: do not suggest unrelated nearest concepts.
     return {"concept_ids": [], "clarify": None}
 
-async def link_concepts(course_id: str, message: str) -> Dict[str, Any]:
+async def link_concepts(course_id: Optional[str], message: str) -> Dict[str, Any]:
     """
     Hàm chính gọi từ API hoặc dịch vụ chat.
     """

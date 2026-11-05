@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 import json
 import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -281,7 +281,7 @@ def test_chat_clarify_sse(mock_link):
     mock_link.return_value = {
         "concept_ids": [],
         "clarify": [
-            {"id": "c1", "name": "Bàn dữ liệu"},
+            {"id": "c1", "name": "Bàn dữ liá»‡u"},
             {"id": "c2", "name": "Bản ghi"}
         ]
     }
@@ -297,7 +297,7 @@ def test_chat_clarify_sse(mock_link):
     content = resp.text
     assert "event: clarify" in content
     assert "event: done" in content
-    assert "Bàn dữ liệu" in content
+    assert "Bàn dữ liá»‡u" in content
 
 @patch("app.api.chat.verify_course_exists", new=AsyncMock())
 @patch("app.api.chat.link_concepts")
@@ -306,12 +306,12 @@ def test_chat_clarify_sse(mock_link):
 def test_chat_explain_normal_sse_stream(mock_llm, mock_retrieve, mock_link):
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = [
-        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index trong SQL giúp tăng tốc độ tìm kiếm."}
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index trong SQL giúp tăng tốc độ tìm kiếmm."}
     ]
     
     # Mock LLM stream trả về từng token có kèm trích dẫn [1]
     async def fake_stream(prompt, priority=True):
-        tokens = ["Index ", "trong ", "SQL ", "rất ", "hữu ", "ích [1]."]
+        tokens = ["Index ", "trong ", "SQL ", "rất ", "hữu ích [1]."]
         for t in tokens:
             yield t
     mock_llm.generate_stream = fake_stream
@@ -338,7 +338,7 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
     # Khi truyền concept_ids tường minh
     mock_retrieve.return_value = [{"id": "ch1", "text": "Reference"}]
     async def fake_stream(prompt, priority=True):
-        yield "Đã hiểu."
+        yield "Đã hiá»ƒu."
     mock_llm.generate_stream = fake_stream
 
     resp = client.post(
@@ -347,7 +347,34 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
         json={"course_id": "c1", "user_id": "u1", "message": "Giải thích", "concept_ids": ["c1", "c2"]}
     )
     assert resp.status_code == 200
-    # Không được gọi link_concepts
+    # Không Ä‘ược gọi link_concepts
     mock_link.assert_not_called()
     mock_retrieve.assert_called_once()
     assert mock_retrieve.call_args[1]["concept_ids"] == ["c1", "c2"]
+
+@patch("app.api.chat.verify_course_exists", new_callable=AsyncMock)
+@patch("app.api.chat.link_concepts")
+@patch("app.api.chat.retrieve_chunks")
+@patch("app.api.chat.llm_client")
+def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_verify):
+    mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
+    mock_retrieve.return_value = [
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index helps search."}
+    ]
+
+    async def fake_stream(prompt, priority=True):
+        yield "Index [1]."
+    mock_llm.generate_stream = fake_stream
+
+    resp = client.post(
+        "/chat",
+        headers={"X-Internal-Key": "test-internal-api-key"},
+        json={"course_id": None, "user_id": "u1", "message": "What is index?"}
+    )
+    assert resp.status_code == 200
+    mock_verify.assert_not_awaited()
+    mock_link.assert_awaited_once_with(None, "What is index?")
+    assert mock_retrieve.call_args.kwargs["course_id"] is None
+    assert "event: sources" in resp.text
+    assert "ch1" in resp.text
+
