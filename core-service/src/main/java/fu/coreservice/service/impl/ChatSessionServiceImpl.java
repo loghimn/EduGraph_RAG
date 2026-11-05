@@ -142,6 +142,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
+                .filter(item -> item.getCourse() == null)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         Page<ChatMessage> messages = chatMessageRepository.findBySession(session,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "messageId")));
@@ -166,6 +167,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
+                .filter(item -> item.getCourse() == null)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         if (request.getMessage() == null || request.getMessage().isBlank()) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
@@ -276,7 +278,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
     private ChatSessionResponse toSessionResponse(ChatSession session) {
         return ChatSessionResponse.builder().sessionId(session.getSessionId())
-                .courseId(session.getCourse().getCourseId())
+                .courseId(session.getCourse() == null ? null : session.getCourse().getCourseId())
                 .planId(session.getPlan() == null ? null : session.getPlan().getPlanId())
                 .title(session.getTitle()).startedAt(session.getStartedAt())
                 .lastActive(session.getLastActive()).build();
@@ -319,10 +321,9 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         chatMessageRepository.saveAndFlush(answer);
 
         // Get the session and update last active time
-        ChatSession session = chatSessionRepository.findById(turn.sessionId())
-                .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        ChatSession session = answer.getSession();
         session.setLastActive(LocalDateTime.now());
-        chatSessionRepository.saveAndFlush(session);
+        chatSessionRepository.save(session);
 
         // Persist citations if sources are provided
         if (sources != null && !sources.isEmpty()) {
@@ -334,13 +335,12 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 MessageCitation citation = MessageCitation.builder()
                         .message(answer)
                         .citationNumber(source.citationNumber())
-                        .citationType(source.citationType())
+                        .citationType(CitationType.ANSWER_CONCEPT)
                         .documentId(source.documentId())
-                        .neo4jConceptId(source.neo4jConceptId())
-                        .vectorChunkId(source.vectorChunkId())
+                        .vectorChunkId(source.chunkId())
                         .pageNumber(source.pageNumber())
                         .chunkIndex(source.chunkIndex())
-                        .snippetText(source.snippetText())
+                        .snippetText(source.text())
                         .build();
                 return citation;
             }).collect(Collectors.toList());
@@ -350,58 +350,4 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     }
 
     private record CourseAccess(User user, Course course) {}
-@Override
-    @Transactional
-    public void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
-                           int latencyMs, List<ChatSource> sources, boolean clarification) {
-        Long answerMessageId = turn.messageId();
-        ChatMessage answer = chatMessageRepository.findById(answerMessageId)
-                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
-
-        answer.setContent(content);
-        answer.setStatus(status);
-        answer.setErrorMessage(error);
-        answer.setLatencyMs(latencyMs);
-
-        chatMessageRepository.saveAndFlush(answer);
-
-        // Get the session and update last active time
-        ChatSession session = chatSessionRepository.findById(turn.sessionId())
-                .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
-        session.setLastActive(LocalDateTime.now());
-        chatSessionRepository.saveAndFlush(session);
-
-        // Persist citations if sources are provided
-        if (sources != null && !sources.isEmpty()) {
-            // Remove existing citations for this message
-            messageCitationRepository.deleteByMessage_MessageId(answerMessageId);
-
-            // Build and save new citations
-            List<MessageCitation> citations = sources.stream().map(source -> {
-                MessageCitation citation = MessageCitation.builder()
-                        .message(answer)
-                        .citationNumber(source.citationNumber())
-                        .citationType(source.citationType())
-                        .documentId(source.documentId())
-                        .neo4jConceptId(source.neo4jConceptId())
-                        .vectorChunkId(source.vectorChunkId())
-                        .pageNumber(source.pageNumber())
-                        .chunkIndex(source.chunkIndex())
-                        .snippetText(source.snippetText())
-                        .build();
-                return citation;
-            }).collect(Collectors.toList());
-
-            messageCitationRepository.saveAll(citations);
-        }
-    }
-    
-    private final Map<Long, ChatSession> sessionCache = new HashMap<>();
-
-    private ChatSession getSessionForTurn(Long sessionId) {
-        return sessionCache.computeIfAbsent(sessionId, id -> {
-            return chatSessionRepository.findById(id)
-                    .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
-        });
-    }
 }

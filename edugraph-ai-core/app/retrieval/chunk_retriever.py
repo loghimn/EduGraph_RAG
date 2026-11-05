@@ -83,8 +83,8 @@ async def retrieve_chunks(
         query_graph = """
         MATCH (c:Concept)<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
         WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
-          AND c.id IN 
-          AND ( IS NULL OR (c.course_id =  AND ch.course_id = ))
+          AND c.id IN $concept_ids
+          AND ($course_id IS NULL OR (c.course_id = $course_id AND ch.course_id = $course_id))
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """
@@ -99,7 +99,7 @@ async def retrieve_chunks(
     vec_query = """
     CALL db.index.vector.queryNodes('chunk_embedding', $k, $vector)
     YIELD node, score
-    WHERE ( IS NULL OR node.course_id = )$course_id
+    WHERE ($course_id IS NULL OR node.course_id = $course_id)
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
@@ -108,7 +108,7 @@ async def retrieve_chunks(
     ft_cypher = """
     CALL db.index.fulltext.queryNodes('chunk_text', $ft_query)
     YIELD node, score
-    WHERE ( IS NULL OR node.course_id = )$course_id
+    WHERE ($course_id IS NULL OR node.course_id = $course_id)
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
