@@ -13,6 +13,14 @@ import java.util.Optional;
 
 @Repository
 public interface CourseRepository extends JpaRepository<Course, Long> {
+    Page<Course> findByUserAndNotebookTrue(User user, Pageable pageable);
+
+    @Query("SELECT c FROM Course c WHERE c.user = :user AND c.notebook = false")
+    Page<Course> findCoursesByUser(@Param("user") User user, Pageable pageable);
+
+    @Query("SELECT c FROM Course c WHERE c.user = :user AND c.notebook = false AND c.isPublic = :isPublic")
+    Page<Course> findCoursesByUserAndPublic(@Param("user") User user, @Param("isPublic") Boolean isPublic, Pageable pageable);
+
     Optional<Course> findByCourseIdAndUser(Long courseId, User user);
     Page<Course> findByUser(User user, Pageable pageable);
     Page<Course> findByUserAndIsPublic(User user, Boolean isPublic, Pageable pageable);
@@ -20,7 +28,7 @@ public interface CourseRepository extends JpaRepository<Course, Long> {
     @Query("""
     SELECT c
     FROM Course c
-    WHERE c.isPublic = true
+    WHERE c.isPublic = true AND c.notebook = false
       AND (
           CAST(:keyword AS string) IS NULL
           OR LOWER(c.courseName) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
