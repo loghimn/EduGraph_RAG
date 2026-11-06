@@ -40,6 +40,9 @@ public class Course {
     @Column(name = "is_public", nullable = false)
     private boolean isPublic;
 
+    @Column(name = "is_notebook", nullable = false, columnDefinition = "boolean default false")
+    private boolean notebook;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
