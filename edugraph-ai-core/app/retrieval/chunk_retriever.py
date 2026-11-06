@@ -67,7 +67,8 @@ async def retrieve_chunks(
     query: str,
     concept_ids: Optional[List[str]] = None,
     max_chunks: int = 6,
-    overfetch_k: Optional[int] = None
+    overfetch_k: Optional[int] = None,
+    course_ids: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Truy xuất chunks cho câu hỏi giải thích (explain):
@@ -84,13 +85,24 @@ async def retrieve_chunks(
         MATCH (c:Concept)<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
         WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
           AND c.id IN $concept_ids
+        """
+    else:
+        query_graph = ""
+    if course_ids is not None:
+        query_graph += """
+          AND (ch.course_id IN $course_ids)
+        """
+    elif concept_ids:
+        query_graph += """
           AND ($course_id IS NULL OR (c.course_id = $course_id AND ch.course_id = $course_id))
+        """
+    query_graph += """
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """
-        async with neo4j_client.driver.session() as session:
-            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids)
-            graph_chunks = await res.data()
+    async with neo4j_client.driver.session() as session:
+        res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, course_ids=course_ids)
+        graph_chunks = await res.data()
 
     # 2. Vector search
     query_vector = await embed_model.embed_batch([query])
@@ -99,7 +111,16 @@ async def retrieve_chunks(
     vec_query = """
     CALL db.index.vector.queryNodes('chunk_embedding', $k, $vector)
     YIELD node, score
+    """
+    if course_ids is not None:
+        vec_query += """
+    WHERE node.course_id IN $course_ids
+    """
+    else:
+        vec_query += """
     WHERE ($course_id IS NULL OR node.course_id = $course_id)
+    """
+    vec_query += """
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
@@ -108,10 +129,55 @@ async def retrieve_chunks(
     ft_cypher = """
     CALL db.index.fulltext.queryNodes('chunk_text', $ft_query)
     YIELD node, score
+    """
+    if course_ids is not None:
+        ft_cypher += """
+    WHERE node.course_id IN $course_ids
+    """
+    else:
+        ft_cypher += """
     WHERE ($course_id IS NULL OR node.course_id = $course_id)
+    """
+    ft_cypher += """
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    ORDER BY score DESC
+    LIMIT $ft_limit
     """
 
+    vector_results = []
+    fulltext_results = []
+
+    fetch_k = overfetch_k if overfetch_k is not None else settings.VECTOR_OVERFETCH_K
+    max_k = settings.VECTOR_OVERFETCH_MAX
+    step = settings.VECTOR_OVERFETCH_STEP
+
+    async with neo4j_client.driver.session() as session:
+        # Adaptive overfetch: db.index.vector.queryNodes trả top-k toàn cục
+        # rồi mới lọc course_id, nên retry với k lớn dần khi kết quả rỗng.
+        while True:
+            try:
+                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id, course_ids=course_ids)
+                vector_results = await res_vec.data()
+            except Exception:
+                vector_results = []
+                break
+            if vector_results or fetch_k >= max_k:
+                break
+            try:
+                if not await _course_has_chunks(course_id):
+                    break
+            except Exception:
+                break
+            fetch_k = min(fetch_k * step, max_k)
+            logger.warning(
+                "vector overfetch retry course_id=%s fetch_k=%s", course_id, fetch_k
+            )
+
+        try:
+            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id, ft_limit=settings.FULLTEXT_CANDIDATE_LIMIT, course_ids=course_ids)
+            fulltext_results = await res_ft.data()
+        except Exception:
+            pass
     vector_results = []
     fulltext_results = []
 
@@ -143,7 +209,7 @@ async def retrieve_chunks(
             )
 
         try:
-            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id)
+            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id, ft_limit=settings.FULLTEXT_CANDIDATE_LIMIT)
             fulltext_results = await res_ft.data()
         except Exception:
             # Nếu fulltext index chưa sẵn sàng
