@@ -62,6 +62,10 @@ public class CourseServiceImpl implements CourseService {
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
+        if (course.isNotebook()) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+
         course.setCourseName(request.getCourseName().trim());
         course.setDescription(request.getDescription().trim());
         course.setDomain(request.getDomain().trim());
@@ -111,9 +115,9 @@ public class CourseServiceImpl implements CourseService {
         Page<Course> coursePage;
 
         if (isPublic == null) {
-            coursePage = courseRepository.findByUser(currentUser, pageable);
+            coursePage = courseRepository.findCoursesByUser(currentUser, pageable);
         } else {
-            coursePage = courseRepository.findByUserAndIsPublic(currentUser, isPublic, pageable);
+            coursePage = courseRepository.findCoursesByUserAndPublic(currentUser, isPublic, pageable);
         }
 
         return getCourseResponsePageResponse(coursePage);

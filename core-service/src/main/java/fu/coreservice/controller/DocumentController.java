@@ -43,7 +43,7 @@ public class DocumentController {
             value = "/{courseId}",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE
     )
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentResponse>> uploadDocument(
             @PathVariable Long courseId,
             @Parameter(
@@ -63,7 +63,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{courseId}/documents")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("(hasRole('INSTRUCTOR') and !@notebookService.isNotebook(#courseId)) or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<PageResponse<DocumentResponse>>> getDocuments(
             @PathVariable Long courseId,
 
@@ -94,7 +94,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{courseId}/documents/{documentId}")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("(hasRole('INSTRUCTOR') and !@notebookService.isNotebook(#courseId)) or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentResponse>> getDocumentById(
             @PathVariable Long courseId,
             @PathVariable Long documentId
@@ -111,7 +111,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{courseId}/documents/{documentId}/processing")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentProcessingResponse>> getDocumentProcessingStatus(
             @PathVariable Long courseId,
             @PathVariable Long documentId
@@ -126,7 +126,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{courseId}/documents/{documentId}/download")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentDownloadResponse>> downloadDocument(
             @PathVariable Long courseId,
             @PathVariable Long documentId
@@ -148,7 +148,7 @@ public class DocumentController {
                     + "The document can be retried later."
     )
     @PatchMapping("/{courseId}/documents/{documentId}/pause")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentResponse>> pauseProcessing(
             @PathVariable Long courseId,
             @PathVariable Long documentId
@@ -168,7 +168,7 @@ public class DocumentController {
                     + "Allowed when status is PENDING, PROCESSING, PAUSED, or FAILED."
     )
     @DeleteMapping("/{courseId}/documents/{documentId}")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentResponse>> cancelDocument(
             @PathVariable Long courseId,
             @PathVariable Long documentId
@@ -187,7 +187,7 @@ public class DocumentController {
                     + "Rejected if the previous failure was a user-side error (corrupted file, wrong format, etc.)."
     )
     @PostMapping("/{courseId}/documents/{documentId}/retry")
-    @PreAuthorize("hasRole('INSTRUCTOR')")
+    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentResponse>> retryProcessing(
             @PathVariable Long courseId,
             @PathVariable Long documentId

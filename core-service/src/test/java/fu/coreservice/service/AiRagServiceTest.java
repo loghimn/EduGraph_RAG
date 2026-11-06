@@ -213,4 +213,18 @@ class AiRagServiceTest {
         assertEquals("algebra.pdf", enrichedSource.get("filename"));
         verify(documentRepository).findByDocumentIdInAndCourseCourseId(List.of(123L), 7L);
     }
+    @Test
+    void notebookGraphRejectsNonOwnerEvenWithEnrollment() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken("other@test.com", null, List.of()));
+        User owner = new User(); owner.setUserId(1L);
+        User other = new User(); other.setUserId(2L);
+        Course notebook = Course.builder().courseId(99L).user(owner).notebook(true).build();
+        when(userRepository.findByEmail("other@test.com")).thenReturn(Optional.of(other));
+        when(courseRepository.findById(99L)).thenReturn(Optional.of(notebook));
+        when(courseEnrollmentRepository.existsByCourse_CourseIdAndUser(99L, other)).thenReturn(true);
+        AppException error = assertThrows(AppException.class, () -> service.getKnowledgeGraph(99L));
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, error.getErrorCode());
+        verifyNoInteractions(aiCoreClient);
+    }
 }

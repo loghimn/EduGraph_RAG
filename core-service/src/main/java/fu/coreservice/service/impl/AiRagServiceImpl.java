@@ -259,7 +259,7 @@ public class AiRagServiceImpl implements AiRagService {
 
         boolean isOwner = course.getUser().getUserId().equals(user.getUserId());
         boolean isEnrolled = courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user);
-        if (!isOwner && !isEnrolled) {
+        if (!isOwner && (course.isNotebook() || !isEnrolled)) {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
         return user;

@@ -114,6 +114,13 @@ public class DocumentServiceImpl implements DocumentService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
+        if (course.isNotebook()) {
+            User currentUser = getCurrentUser();
+            if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
+                throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+            }
+        }
+
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, "uploadAt"));
 
         Page<Document> documentPage;
@@ -142,8 +149,15 @@ public class DocumentServiceImpl implements DocumentService {
     @Transactional(readOnly = true)
     public DocumentResponse getDocumentById(Long courseId, Long documentId) {
 
-        courseRepository.findById(courseId)
+        Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
+
+        if (course.isNotebook()) {
+            User currentUser = getCurrentUser();
+            if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
+                throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+            }
+        }
 
         Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId,courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
