@@ -63,7 +63,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{courseId}/documents")
-    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
+    @PreAuthorize("(hasRole('INSTRUCTOR') and !@notebookService.isNotebook(#courseId)) or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<PageResponse<DocumentResponse>>> getDocuments(
             @PathVariable Long courseId,
 
@@ -94,7 +94,7 @@ public class DocumentController {
     }
 
     @GetMapping("/{courseId}/documents/{documentId}")
-    @PreAuthorize("hasRole('INSTRUCTOR') or @notebookService.owns(#courseId)")
+    @PreAuthorize("(hasRole('INSTRUCTOR') and !@notebookService.isNotebook(#courseId)) or @notebookService.owns(#courseId)")
     public ResponseEntity<ApiResponse<DocumentResponse>> getDocumentById(
             @PathVariable Long courseId,
             @PathVariable Long documentId

@@ -22,7 +22,7 @@ class NotebookServiceTest {
  User user;
  @BeforeEach void setup() {
   user = new User(); user.setUserId(1L);
-  SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("owner@test.com", null));
+  SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("owner@test.com", null, java.util.List.of()));
   when(users.findByEmail("owner@test.com")).thenReturn(Optional.of(user));
  }
  @AfterEach void cleanup() { SecurityContextHolder.clearContext(); }

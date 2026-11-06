@@ -23,6 +23,9 @@ public class NotebookService {
  public boolean owns(Long id) {
   return courseRepository.findByCourseIdAndUser(id, currentUser()).filter(Course::isNotebook).isPresent();
  }
+ public boolean isNotebook(Long id) {
+  return courseRepository.findById(id).map(Course::isNotebook).orElse(false);
+ }
  public NotebookResponse get(Long id) {
   return courseRepository.findByCourseIdAndUser(id, currentUser()).filter(Course::isNotebook)
    .map(NotebookResponse::from).orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
