@@ -80,7 +80,7 @@ async def retrieve_chunks(
     graph_chunks = []
     
     # 1. Graph chunks nếu có concept_ids
-    if concept_ids:
+    if concept_ids is not None and len(concept_ids) > 0:
         query_graph = """
         MATCH (c:Concept)<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
         WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
@@ -92,7 +92,7 @@ async def retrieve_chunks(
         query_graph += """
           AND (ch.course_id IN $course_ids)
         """
-    elif concept_ids and course_id is not None:
+    elif concept_ids is not None and len(concept_ids) > 0 and course_id is not None:
         query_graph += """
           AND (c.course_id = $course_id AND ch.course_id = $course_id)
         """
