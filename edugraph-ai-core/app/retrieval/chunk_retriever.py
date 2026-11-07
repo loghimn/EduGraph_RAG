@@ -80,33 +80,27 @@ async def retrieve_chunks(
     graph_chunks = []
     
     # 1. Graph chunks nếu có concept_ids
-    if concept_ids is not None and len(concept_ids) > 0:
-        if course_ids is not None:
-            query_graph += \"\"\"\n              AND (ch.course_id IN $course_ids)\n        \"\"\"\n        async with neo4j_client.driver.session() as session:\n            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, course_ids=course_ids)\n            graph_chunks = await res.data()
-if course_ids is not None:
-            query_graph += \"\"\"\n              AND (ch.course_id IN $course_ids)\n        \"\"\"\n        async with neo4j_client.driver.session() as session:\n            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, course_ids=course_ids)\n            graph_chunks = await res.data()
+    if concept_ids:
         query_graph = """
         MATCH (c:Concept)<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
         WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
           AND c.id IN $concept_ids
         """
-    else:
-        query_graph = ""
-    if course_ids is not None:
-        query_graph += """
-          AND (ch.course_id IN $course_ids)
+        if course_ids is not None:
+            query_graph += """
+          AND ch.course_id IN $course_ids
         """
-    elif concept_ids is not None and len(concept_ids) > 0 and course_id is not None:
-        query_graph += """
+        elif course_id is not None:
+            query_graph += """
           AND (c.course_id = $course_id AND ch.course_id = $course_id)
         """
-    query_graph += """
+        query_graph += """
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """
-    async with neo4j_client.driver.session() as session:
-        res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, course_ids=course_ids)
-        graph_chunks = await res.data()
+        async with neo4j_client.driver.session() as session:
+            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, course_ids=course_ids)
+            graph_chunks = await res.data()
 
     # 2. Vector search
     query_vector = await embed_model.embed_batch([query])
