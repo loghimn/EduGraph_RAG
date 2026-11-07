@@ -46,8 +46,14 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     @Override
     public StreamingResponseBody sendMessage(Long courseId, Long sessionId, ChatRequest request) {
-        ChatTurn turn = chatSessionService.beginTurn(courseId, sessionId, request);
-        AiChatRequest aiRequest = AiChatRequest.builder().courseId(courseId.toString())
+        ChatTurn turn;
+        if (courseId == null) {
+            turn = chatSessionService.beginGlobalTurn(sessionId, request);
+        } else {
+            turn = chatSessionService.beginTurn(courseId, sessionId, request);
+        }
+        AiChatRequest aiRequest = AiChatRequest.builder()
+                .courseId(courseId == null ? null : courseId.toString())
                 .userId(turn.userId().toString()).message(request.getMessage())
                 .history(turn.history())
                 .replyContext(turn.replyContext())

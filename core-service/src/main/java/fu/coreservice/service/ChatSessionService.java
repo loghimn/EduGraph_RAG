@@ -12,9 +12,13 @@ import java.util.List;
 
 public interface ChatSessionService {
     ChatSessionResponse createSession(Long courseId, ChatSessionCreateRequest request);
+    ChatSessionResponse createGlobalSession(ChatSessionCreateRequest request);
     PageResponse<ChatSessionResponse> getMySessions(Long courseId, int page, int size);
+    PageResponse<ChatSessionResponse> getGlobalSessions(int page, int size);
     PageResponse<ChatMessageResponse> getMessages(Long courseId, Long sessionId, int page, int size);
+    PageResponse<ChatMessageResponse> getGlobalMessages(Long sessionId, int page, int size);
     ChatTurn beginTurn(Long courseId, Long sessionId, ChatRequest request);
+    ChatTurn beginGlobalTurn(Long sessionId, ChatRequest request);
     void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
                     int latencyMs, List<ChatSource> sources, boolean clarification);
 }

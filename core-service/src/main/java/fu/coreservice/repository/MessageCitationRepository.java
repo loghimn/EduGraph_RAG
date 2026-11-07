@@ -10,6 +10,7 @@ import java.util.List;
 
 @Repository
 public interface MessageCitationRepository extends JpaRepository<MessageCitation, Long> {
+    void deleteByMessage_MessageId(Long messageId);
     List<MessageCitation> findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(List<Long> messageIds);
     List<MessageCitation> findByMessage(ChatMessage message);
     List<MessageCitation> findByMessage_MessageId(Long messageId);

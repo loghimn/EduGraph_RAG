@@ -1,4 +1,5 @@
-from typing import List, Dict, Any, Tuple
+import asyncio
+from typing import List, Dict, Any, Tuple, Optional
 from rapidfuzz import fuzz
 
 from app.config import settings
@@ -19,17 +20,43 @@ def extract_ngrams(tokens: List[str], max_n: int = 4) -> List[Tuple[str, int, in
             ngrams.append((ngram, i, i+n))
     return ngrams
 
-async def get_course_concepts_for_linking(course_id: str) -> List[Dict[str, Any]]:
+async def get_course_concepts_for_linking(course_id: Optional[str] = None,
+                                          course_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Tải tên và aliases của concepts trong course để phục vụ linker.
     """
     query = """
-    MATCH (c:Concept {course_id: $course_id})
+    MATCH (c:Concept)
     WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
-    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases
     """
+    params = {}
+
+    if course_ids:
+        query += """
+    AND c.course_id IN $course_ids
+    """
+        params["course_ids"] = course_ids
+    elif course_id is not None:
+        query += """
+    AND ($course_id IS NULL OR c.course_id = $course_id)
+    """
+        params["course_id"] = course_id
+
+    # Ensure a default limit if not configured to prevent scanning all concepts
+    max_limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", 50)
+    limit = max_limit
+
+    query += """
+    OPTIONAL MATCH (course:Course {id: c.course_id})
+    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
+           c.course_id AS course_id, course.name AS course_name
+    ORDER BY c.name
+    LIMIT $limit
+    """
+    params["limit"] = limit
+
     async with neo4j_client.driver.session() as session:
-        res = await session.run(query, course_id=course_id)
+        res = await session.run(query, **params)
         return await res.data()
 
 def link_concepts_from_data(
@@ -65,7 +92,9 @@ def link_concepts_from_data(
             "unaccent_name": unaccent_name,
             "aliases": aliases,
             "norm_aliases": norm_aliases,
-            "unaccent_aliases": unaccent_aliases
+            "unaccent_aliases": unaccent_aliases,
+            "course_id": c.get("course_id"),
+            "course_name": c.get("course_name"),
         }
 
     # 2. Tokenize message cho n-grams
@@ -96,6 +125,14 @@ def link_concepts_from_data(
                 exact_hit_ids.append(cid)
 
         if exact_hit_ids:
+            if len(exact_hit_ids) > 1:
+                candidates = [{
+                    "id": cid,
+                    "name": concept_map[cid]["name"],
+                    "course_id": concept_map[cid].get("course_id"),
+                    "course_name": concept_map[cid].get("course_name"),
+                } for cid in exact_hit_ids]
+                return {"concept_ids": [], "clarify": candidates}
             for hid in exact_hit_ids:
                 linked_ids.add(hid)
             for idx in range(start, end):
@@ -112,7 +149,9 @@ def link_concepts_from_data(
 
         if len(unaccent_hit_ids) > 1:
             # Khớp không dấu mà ra nhiều concept -> gửi clarify (SPEC §8)
-            candidates = [{"id": cid, "name": concept_map[cid]["name"]} for cid in unaccent_hit_ids]
+            candidates = [{"id": cid, "name": concept_map[cid]["name"],
+                           "course_id": concept_map[cid].get("course_id"),
+                           "course_name": concept_map[cid].get("course_name")} for cid in unaccent_hit_ids]
             return {"concept_ids": [], "clarify": candidates}
         elif len(unaccent_hit_ids) == 1:
             linked_ids.add(unaccent_hit_ids[0])
@@ -152,12 +191,15 @@ def link_concepts_from_data(
     # No lexical match: do not suggest unrelated nearest concepts.
     return {"concept_ids": [], "clarify": None}
 
-async def link_concepts(course_id: str, message: str) -> Dict[str, Any]:
+async def link_concepts(course_id: Optional[str] = None,
+                        message: Optional[str] = None,
+                        course_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Hàm chính gọi từ API hoặc dịch vụ chat.
     """
-    concepts = await get_course_concepts_for_linking(course_id)
+    concepts = await get_course_concepts_for_linking(course_id=course_id, course_ids=course_ids)
     if not concepts:
         return {"concept_ids": [], "clarify": None}
 
-    return link_concepts_from_data(message, concepts)
+    return await asyncio.get_running_loop().run_in_executor(
+        None, link_concepts_from_data, message, concepts)

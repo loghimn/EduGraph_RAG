@@ -109,32 +109,101 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
     @Override
     @Transactional
-    public void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
-                           int latencyMs, List<ChatSource> sources, boolean clarification) {
-        ChatMessage answer = chatMessageRepository.findById(turn.assistantMessageId())
-                .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
-        if (!answer.getSession().getSessionId().equals(turn.sessionId())
-                || answer.getStatus() != ChatMessageStatus.STREAMING) {
+    public ChatSessionResponse createGlobalSession(ChatSessionCreateRequest request) {
+        String title = request.getTitle();
+        if (title != null && title.length() > 255) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
         }
-        ChatSession session = answer.getSession();
-        if (clarification) {
-            chatMessageRepository.delete(answer);
-        } else {
-            answer.setContent(content);
-            answer.setStatus(status);
-            answer.setErrorMessage(error);
-            answer.setLatencyMs(latencyMs);
-            chatMessageRepository.save(answer);
-            List<MessageCitation> citations = sources.stream().map(source -> MessageCitation.builder()
-                    .message(answer).citationType(CitationType.ANSWER_CONCEPT)
-                    .citationNumber(source.citationNumber()).documentId(source.documentId())
-                    .vectorChunkId(source.chunkId()).pageNumber(source.pageNumber())
-                    .chunkIndex(source.chunkIndex()).snippetText(source.text()).build()).toList();
-            messageCitationRepository.saveAll(citations);
+        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        ChatSession session = ChatSession.builder()
+                .learner(user)
+                .course(null)
+                .title(title == null || title.isBlank() ? "New conversation" : title.trim())
+                .build();
+        return toSessionResponse(chatSessionRepository.saveAndFlush(session));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<ChatSessionResponse> getGlobalSessions(int page, int size) {
+        validatePage(page, size);
+        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        Page<ChatSession> sessions = chatSessionRepository.findByLearnerAndCourseIsNull(
+                user, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "lastActive", "sessionId")));
+        return toPageResponse(sessions, this::toSessionResponse);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<ChatMessageResponse> getGlobalMessages(Long sessionId, int page, int size) {
+        validatePage(page, size);
+        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
+                .filter(item -> item.getCourse() == null)
+                .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        Page<ChatMessage> messages = chatMessageRepository.findBySession(session,
+                PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "messageId")));
+        List<Long> ids = messages.getContent().stream().map(ChatMessage::getMessageId).toList();
+        Map<Long, List<ChatCitationResponse>> citations = ids.isEmpty() ? Map.of()
+                : messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(ids)
+                    .stream().collect(Collectors.groupingBy(c -> c.getMessage().getMessageId(),
+                            Collectors.mapping(this::toCitationResponse, Collectors.toList())));
+        return toPageResponse(messages, message -> ChatMessageResponse.builder()
+                .messageId(message.getMessageId()).senderType(message.getSenderType())
+                .replyToMessageId(message.getReplyToMessage() == null ? null
+                        : message.getReplyToMessage().getMessageId())
+                .content(message.getContent()).status(message.getStatus())
+                .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
+                .createdAt(message.getCreatedAt())
+                .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
+    }
+
+    @Override
+    @Transactional
+    public ChatTurn beginGlobalTurn(Long sessionId, ChatRequest request) {
+        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
+                .filter(item -> item.getCourse() == null)
+                .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        if (request.getMessage() == null || request.getMessage().isBlank()) {
+            throw new AppException(ErrorCode.INVALID_REQUEST);
         }
+        ChatMessage replyTarget = null;
+        List<AiChatHistoryMessage> replyContext = new ArrayList<>();
+        if (request.getReplyToMessageId() != null) {
+            if (request.getReplyToMessageId() <= 0) throw new AppException(ErrorCode.INVALID_REQUEST);
+            replyTarget = chatMessageRepository.findByMessageIdAndSession(request.getReplyToMessageId(), session)
+                    .orElseThrow(() -> new AppException(ErrorCode.CHAT_REPLY_NOT_FOUND));
+            if (replyTarget.getStatus() != ChatMessageStatus.COMPLETED
+                    || replyTarget.getContent() == null || replyTarget.getContent().isBlank()) {
+                throw new AppException(ErrorCode.CHAT_REPLY_NOT_READY);
+            }
+            ChatMessage parent = replyTarget.getReplyToMessage();
+            if (replyTarget.getSenderType() == SenderType.BOT && parent != null
+                    && parent.getSession().getSessionId().equals(sessionId)
+                    && parent.getStatus() == ChatMessageStatus.COMPLETED
+                    && parent.getContent() != null && !parent.getContent().isBlank()) {
+                replyContext.add(toContextMessage(parent));
+            }
+            replyContext.add(toContextMessage(replyTarget));
+        }
+        List<AiChatHistoryMessage> history = loadContext(session);
+        ChatMessage question = chatMessageRepository.saveAndFlush(ChatMessage.builder()
+                .session(session).senderType(SenderType.USER).content(request.getMessage())
+                .replyToMessage(replyTarget)
+                .status(ChatMessageStatus.COMPLETED).build());
+        ChatMessage answer = chatMessageRepository.saveAndFlush(ChatMessage.builder()
+                .session(session).senderType(SenderType.BOT).content("")
+                .replyToMessage(question)
+                .status(ChatMessageStatus.STREAMING).build());
         session.setLastActive(LocalDateTime.now());
         chatSessionRepository.save(session);
+        return new ChatTurn(sessionId, user.getUserId(), question.getMessageId(), answer.getMessageId(),
+                history, replyContext);
     }
 
     @Override
@@ -209,7 +278,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
     private ChatSessionResponse toSessionResponse(ChatSession session) {
         return ChatSessionResponse.builder().sessionId(session.getSessionId())
-                .courseId(session.getCourse().getCourseId())
+                .courseId(session.getCourse() == null ? null : session.getCourse().getCourseId())
                 .planId(session.getPlan() == null ? null : session.getPlan().getPlanId())
                 .title(session.getTitle()).startedAt(session.getStartedAt())
                 .lastActive(session.getLastActive()).build();
@@ -227,6 +296,62 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         return PageResponse.<R>builder().content(page.getContent().stream().map(mapper).toList())
                 .page(page.getNumber()).size(page.getSize()).totalElements(page.getTotalElements())
                 .totalPages(page.getTotalPages()).first(page.isFirst()).last(page.isLast()).build();
+    }
+
+    @Override
+    @Transactional
+    public void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
+                           int latencyMs, List<ChatSource> sources, boolean clarification) {
+        Long answerMessageId = turn.assistantMessageId();
+        ChatMessage answer = chatMessageRepository.findById(answerMessageId)
+                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+
+        // If clarification is true, delete the answer message
+        if (clarification) {
+            chatMessageRepository.delete(answer);
+            return;
+        }
+
+        // Preserve terminal answers on finalization retries.
+        // If PostgreSQL committed but connection failed before acknowledgment,
+        // StreamExecution retries finalization as FAILED, which can replace the
+        // already committed COMPLETED status. Only update if not already completed.
+        if (answer.getStatus() != ChatMessageStatus.COMPLETED) {
+            answer.setContent(content);
+            answer.setStatus(status);
+            answer.setErrorMessage(error);
+            answer.setLatencyMs(latencyMs);
+        }
+
+        chatMessageRepository.saveAndFlush(answer);
+
+        // Get the session and update last active time
+        ChatSession session = answer.getSession();
+        session.setLastActive(LocalDateTime.now());
+        chatSessionRepository.save(session);
+
+        // Persist citations if sources are provided
+        if (sources != null && !sources.isEmpty()) {
+            // Remove existing citations for this message
+            messageCitationRepository.deleteByMessage_MessageId(answerMessageId);
+
+            // Build and save new citations
+            List<MessageCitation> citations = sources.stream().map(source -> {
+                MessageCitation citation = MessageCitation.builder()
+                        .message(answer)
+                        .citationNumber(source.citationNumber())
+                        .citationType(CitationType.ANSWER_CONCEPT)
+                        .documentId(source.documentId())
+                        .vectorChunkId(source.chunkId())
+                        .pageNumber(source.pageNumber())
+                        .chunkIndex(source.chunkIndex())
+                        .snippetText(source.text())
+                        .build();
+                return citation;
+            }).collect(Collectors.toList());
+
+            messageCitationRepository.saveAll(citations);
+        }
     }
 
     private record CourseAccess(User user, Course course) {}

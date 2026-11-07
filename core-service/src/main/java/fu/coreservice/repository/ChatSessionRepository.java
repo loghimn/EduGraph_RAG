@@ -15,7 +15,9 @@ import org.springframework.data.domain.Pageable;
 @Repository
 public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> {
     Page<ChatSession> findByLearnerAndCourse(User learner, Course course, Pageable pageable);
+    Page<ChatSession> findByLearnerAndCourseIsNull(User learner, Pageable pageable);
     Optional<ChatSession> findBySessionIdAndCourseAndLearner(Long sessionId, Course course, User learner);
+    Optional<ChatSession> findBySessionIdAndLearner(Long sessionId, User learner);
     List<ChatSession> findByLearner(User learner);
     List<ChatSession> findByCourse(Course course);
     List<ChatSession> findByPlan(LearningPathPlan plan);
