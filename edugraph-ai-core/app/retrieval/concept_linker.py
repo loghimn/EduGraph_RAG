@@ -47,9 +47,16 @@ async def get_course_concepts_for_linking(course_id: Optional[str] = None,
     RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
            c.course_id AS course_id, course.name AS course_name
     """
-    limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", None)
-    if limit:
-        query += """
+    # Ensure a default limit if not configured to prevent scanning all concepts
+    max_limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", 50)
+    limit = max_limit
+
+    query += """
+    OPTIONAL MATCH (course:Course {id: c.course_id})
+    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
+           c.course_id AS course_id, course.name AS course_name
+    """
+    query += """
     ORDER BY c.name
     LIMIT $limit
     """

@@ -92,9 +92,9 @@ async def retrieve_chunks(
         query_graph += """
           AND (ch.course_id IN $course_ids)
         """
-    elif concept_ids:
+    elif concept_ids and course_id is not None:
         query_graph += """
-          AND ($course_id IS NULL OR (c.course_id = $course_id AND ch.course_id = $course_id))
+          AND (c.course_id = $course_id AND ch.course_id = $course_id)
         """
     query_graph += """
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
