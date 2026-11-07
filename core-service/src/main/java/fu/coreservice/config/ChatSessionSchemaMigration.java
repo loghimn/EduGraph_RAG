@@ -21,7 +21,7 @@ public class ChatSessionSchemaMigration implements ApplicationRunner {
             log.info("Dropped NOT NULL constraint on chat_sessions.course_id");
         } catch (Exception e) {
             // Already nullable, unsupported database, or fresh schema created by Hibernate.
-            log.debug("chat_sessions.course_id NOT NULL migration skipped: {}", e.getMessage());
+            log.warn("chat_sessions.course_id NOT NULL migration failed: {}", e.getMessage());
         }
     }
 }

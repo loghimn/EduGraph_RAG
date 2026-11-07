@@ -178,44 +178,6 @@ async def retrieve_chunks(
             fulltext_results = await res_ft.data()
         except Exception:
             pass
-    vector_results = []
-    fulltext_results = []
-
-    fetch_k = overfetch_k if overfetch_k is not None else settings.VECTOR_OVERFETCH_K
-    max_k = settings.VECTOR_OVERFETCH_MAX
-    step = settings.VECTOR_OVERFETCH_STEP
-
-    async with neo4j_client.driver.session() as session:
-        # Adaptive overfetch: db.index.vector.queryNodes trả top-k toàn cục
-        # rồi mới lọc course_id, nên retry với k lớn dần khi kết quả rỗng.
-        while True:
-            try:
-                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id)
-                vector_results = await res_vec.data()
-            except Exception:
-                # Nếu vector index chưa sẵn sàng trong mock/test
-                vector_results = []
-                break
-            if vector_results or fetch_k >= max_k:
-                break
-            try:
-                if not await _course_has_chunks(course_id):
-                    break
-            except Exception:
-                break
-            fetch_k = min(fetch_k * step, max_k)
-            logger.warning(
-                "vector overfetch retry course_id=%s fetch_k=%s", course_id, fetch_k
-            )
-
-        try:
-            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id, ft_limit=settings.FULLTEXT_CANDIDATE_LIMIT)
-            fulltext_results = await res_ft.data()
-        except Exception:
-            # Nếu fulltext index chưa sẵn sàng
-            pass
-
-    # Gộp vector + fulltext bằng RRF
     rrf_chunks = compute_rrf(vector_results, fulltext_results, k_rrf=60)
 
     # Ghép: Ưu tiên graph_chunks (is_evidence của concepts), sau đó bổ sung từ RRF
