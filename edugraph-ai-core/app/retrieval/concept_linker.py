@@ -42,25 +42,20 @@ async def get_course_concepts_for_linking(course_id: Optional[str] = None,
     """
         params["course_id"] = course_id
 
-    query += """
-    OPTIONAL MATCH (course:Course {id: c.course_id})
-    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
-           c.course_id AS course_id, course.name AS course_name
-    """
     # Ensure a default limit if not configured to prevent scanning all concepts
-    max_limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", 50)
-    limit = max_limit
+max_limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", 50)
+limit = max_limit
 
-    query += """
+query += """
+ORDER BY c.name
+LIMIT $limit
+    
+    # Optional course join for metadata
     OPTIONAL MATCH (course:Course {id: c.course_id})
     RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
            c.course_id AS course_id, course.name AS course_name
-    """
-    query += """
-    ORDER BY c.name
-    LIMIT $limit
-    """
-        params["limit"] = limit
+"""
+    params["limit"] = limit
 
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, **params)

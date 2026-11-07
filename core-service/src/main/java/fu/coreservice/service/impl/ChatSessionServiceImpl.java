@@ -312,11 +312,16 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             return;
         }
 
-        // Update answer message fields
-        answer.setContent(content);
-        answer.setStatus(status);
-        answer.setErrorMessage(error);
-        answer.setLatencyMs(latencyMs);
+        // Preserve terminal answers on finalization retries.
+        // If PostgreSQL committed but connection failed before acknowledgment,
+        // StreamExecution retries finalization as FAILED, which can replace the
+        // already committed COMPLETED status. Only update if not already completed.
+        if (answer.getStatus() != ChatMessageStatus.COMPLETED) {
+            answer.setContent(content);
+            answer.setStatus(status);
+            answer.setErrorMessage(error);
+            answer.setLatencyMs(latencyMs);
+        }
 
         chatMessageRepository.saveAndFlush(answer);
 
