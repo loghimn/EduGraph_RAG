@@ -50,9 +50,14 @@ def sanitize_fulltext_query(query: str) -> str:
         return "*"
     return " ".join(tokens)
 
-async def _course_has_chunks(course_id: Optional[str]) -> bool:
+async def _course_has_chunks(course_id: Optional[str], course_ids: Optional[List[str]] = None) -> bool:
     """Trả về True nếu còn ít nhất một Chunk (chống retry vô tận khi rỗng)."""
-    if course_id is None:
+    if course_ids is not None:
+        if not course_ids:
+            return False
+        q = "MATCH (c:Chunk) WHERE c.course_id IN $course_ids RETURN count(c) AS n"
+        params = {"course_ids": course_ids}
+    elif course_id is None:
         q = "MATCH (c:Chunk) RETURN count(c) AS n"
         params = {}
     else:
@@ -77,6 +82,9 @@ async def retrieve_chunks(
        không chứa chunk của course) + Fulltext search (lọc course_id).
     3. Gộp qua RRF (khoảng 10 dòng) và giới hạn tối đa max_chunks.
     """
+    if course_ids is not None and not course_ids:
+        return []
+
     graph_chunks = []
     
     # 1. Graph chunks nếu có concept_ids
@@ -88,6 +96,7 @@ async def retrieve_chunks(
         """
         if course_ids is not None:
             query_graph += """
+          AND c.course_id IN $course_ids
           AND ch.course_id IN $course_ids
         """
         elif course_id is not None:
@@ -162,7 +171,7 @@ async def retrieve_chunks(
             if vector_results or fetch_k >= max_k:
                 break
             try:
-                if not await _course_has_chunks(course_id):
+                if not await _course_has_chunks(course_id, course_ids):
                     break
             except Exception:
                 break

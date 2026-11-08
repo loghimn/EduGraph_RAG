@@ -31,7 +31,9 @@ async def get_course_concepts_for_linking(course_id: Optional[str] = None,
     """
     params = {}
 
-    if course_ids:
+    if course_ids is not None:
+        if not course_ids:
+            return []
         query += """
     AND c.course_id IN $course_ids
     """
@@ -42,22 +44,17 @@ async def get_course_concepts_for_linking(course_id: Optional[str] = None,
     """
         params["course_id"] = course_id
 
-    # Ensure a default limit if not configured to prevent scanning all concepts
-    max_limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", 50)
-    limit = max_limit
-
     query += """
     OPTIONAL MATCH (course:Course {id: c.course_id})
     RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
            c.course_id AS course_id, course.name AS course_name
     ORDER BY c.name
-    LIMIT $limit
     """
-    params["limit"] = limit
 
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, **params)
-        return await res.data()
+        concepts = await res.data()
+    return concepts
 
 def link_concepts_from_data(
     message: str,
@@ -201,5 +198,9 @@ async def link_concepts(course_id: Optional[str] = None,
     if not concepts:
         return {"concept_ids": [], "clarify": None}
 
-    return await asyncio.get_running_loop().run_in_executor(
+    result = await asyncio.get_running_loop().run_in_executor(
         None, link_concepts_from_data, message, concepts)
+    if result["clarify"]:
+        max_limit = getattr(settings, "CONCEPT_LINKING_MAX_CANDIDATES", 50)
+        result["clarify"] = result["clarify"][:max_limit]
+    return result

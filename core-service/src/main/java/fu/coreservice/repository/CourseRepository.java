@@ -9,10 +9,23 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface CourseRepository extends JpaRepository<Course, Long> {
+    @Query("""
+    SELECT c.courseId
+    FROM Course c
+    WHERE c.user = :user
+       OR EXISTS (
+           SELECT e.enrollmentId
+           FROM CourseEnrollment e
+           WHERE e.course = c AND e.user = :user
+       )
+    """)
+    List<Long> findAccessibleCourseIdsByUser(@Param("user") User user);
+
     Page<Course> findByUserAndNotebookTrue(User user, Pageable pageable);
 
     @Query("SELECT c FROM Course c WHERE c.user = :user AND c.notebook = false")

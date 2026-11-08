@@ -1,5 +1,10 @@
 import pytest
-from app.retrieval.concept_linker import link_concepts_from_data, extract_ngrams
+from app.retrieval.concept_linker import (
+    extract_ngrams,
+    get_course_concepts_for_linking,
+    link_concepts,
+    link_concepts_from_data,
+)
 
 def test_extract_ngrams_longest_first():
     tokens = ["gradient", "descent", "algorithm"]
@@ -70,3 +75,52 @@ def test_unmatched_question_does_not_suggest_nearest_concepts():
     ]
     result = link_concepts_from_data("weather tomorrow", concepts)
     assert result == {"concept_ids": [], "clarify": None}
+
+
+@pytest.mark.asyncio
+async def test_linker_matches_concepts_after_candidate_limit(monkeypatch):
+    from app.retrieval import concept_linker
+
+    concepts = [
+        {"id": f"c{i:03}", "name": f"Unrelated {i:03}", "aliases": [], "course_id": "course"}
+        for i in range(100)
+    ]
+    concepts.append({"id": "target", "name": "Zebra Concept", "aliases": [], "course_id": "course"})
+
+    class Result:
+        async def data(self):
+            return concepts
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **params):
+            assert "LIMIT" not in query
+            assert params["course_ids"] == ["course"]
+            return Result()
+
+    class Driver:
+        def session(self):
+            return Session()
+
+    monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
+
+    result = await link_concepts(course_id=None, message="Zebra Concept", course_ids=["course"])
+
+    assert result == {"concept_ids": ["target"], "clarify": None}
+
+
+@pytest.mark.asyncio
+async def test_empty_course_scope_does_not_query_concepts(monkeypatch):
+    from app.retrieval import concept_linker
+
+    class Driver:
+        def session(self):
+            raise AssertionError("Neo4j must not be queried for an empty scope")
+
+    monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
+    assert await get_course_concepts_for_linking(course_ids=[]) == []

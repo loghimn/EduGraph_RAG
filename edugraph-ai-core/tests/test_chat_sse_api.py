@@ -369,12 +369,31 @@ def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_ver
     resp = client.post(
         "/chat",
         headers={"X-Internal-Key": "test-internal-api-key"},
-        json={"course_id": None, "user_id": "u1", "message": "What is index?"}
+        json={"course_id": None, "course_ids": ["c1"], "user_id": "u1", "message": "What is index?"}
     )
     assert resp.status_code == 200
     mock_verify.assert_not_awaited()
-    mock_link.assert_awaited_once_with(None, "What is index?")
+    mock_link.assert_awaited_once_with(None, "What is index?", course_ids=["c1"])
     assert mock_retrieve.call_args.kwargs["course_id"] is None
+    assert mock_retrieve.call_args.kwargs["course_ids"] == ["c1"]
     assert "event: sources" in resp.text
     assert "ch1" in resp.text
 
+
+@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.api.chat.llm_client")
+def test_chat_global_without_authorized_courses_returns_no_data(mock_llm, mock_retrieve, mock_link):
+    from app.api.chat import NO_DATA_MESSAGE
+
+    resp = client.post(
+        "/chat",
+        headers={"X-Internal-Key": "test-internal-api-key"},
+        json={"course_id": None, "user_id": "u1", "message": "What is index?"},
+    )
+
+    assert resp.status_code == 200
+    assert NO_DATA_MESSAGE in resp.text
+    mock_link.assert_not_awaited()
+    mock_retrieve.assert_not_awaited()
+    mock_llm.generate_stream.assert_not_called()

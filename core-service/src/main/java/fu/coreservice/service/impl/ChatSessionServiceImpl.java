@@ -80,7 +80,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         session.setLastActive(LocalDateTime.now());
         chatSessionRepository.save(session);
         return new ChatTurn(sessionId, access.user().getUserId(), question.getMessageId(), answer.getMessageId(),
-                history, replyContext);
+                history, replyContext, List.of(access.course().getCourseId().toString()));
     }
 
     private AiChatHistoryMessage toContextMessage(ChatMessage message) {
@@ -202,8 +202,10 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .status(ChatMessageStatus.STREAMING).build());
         session.setLastActive(LocalDateTime.now());
         chatSessionRepository.save(session);
+        List<String> authorizedCourseIds = courseRepository.findAccessibleCourseIdsByUser(user).stream()
+                .map(String::valueOf).toList();
         return new ChatTurn(sessionId, user.getUserId(), question.getMessageId(), answer.getMessageId(),
-                history, replyContext);
+                history, replyContext, authorizedCourseIds);
     }
 
     @Override
@@ -304,12 +306,18 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                            int latencyMs, List<ChatSource> sources, boolean clarification) {
         Long answerMessageId = turn.assistantMessageId();
         ChatMessage answer = chatMessageRepository.findById(answerMessageId)
-                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+                .orElse(null);
 
-        // If clarification is true, delete the answer message
+        // A missing placeholder means a previous clarification deletion may have committed.
         if (clarification) {
-            chatMessageRepository.delete(answer);
+            if (answer != null) {
+                chatMessageRepository.delete(answer);
+            }
             return;
+        }
+
+        if (answer == null) {
+            throw new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
         }
 
         // Preserve terminal answers on finalization retries.
@@ -334,6 +342,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         if (sources != null && !sources.isEmpty()) {
             // Remove existing citations for this message
             messageCitationRepository.deleteByMessage_MessageId(answerMessageId);
+            messageCitationRepository.flush();
 
             // Build and save new citations
             List<MessageCitation> citations = sources.stream().map(source -> {

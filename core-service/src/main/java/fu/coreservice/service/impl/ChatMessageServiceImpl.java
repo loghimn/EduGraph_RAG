@@ -55,6 +55,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         AiChatRequest aiRequest = AiChatRequest.builder()
                 .courseId(courseId == null ? null : courseId.toString())
                 .userId(turn.userId().toString()).message(request.getMessage())
+                .courseIds(turn.authorizedCourseIds())
                 .history(turn.history())
                 .replyContext(turn.replyContext())
                 .conceptIds(request.getConceptIds() == null ? null : new ArrayList<>(request.getConceptIds())).build();
@@ -143,6 +144,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         private boolean finalized;
         private boolean mvcManaged;
         private boolean awaitingContainer;
+        private boolean clarificationFinalizationAttempted;
 
         StreamExecution(ChatTurn turn) { this.turn = turn; }
 
@@ -190,7 +192,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 state.error = truncateError(reason);
                 state.failed = status == ChatMessageStatus.FAILED;
                 // Only a successful clarify/done sequence removes the BOT placeholder.
-                state.clarification = false;
+                state.clarification = state.clarification && clarificationFinalizationAttempted;
                 running = worker;
             }
             if (running != null && running != Thread.currentThread()) running.interrupt();
@@ -232,6 +234,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         private void persist() {
             int latency = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - started) / 1_000_000);
+            if (state.clarification) clarificationFinalizationAttempted = true;
             chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
                     latency, List.copyOf(state.sources), state.clarification);
             finalized = true; // Set only after the transactional call has committed.

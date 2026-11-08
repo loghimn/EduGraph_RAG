@@ -180,13 +180,31 @@ class ChatSessionServiceTest {
             return message;
         });
         ChatTurn turn = service.beginTurn(7L, 10L, ChatRequest.builder().message("OOP?").build());
-        assertEquals(new ChatTurn(10L, 2L, 20L, 21L), turn);
+        assertEquals(new ChatTurn(10L, 2L, 20L, 21L, List.of(), List.of(), List.of("7")), turn);
         ArgumentCaptor<ChatMessage> messages = ArgumentCaptor.forClass(ChatMessage.class);
         verify(chatMessageRepository, times(2)).saveAndFlush(messages.capture());
         assertEquals("OOP?", messages.getAllValues().getFirst().getContent());
         assertEquals(ChatMessageStatus.COMPLETED, messages.getAllValues().getFirst().getStatus());
         assertEquals(ChatMessageStatus.STREAMING, messages.getAllValues().get(1).getStatus());
         assertNotNull(session.getLastActive());
+    }
+
+    @Test
+    void beginGlobalTurnCapturesAllCoursesOwnedOrEnrolledByTheLearner() {
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(7L, 8L));
+        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
+            ChatMessage message = call.getArgument(0);
+            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
+            return message;
+        });
+
+        ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder().message("Java?").build());
+
+        assertEquals(List.of("7", "8"), turn.authorizedCourseIds());
+        verify(courseRepository).findAccessibleCourseIdsByUser(learner);
     }
 
     @Test
@@ -210,7 +228,10 @@ class ChatSessionServiceTest {
         assertEquals("Answer [1]", answer.getContent());
         assertEquals(ChatMessageStatus.COMPLETED, answer.getStatus());
         assertEquals(500, answer.getLatencyMs());
-        verify(messageCitationRepository).saveAll(argThat(items -> {
+        var citationOperations = inOrder(messageCitationRepository);
+        citationOperations.verify(messageCitationRepository).deleteByMessage_MessageId(21L);
+        citationOperations.verify(messageCitationRepository).flush();
+        citationOperations.verify(messageCitationRepository).saveAll(argThat(items -> {
             MessageCitation citation = items.iterator().next();
             return citation.getMessage() == answer && citation.getCitationNumber() == 1
                     && citation.getDocumentId().equals(40L) && citation.getVectorChunkId().equals("chunk1");
@@ -230,6 +251,24 @@ class ChatSessionServiceTest {
         verify(chatMessageRepository).delete(answer);
         verify(chatMessageRepository, never()).save(any());
         verifyNoInteractions(messageCitationRepository);
+    }
+
+    @Test
+    void clarificationRetrySucceedsWhenPlaceholderWasAlreadyDeleted() {
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.empty());
+        service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.FAILED,
+                "Commit acknowledgment failed", 500, List.of(), true);
+        verify(chatMessageRepository).findById(21L);
+        verify(chatMessageRepository, never()).delete(any());
+        verifyNoInteractions(chatSessionRepository, messageCitationRepository);
+    }
+
+    @Test
+    void missingPlaceholderStillFailsForNonClarificationFinalization() {
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.empty());
+        assertEquals(ErrorCode.CHAT_MESSAGE_NOT_FOUND, assertThrows(AppException.class,
+                () -> service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.FAILED,
+                        "Failure", 500, List.of(), false)).getErrorCode());
     }
 
     @Test

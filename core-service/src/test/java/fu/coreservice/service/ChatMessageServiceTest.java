@@ -42,7 +42,8 @@ class ChatMessageServiceTest {
     private final ClientHttpResponse response = mock(ClientHttpResponse.class);
     private final ChatTurn turn = new ChatTurn(10L, 2L, 20L, 21L,
             List.of(new AiChatHistoryMessage("assistant", "Learn Java and HTTP for Java Servlet")),
-            List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")));
+            List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")),
+            List.of("7"));
     private final ChatRequest request = ChatRequest.builder().message("Kế thừa?")
             .conceptIds(List.of("concept1")).build();
     private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper());
@@ -201,6 +202,7 @@ class ChatMessageServiceTest {
         verify(client).openChatStream(upstream.capture());
         assertEquals("2", upstream.getValue().getUserId());
         assertEquals("7", upstream.getValue().getCourseId());
+        assertEquals(List.of("7"), upstream.getValue().getCourseIds());
         assertEquals(List.of("concept1"), upstream.getValue().getConceptIds());
         assertEquals(turn.history(), upstream.getValue().getHistory());
         assertEquals(turn.replyContext(), upstream.getValue().getReplyContext());
@@ -288,6 +290,18 @@ class ChatMessageServiceTest {
         assertTrue(output.toString(StandardCharsets.UTF_8).contains("event: clarify"));
         verify(storage).finishTurn(eq(turn), eq(""), any(), isNull(), anyInt(), eq(List.of()), eq(true));
         verify(response).close();
+    }
+
+    @Test
+    void retriesClarificationFinalizationBeforeMarkingTheTurnFailed() throws Exception {
+        doThrow(new RuntimeException("Commit acknowledgment failed"))
+                .doNothing().when(storage).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+        var output = run("event: clarify\ndata: {\"candidates\":[{\"id\":\"a\",\"name\":\"A\"}]}\n\n"
+                + "event: done\ndata: {}\n\n");
+        assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("event: done\ndata: {}\n\n"));
+        verify(storage).finishTurn(eq(turn), eq(""), any(), isNull(), anyInt(), eq(List.of()), eq(true));
+        verify(storage).finishTurn(eq(turn), eq(""), eq(ChatMessageStatus.FAILED),
+                eq("Commit acknowledgment failed"), anyInt(), eq(List.of()), eq(true));
     }
 
     @Test
