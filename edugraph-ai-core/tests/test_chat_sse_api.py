@@ -359,7 +359,8 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
 def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_verify):
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = [
-        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index helps search."}
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0,
+         "text": "Index helps search.", "course_id": "c1"}
     ]
 
     async def fake_stream(prompt, priority=True):
@@ -378,6 +379,7 @@ def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_ver
     assert mock_retrieve.call_args.kwargs["course_ids"] == ["c1"]
     assert "event: sources" in resp.text
     assert "ch1" in resp.text
+    assert 'event: provenance\ndata: ["c1"]' in resp.text
 
 
 @patch("app.api.chat.link_concepts", new_callable=AsyncMock)

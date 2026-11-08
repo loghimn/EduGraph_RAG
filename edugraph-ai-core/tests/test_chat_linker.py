@@ -77,6 +77,22 @@ def test_unmatched_question_does_not_suggest_nearest_concepts():
     assert result == {"concept_ids": [], "clarify": None}
 
 
+def test_tied_fuzzy_matches_across_courses_request_clarification(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ALIAS_FUZZY_MIN_LEN", 4)
+    monkeypatch.setattr(settings, "FUZZY_THRESHOLD", 85)
+    concepts = [
+        {"id": "course-a", "name": "abcdefx", "aliases": [], "course_id": "a", "course_name": "A"},
+        {"id": "course-b", "name": "abcdefy", "aliases": [], "course_id": "b", "course_name": "B"},
+    ]
+
+    result = link_concepts_from_data("abcdefg", concepts)
+
+    assert result["concept_ids"] == []
+    assert {candidate["id"] for candidate in result["clarify"]} == {"course-a", "course-b"}
+
+
 @pytest.mark.asyncio
 async def test_linker_matches_concepts_after_candidate_limit(monkeypatch):
     from app.retrieval import concept_linker
@@ -115,6 +131,42 @@ async def test_linker_matches_concepts_after_candidate_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_clarification_returns_all_matching_candidates(monkeypatch):
+    from app.retrieval import concept_linker
+
+    concepts = [
+        {"id": f"concept-{i}", "name": "Shared Topic", "aliases": [], "course_id": "clarify-course"}
+        for i in range(125)
+    ]
+
+    class Result:
+        async def data(self):
+            return concepts
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **params):
+            return Result()
+
+    class Driver:
+        def session(self):
+            return Session()
+
+    monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
+
+    result = await link_concepts(
+        course_id=None, message="Shared Topic", course_ids=["clarify-course"]
+    )
+
+    assert len(result["clarify"]) == 125
+
+
+@pytest.mark.asyncio
 async def test_empty_course_scope_does_not_query_concepts(monkeypatch):
     from app.retrieval import concept_linker
 
@@ -124,3 +176,40 @@ async def test_empty_course_scope_does_not_query_concepts(monkeypatch):
 
     monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
     assert await get_course_concepts_for_linking(course_ids=[]) == []
+
+
+@pytest.mark.asyncio
+async def test_scoped_concept_index_is_reused_between_turns(monkeypatch):
+    from app.retrieval import concept_linker
+
+    queries = []
+
+    class Result:
+        async def data(self):
+            return [{"id": "cached", "name": "Cached Topic", "aliases": [],
+                     "course_id": "cached-course"}]
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **params):
+            queries.append(query)
+            return Result()
+
+    class Driver:
+        def session(self):
+            return Session()
+
+    monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
+
+    for _ in range(2):
+        result = await link_concepts(
+            course_id=None, message="Cached Topic", course_ids=["cached-course"]
+        )
+        assert result["concept_ids"] == ["cached"]
+
+    assert len(queries) == 1

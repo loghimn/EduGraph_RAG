@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -36,6 +37,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final MessageCitationRepository messageCitationRepository;
+    private final MessageSourceCourseRepository messageSourceCourseRepository;
 
     @Override
     @Transactional
@@ -68,7 +70,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             }
             replyContext.add(toContextMessage(replyTarget));
         }
-        List<AiChatHistoryMessage> history = loadContext(session);
+        List<AiChatHistoryMessage> history = loadContext(session, null);
         ChatMessage question = chatMessageRepository.saveAndFlush(ChatMessage.builder()
                 .session(session).senderType(SenderType.USER).content(request.getMessage())
                 .replyToMessage(replyTarget)
@@ -88,14 +90,18 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 message.getContent().substring(0, Math.min(message.getContent().length(), 4_000)));
     }
 
-    private List<AiChatHistoryMessage> loadContext(ChatSession session) {
+    private List<AiChatHistoryMessage> loadContext(ChatSession session, Set<Long> accessibleCourseIds) {
         // Query only after ownership validation and before inserting the current turn.
         List<ChatMessage> recent = chatMessageRepository.findBySessionAndStatusOrderByCreatedAtDescMessageIdDesc(
                 session, ChatMessageStatus.COMPLETED, PageRequest.of(0, 12));
+        Map<Long, Boolean> available = accessibleCourseIds == null
+                ? Map.of() : globalAnswerAvailability(recent, accessibleCourseIds);
         List<AiChatHistoryMessage> history = new ArrayList<>();
         int remaining = 12_000;
         for (ChatMessage message : recent) {
             if (remaining == 0) break;
+            if (accessibleCourseIds != null
+                    && Boolean.FALSE.equals(available.get(message.getMessageId()))) continue;
             if (message.getContent() == null || message.getContent().isBlank()) continue;
             if (message.getSenderType() != SenderType.USER && message.getSenderType() != SenderType.BOT) continue;
             int limit = Math.min(Math.min(message.getContent().length(), 4_000), remaining);
@@ -105,6 +111,29 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         }
         Collections.reverse(history);
         return history;
+    }
+
+    private Map<Long, Boolean> globalAnswerAvailability(List<ChatMessage> messages, Set<Long> accessibleCourseIds) {
+        List<Long> answerIds = messages.stream()
+                .filter(message -> message.getSenderType() == SenderType.BOT)
+                .map(ChatMessage::getMessageId).toList();
+        if (answerIds.isEmpty()) return Map.of();
+        Map<Long, Set<Long>> sourceCourses = messageSourceCourseRepository.findByMessage_MessageIdIn(answerIds)
+                .stream().collect(Collectors.groupingBy(source -> source.getMessage().getMessageId(),
+                        Collectors.mapping(MessageSourceCourse::getCourseId, Collectors.toSet())));
+        return messages.stream().filter(message -> message.getSenderType() == SenderType.BOT)
+                .collect(Collectors.toMap(ChatMessage::getMessageId, message -> {
+                    if (!message.isSourceProvenanceTracked()) return false;
+                    return sourceCourses.getOrDefault(message.getMessageId(), Set.of())
+                            .stream().allMatch(accessibleCourseIds::contains);
+                }));
+    }
+
+    private boolean isGlobalAnswerAvailable(ChatMessage message, Set<Long> accessibleCourseIds) {
+        if (message.getSenderType() != SenderType.BOT) return true;
+        if (!message.isSourceProvenanceTracked()) return false;
+        return messageSourceCourseRepository.findByMessage_MessageId(message.getMessageId()).stream()
+                .allMatch(source -> accessibleCourseIds.contains(source.getCourseId()));
     }
 
     @Override
@@ -144,9 +173,12 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
                 .filter(item -> item.getCourse() == null)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        List<Long> accessibleCourseIdList = courseRepository.findAccessibleCourseIdsByUser(user);
+        Set<Long> accessibleCourseIds = Set.copyOf(accessibleCourseIdList);
         Page<ChatMessage> messages = chatMessageRepository.findBySession(session,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "messageId")));
         List<Long> ids = messages.getContent().stream().map(ChatMessage::getMessageId).toList();
+        Map<Long, Boolean> available = globalAnswerAvailability(messages.getContent(), accessibleCourseIds);
         Map<Long, List<ChatCitationResponse>> citations = ids.isEmpty() ? Map.of()
                 : messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(ids)
                     .stream().collect(Collectors.groupingBy(c -> c.getMessage().getMessageId(),
@@ -155,10 +187,13 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .messageId(message.getMessageId()).senderType(message.getSenderType())
                 .replyToMessageId(message.getReplyToMessage() == null ? null
                         : message.getReplyToMessage().getMessageId())
-                .content(message.getContent()).status(message.getStatus())
+                .content(Boolean.FALSE.equals(available.get(message.getMessageId()))
+                        ? "This answer is unavailable because access to its source course has changed."
+                        : message.getContent()).status(message.getStatus())
                 .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .createdAt(message.getCreatedAt())
-                .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
+                .citations(Boolean.FALSE.equals(available.get(message.getMessageId()))
+                        ? List.of() : citations.getOrDefault(message.getMessageId(), List.of())).build());
     }
 
     @Override
@@ -169,6 +204,8 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
                 .filter(item -> item.getCourse() == null)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        List<Long> accessibleCourseIdList = courseRepository.findAccessibleCourseIdsByUser(user);
+        Set<Long> accessibleCourseIds = Set.copyOf(accessibleCourseIdList);
         if (request.getMessage() == null || request.getMessage().isBlank()) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
         }
@@ -182,6 +219,9 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                     || replyTarget.getContent() == null || replyTarget.getContent().isBlank()) {
                 throw new AppException(ErrorCode.CHAT_REPLY_NOT_READY);
             }
+            if (!isGlobalAnswerAvailable(replyTarget, accessibleCourseIds)) {
+                throw new AppException(ErrorCode.CHAT_REPLY_NOT_READY);
+            }
             ChatMessage parent = replyTarget.getReplyToMessage();
             if (replyTarget.getSenderType() == SenderType.BOT && parent != null
                     && parent.getSession().getSessionId().equals(sessionId)
@@ -191,7 +231,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             }
             replyContext.add(toContextMessage(replyTarget));
         }
-        List<AiChatHistoryMessage> history = loadContext(session);
+        List<AiChatHistoryMessage> history = loadContext(session, accessibleCourseIds);
         ChatMessage question = chatMessageRepository.saveAndFlush(ChatMessage.builder()
                 .session(session).senderType(SenderType.USER).content(request.getMessage())
                 .replyToMessage(replyTarget)
@@ -202,8 +242,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .status(ChatMessageStatus.STREAMING).build());
         session.setLastActive(LocalDateTime.now());
         chatSessionRepository.save(session);
-        List<String> authorizedCourseIds = courseRepository.findAccessibleCourseIdsByUser(user).stream()
-                .map(String::valueOf).toList();
+        List<String> authorizedCourseIds = accessibleCourseIdList.stream().map(String::valueOf).toList();
         return new ChatTurn(sessionId, user.getUserId(), question.getMessageId(), answer.getMessageId(),
                 history, replyContext, authorizedCourseIds);
     }
@@ -361,6 +400,25 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
             messageCitationRepository.saveAll(citations);
         }
+    }
+
+    @Override
+    @Transactional
+    public void recordSourceCourseProvenance(ChatTurn turn, List<Long> courseIds, boolean tracked) {
+        ChatMessage answer = chatMessageRepository.findById(turn.assistantMessageId())
+                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        List<Long> authorizedIds = turn.authorizedCourseIds().stream().map(Long::valueOf).toList();
+        if (tracked && courseIds.stream().anyMatch(courseId -> !authorizedIds.contains(courseId))) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+        messageSourceCourseRepository.deleteByMessage_MessageId(answer.getMessageId());
+        messageSourceCourseRepository.flush();
+        if (tracked) {
+            messageSourceCourseRepository.saveAll(courseIds.stream().distinct().map(courseId ->
+                    MessageSourceCourse.builder().message(answer).courseId(courseId).build()).toList());
+        }
+        answer.setSourceProvenanceTracked(tracked);
+        chatMessageRepository.saveAndFlush(answer);
     }
 
     private record CourseAccess(User user, Course course) {}

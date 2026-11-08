@@ -70,9 +70,6 @@ class Settings(BaseSettings):
     MIN_CHARS_PER_PAGE: int = 100
     ALIAS_FUZZY_MIN_LEN: int = 4
 
-    # Global concept matching limits
-    CONCEPT_LINKING_MAX_CANDIDATES: int = 100
-
     # Learning Paths Constants
     ISOLATED_CONCEPTS_WARNING_THRESHOLD: float = 0.2
 

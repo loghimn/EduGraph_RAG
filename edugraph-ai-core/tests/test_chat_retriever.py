@@ -140,3 +140,33 @@ async def test_empty_authorized_course_list_skips_retrieval(monkeypatch):
     assert await chunk_retriever.retrieve_chunks(
         course_id=None, course_ids=[], query="index"
     ) == []
+
+
+@pytest.mark.asyncio
+async def test_graph_evidence_reserves_budget_for_each_linked_concept(monkeypatch):
+    class GraphSession(_FakeSession):
+        async def run(self, query, **params):
+            self.calls.append(dict(params))
+            self.queries.append(query)
+            if "MATCH (c:Concept)" in query:
+                return _FakeResult(
+                    [{"id": f"c1-{i}", "concept_id": "c1", "course_id": "course",
+                      "text": "first concept", "index": i} for i in range(6)]
+                    + [{"id": f"c{i}", "concept_id": f"c{i}", "course_id": "course",
+                        "text": f"concept {i}", "index": 10 + i} for i in range(2, 7)]
+                )
+            return _FakeResult([])
+
+    session = GraphSession()
+    monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))
+
+    async def _fake_embed(_):
+        return [[0.0] * 8]
+
+    monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", _fake_embed)
+    chunks = await chunk_retriever.retrieve_chunks(
+        course_id=None, course_ids=["course"], query="compare",
+        concept_ids=[f"c{i}" for i in range(1, 7)], max_chunks=6,
+    )
+
+    assert [chunk["id"] for chunk in chunks] == ["c1-0", "c2", "c3", "c4", "c5", "c6"]

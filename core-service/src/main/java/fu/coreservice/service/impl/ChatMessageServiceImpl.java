@@ -169,15 +169,16 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         synchronized boolean accept(String event, String payload) throws IOException {
             if (stopped || finalized) return false;
-            acceptEvent(state, event, payload);
+            acceptEvent(state, event, payload, turn.authorizedCourseIds());
             return true;
         }
 
         synchronized boolean complete() throws IOException {
             if (deferInterruptedWorker()) return false;
             if (stopped || finalized) return false;
-            if (!state.failed && !state.clarification && !state.sourcesReceived) {
-                throw new IOException("AI stream ended without sources");
+            if (!state.failed && !state.clarification
+                    && (!state.sourcesReceived || !state.provenanceReceived)) {
+                throw new IOException("AI stream ended without sources or provenance");
             }
             persist();
             return true;
@@ -237,6 +238,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             if (state.clarification) clarificationFinalizationAttempted = true;
             chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
                     latency, List.copyOf(state.sources), state.clarification);
+            if (!state.clarification) {
+                chatSessionService.recordSourceCourseProvenance(
+                        turn, List.copyOf(state.sourceCourseIds), state.provenanceReceived);
+            }
             finalized = true; // Set only after the transactional call has committed.
         }
 
@@ -258,20 +263,23 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
     }
 
-    private void acceptEvent(StreamState state, String event, String payload) throws IOException {
+    private void acceptEvent(StreamState state, String event, String payload,
+                             List<String> authorizedCourseIds) throws IOException {
         JsonNode json = objectMapper.readTree(payload);
         if (json == null) {
             throw new IOException("Empty AI event");
         }
         switch (event) {
             case "token" -> {
-                if (state.failed || state.clarification || !json.path("token").isTextual()) {
+                if (state.failed || state.clarification || !state.provenanceReceived
+                        || !json.path("token").isTextual()) {
                     throw new IOException("Invalid token event");
                 }
                 state.content.append(json.get("token").textValue());
             }
             case "sources" -> {
-                if (state.failed || state.clarification || state.sourcesReceived || !json.isArray()) {
+                if (state.failed || state.clarification || !state.provenanceReceived
+                        || state.sourcesReceived || !json.isArray()) {
                     throw new IOException("Invalid sources event");
                 }
                 List<ChatSource> sources = new ArrayList<>();
@@ -298,8 +306,29 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 state.sources = sources;
                 state.sourcesReceived = true;
             }
+            case "provenance" -> {
+                if (state.failed || state.clarification || state.provenanceReceived || !json.isArray()) {
+                    throw new IOException("Invalid source provenance event");
+                }
+                Set<Long> courseIds = new HashSet<>();
+                for (JsonNode value : json) {
+                    if (!value.isTextual()) throw new IOException("Invalid source course ID");
+                    Long courseId;
+                    try {
+                        courseId = Long.valueOf(value.textValue());
+                    } catch (NumberFormatException e) {
+                        throw new IOException("Invalid source course ID", e);
+                    }
+                    if (courseId <= 0 || !authorizedCourseIds.contains(courseId.toString())
+                            || !courseIds.add(courseId)) {
+                        throw new IOException("Unauthorized or duplicate source course ID");
+                    }
+                }
+                state.sourceCourseIds = List.copyOf(courseIds);
+                state.provenanceReceived = true;
+            }
             case "clarify" -> {
-                if (!state.content.isEmpty() || state.sourcesReceived || state.failed
+                if (!state.content.isEmpty() || state.sourcesReceived || state.provenanceReceived || state.failed
                         || !json.path("candidates").isArray()) {
                     throw new IOException("Invalid clarification event");
                 }
@@ -365,5 +394,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         boolean failed;
         boolean clarification;
         boolean sourcesReceived;
+        List<Long> sourceCourseIds = List.of();
+        boolean provenanceReceived;
     }
 }

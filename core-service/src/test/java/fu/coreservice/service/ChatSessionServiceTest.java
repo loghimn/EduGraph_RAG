@@ -39,6 +39,7 @@ class ChatSessionServiceTest {
     @Mock ChatSessionRepository chatSessionRepository;
     @Mock ChatMessageRepository chatMessageRepository;
     @Mock MessageCitationRepository messageCitationRepository;
+    @Mock MessageSourceCourseRepository messageSourceCourseRepository;
     @InjectMocks ChatSessionServiceImpl service;
 
     private final User learner = User.builder().userId(2L).email("learner@example.com").build();
@@ -205,6 +206,55 @@ class ChatSessionServiceTest {
 
         assertEquals(List.of("7", "8"), turn.authorizedCourseIds());
         verify(courseRepository).findAccessibleCourseIdsByUser(learner);
+    }
+
+    @Test
+    void beginGlobalTurnDoesNotReuseAnswersFromCoursesTheLearnerNoLongerCanAccess() {
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
+        ChatMessage revokedAnswer = ChatMessage.builder().messageId(30L).session(session)
+                .senderType(SenderType.BOT).content("Private course answer")
+                .sourceProvenanceTracked(true).build();
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(8L));
+        when(chatMessageRepository.findBySessionAndStatusOrderByCreatedAtDescMessageIdDesc(
+                eq(session), eq(ChatMessageStatus.COMPLETED), any(Pageable.class)))
+                .thenReturn(List.of(revokedAnswer));
+        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(30L)))
+                .thenReturn(List.of(MessageSourceCourse.builder().message(revokedAnswer).courseId(7L).build()));
+        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
+            ChatMessage message = call.getArgument(0);
+            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
+            return message;
+        });
+
+        ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder().message("Follow up").build());
+
+        assertTrue(turn.history().isEmpty());
+    }
+
+    @Test
+    void getGlobalMessagesRedactsRevokedCourseAnswersAndTheirCitations() {
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
+        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session).senderType(SenderType.BOT)
+                .content("Private answer").sourceProvenanceTracked(true).build();
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(8L));
+        when(chatMessageRepository.findBySession(eq(session), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(answer), PageRequest.of(0, 20), 1));
+        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(21L)))
+                .thenReturn(List.of(MessageSourceCourse.builder().message(answer).courseId(7L).build()));
+        when(messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(List.of(21L)))
+                .thenReturn(List.of(MessageCitation.builder().message(answer).citationNumber(1)
+                        .snippetText("Restricted source snippet").build()));
+
+        var response = service.getGlobalMessages(10L, 0, 20).getContent().getFirst();
+
+        assertFalse(response.getContent().contains("Private answer"));
+        assertFalse(response.getCitations().stream().anyMatch(c -> c.getSnippetText() != null
+                && c.getSnippetText().contains("Restricted source snippet")));
+        assertTrue(response.getCitations().isEmpty());
     }
 
     @Test

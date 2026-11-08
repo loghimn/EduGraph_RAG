@@ -104,7 +104,8 @@ async def retrieve_chunks(
           AND (c.course_id = $course_id AND ch.course_id = $course_id)
         """
         query_graph += """
-        RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
+        RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page,
+               ch.index AS index, ch.course_id AS course_id, c.id AS concept_id
         ORDER BY ch.index ASC
         """
         async with neo4j_client.driver.session() as session:
@@ -128,7 +129,8 @@ async def retrieve_chunks(
     WHERE ($course_id IS NULL OR node.course_id = $course_id)
     """
     vec_query += """
-    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page,
+           node.index AS index, node.course_id AS course_id, score
     """
 
     # 3. Fulltext search
@@ -146,7 +148,8 @@ async def retrieve_chunks(
     WHERE ($course_id IS NULL OR node.course_id = $course_id)
     """
     ft_cypher += """
-    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page,
+           node.index AS index, node.course_id AS course_id, score
     ORDER BY score DESC
     LIMIT $ft_limit
     """
@@ -191,12 +194,20 @@ async def retrieve_chunks(
     selected = []
     seen_ids = set()
 
+    # Reserve one evidence chunk per linked concept before filling by graph order.
+    for concept_id in concept_ids or []:
+        candidate = next((ch for ch in graph_chunks
+                          if ch.get("concept_id") == concept_id and ch["id"] not in seen_ids), None)
+        if candidate is not None and len(selected) < max_chunks:
+            seen_ids.add(candidate["id"])
+            selected.append(candidate)
+
     for ch in graph_chunks:
+        if len(selected) >= max_chunks:
+            break
         if ch["id"] not in seen_ids:
             seen_ids.add(ch["id"])
             selected.append(ch)
-            if len(selected) >= max_chunks:
-                break
 
     for ch in rrf_chunks:
         if len(selected) >= max_chunks:

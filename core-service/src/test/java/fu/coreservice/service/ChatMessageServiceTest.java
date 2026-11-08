@@ -149,7 +149,9 @@ class ChatMessageServiceTest {
 
     private static class BlockingBody extends InputStream {
         final ByteArrayInputStream prefix = new ByteArrayInputStream(
-                "event: token\ndata: {\"token\":\"Partial\"}\n\n".getBytes(StandardCharsets.UTF_8));
+                "event: provenance\ndata: [\"7\"]\n\n"
+                        .concat("event: token\ndata: {\"token\":\"Partial\"}\n\n")
+                        .getBytes(StandardCharsets.UTF_8));
         final CountDownLatch waiting = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         @Override public int read(byte[] b, int off, int len) throws IOException {
@@ -167,6 +169,9 @@ class ChatMessageServiceTest {
 
     private ByteArrayOutputStream run(String events) throws Exception {
         when(client.openChatStream(any())).thenReturn(response);
+        if (events.contains("event: token") && !events.contains("event: provenance")) {
+            events = "event: provenance\ndata: [\"7\"]\n\n" + events;
+        }
         when(response.getBody()).thenReturn(new ByteArrayInputStream(events.getBytes(StandardCharsets.UTF_8)));
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         service.sendMessage(7L, 10L, request).writeTo(output);
@@ -180,7 +185,8 @@ class ChatMessageServiceTest {
         doAnswer(call -> { persisted.set(true); return null; }).when(storage).finishTurn(eq(turn),
                 eq("Kế thừa [1]"), eq(ChatMessageStatus.COMPLETED), isNull(), anyInt(), eq(expected), eq(false));
         when(client.openChatStream(any())).thenReturn(response);
-        byte[] bytes = ("event: token\r\ndata: {\"token\":\"Kế thừa [1]\"}\r\n\r\n"
+        byte[] bytes = ("event: provenance\r\ndata: [\"7\"]\r\n\r\n"
+                + "event: token\r\ndata: {\"token\":\"Kế thừa [1]\"}\r\n\r\n"
                 + "event: sources\r\ndata: [{\"citation\":1,\"doc_id\":\"40\",\"chunk_id\":\"chunk1\","
                 + "\"page\":3,\"index\":0,\"text\":\"Nguồn\"}]\r\n\r\n"
                 + "event: done\r\ndata: {}\r\n\r\n").getBytes(StandardCharsets.UTF_8);
@@ -357,9 +363,19 @@ class ChatMessageServiceTest {
     void clientDisconnectClosesPythonAndRetainsInterruptedAnswer() throws Exception {
         when(client.openChatStream(any())).thenReturn(response);
         when(response.getBody()).thenReturn(new ByteArrayInputStream(
-                "event: token\ndata: {\"token\":\"Partial\"}\n\n".getBytes(StandardCharsets.UTF_8)));
+                "event: provenance\ndata: [\"7\"]\n\n"
+                        .concat("event: token\ndata: {\"token\":\"Partial\"}\n\n")
+                        .getBytes(StandardCharsets.UTF_8)));
+        ByteArrayOutputStream forwarded = new ByteArrayOutputStream();
         service.sendMessage(7L, 10L, request).writeTo(new OutputStream() {
             @Override public void write(int value) throws IOException { throw new IOException("Disconnected"); }
+            @Override public void write(byte[] bytes) throws IOException {
+                if (new String(bytes, StandardCharsets.UTF_8).contains("event: provenance")) {
+                    forwarded.write(bytes);
+                } else {
+                    throw new IOException("Disconnected");
+                }
+            }
         });
         verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.INTERRUPTED),
                 eq("Response stream unavailable"), anyInt(), eq(List.of()), eq(false));

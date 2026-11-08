@@ -29,6 +29,7 @@ NO_DATA_MESSAGE = (
 def no_data_events() -> List[str]:
     # Keep the existing protocol so Java persists this as a normal BOT answer.
     return [
+        format_sse("provenance", []),
         format_sse("token", {"token": NO_DATA_MESSAGE}),
         format_sse("sources", []),
         format_sse("done", {}),
@@ -143,6 +144,15 @@ async def _chat_explain_events(
             for event in no_data_events():
                 yield event
             return
+
+        if course_id is None and any(chunk.get("course_id") is None for chunk in chunks):
+            raise ValueError("Retrieved source is missing course provenance")
+        source_course_ids = sorted({
+            str(chunk["course_id"]) for chunk in chunks if chunk.get("course_id") is not None
+        })
+        if course_id is not None:
+            source_course_ids = [str(course_id)]
+        yield format_sse("provenance", source_course_ids)
 
         # 3. Dựng prompt cho nhánh explain
         prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query,
