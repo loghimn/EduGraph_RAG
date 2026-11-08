@@ -29,7 +29,6 @@ NO_DATA_MESSAGE = (
 def no_data_events() -> List[str]:
     # Keep the existing protocol so Java persists this as a normal BOT answer.
     return [
-        format_sse("provenance", []),
         format_sse("token", {"token": NO_DATA_MESSAGE}),
         format_sse("sources", []),
         format_sse("done", {}),
@@ -38,12 +37,10 @@ def no_data_events() -> List[str]:
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(max_length=4_000)
-    source_course_ids: List[str] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
     course_id: Optional[str] = None
-    course_ids: List[str] = Field(default_factory=list)
     user_id: str
     message: str
     concept_ids: Optional[List[str]] = None
@@ -69,10 +66,9 @@ async def chat_explain_stream_generator(
     message: str,
     concept_ids: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
-    reply_context: Optional[List[Dict[str, str]]] = None,
-    course_ids: Optional[List[str]] = None,
+    reply_context: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[str, None]:
-    events = _chat_explain_events(course_id, message, concept_ids, history, reply_context, course_ids)
+    events = _chat_explain_events(course_id, message, concept_ids, history, reply_context)
     stream = with_sse_heartbeats(events, settings.CHAT_HEARTBEAT_INTERVAL_SECONDS)
     try:
         async for frame in stream:
@@ -86,21 +82,9 @@ async def _chat_explain_events(
     message: str,
     concept_ids: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
-    reply_context: Optional[List[Dict[str, str]]] = None,
-    course_ids: Optional[List[str]] = None,
+    reply_context: Optional[List[Dict[str, str]]] = None
 ) -> AsyncGenerator[str, None]:
     try:
-        authorized_course_ids = course_ids if course_id is None else [course_id]
-        if not authorized_course_ids:
-            for event in no_data_events():
-                yield event
-            return
-
-        context_course_ids = {
-            str(source_course_id)
-            for item in [*(history or []), *(reply_context or [])]
-            for source_course_id in item.get("source_course_ids", [])
-        }
         history = prepare_history(history)
         reply_context = prepare_history(reply_context)
         search_query = message
@@ -121,10 +105,7 @@ async def _chat_explain_events(
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
         if linked_concept_ids is None:
-            if course_id is None:
-                link_res = await link_concepts(course_id, search_query, course_ids=authorized_course_ids)
-            else:
-                link_res = await link_concepts(course_id, search_query)
+            link_res = await link_concepts(course_id, search_query)
             if link_res.get("clarify"):
                 # Gửi clarify event và kết thúc bằng done
                 yield format_sse("clarify", {"candidates": link_res["clarify"]})
@@ -142,23 +123,13 @@ async def _chat_explain_events(
             course_id=course_id,
             query=search_query,
             concept_ids=linked_concept_ids,
-            max_chunks=settings.CHAT_MAX_CHUNKS,
-            course_ids=authorized_course_ids,
+            max_chunks=settings.CHAT_MAX_CHUNKS
         )
 
         if not chunks:
             for event in no_data_events():
                 yield event
             return
-
-        if course_id is None and any(chunk.get("course_id") is None for chunk in chunks):
-            raise ValueError("Retrieved source is missing course provenance")
-        source_course_ids = {
-            str(chunk["course_id"]) for chunk in chunks if chunk.get("course_id") is not None
-        } | context_course_ids
-        if course_id is not None:
-            source_course_ids.add(str(course_id))
-        yield format_sse("provenance", sorted(source_course_ids))
 
         # 3. Dựng prompt cho nhánh explain
         prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query,
@@ -203,7 +174,6 @@ async def chat_endpoint(
     return StreamingResponse(
         chat_explain_stream_generator(req.course_id, req.message, req.concept_ids,
                                       [item.model_dump() for item in req.history],
-                                      [item.model_dump() for item in req.reply_context],
-                                      req.course_ids),
+                                      [item.model_dump() for item in req.reply_context]),
         media_type="text/event-stream"
     )

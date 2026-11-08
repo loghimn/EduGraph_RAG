@@ -359,8 +359,7 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
 def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_verify):
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = [
-        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0,
-         "text": "Index helps search.", "course_id": "c1"}
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index helps search."}
     ]
 
     async def fake_stream(prompt, priority=True):
@@ -370,65 +369,12 @@ def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_ver
     resp = client.post(
         "/chat",
         headers={"X-Internal-Key": "test-internal-api-key"},
-        json={"course_id": None, "course_ids": ["c1"], "user_id": "u1", "message": "What is index?"}
+        json={"course_id": None, "user_id": "u1", "message": "What is index?"}
     )
     assert resp.status_code == 200
     mock_verify.assert_not_awaited()
-    mock_link.assert_awaited_once_with(None, "What is index?", course_ids=["c1"])
+    mock_link.assert_awaited_once_with(None, "What is index?")
     assert mock_retrieve.call_args.kwargs["course_id"] is None
-    assert mock_retrieve.call_args.kwargs["course_ids"] == ["c1"]
     assert "event: sources" in resp.text
     assert "ch1" in resp.text
-    assert 'event: provenance\ndata: ["c1"]' in resp.text
 
-
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
-def test_global_provenance_includes_context_courses(mock_llm, mock_retrieve, mock_link):
-    mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
-    mock_retrieve.return_value = [
-        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0,
-         "text": "Current source.", "course_id": "course-8"}
-    ]
-
-    async def fake_stream(prompt, priority=True):
-        yield "Answer [1]."
-    mock_llm.generate_stream = fake_stream
-
-    resp = client.post(
-        "/chat",
-        headers={"X-Internal-Key": "test-internal-api-key"},
-        json={
-            "course_id": None,
-            "course_ids": ["course-7", "course-8"],
-            "user_id": "u1",
-            "message": "Follow up",
-            "history": [{"role": "assistant", "content": "Earlier answer",
-                         "source_course_ids": ["course-7"]}],
-            "reply_context": [{"role": "assistant", "content": "Selected answer",
-                               "source_course_ids": ["course-7"]}],
-        },
-    )
-
-    assert resp.status_code == 200
-    assert 'event: provenance\ndata: ["course-7", "course-8"]' in resp.text
-
-
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
-def test_chat_global_without_authorized_courses_returns_no_data(mock_llm, mock_retrieve, mock_link):
-    from app.api.chat import NO_DATA_MESSAGE
-
-    resp = client.post(
-        "/chat",
-        headers={"X-Internal-Key": "test-internal-api-key"},
-        json={"course_id": None, "user_id": "u1", "message": "What is index?"},
-    )
-
-    assert resp.status_code == 200
-    assert NO_DATA_MESSAGE in resp.text
-    mock_link.assert_not_awaited()
-    mock_retrieve.assert_not_awaited()
-    mock_llm.generate_stream.assert_not_called()

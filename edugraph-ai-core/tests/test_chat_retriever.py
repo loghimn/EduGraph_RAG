@@ -16,7 +16,6 @@ class _FakeSession:
 
     def __init__(self):
         self.calls = []
-        self.queries = []
 
     async def __aenter__(self):
         return self
@@ -26,7 +25,6 @@ class _FakeSession:
 
     async def run(self, query, **params):
         self.calls.append(dict(params))
-        self.queries.append(query)
         if "vector" in params:
             k = params.get("k", 0)
             if k < 200:
@@ -92,7 +90,7 @@ async def test_vector_overfetch_retries_until_course_chunks_found(monkeypatch):
     async def _fake_embed(texts):
         return [[0.0] * 8]
 
-    async def _fake_has_chunks(course_id, course_ids=None):
+    async def _fake_has_chunks(course_id):
         return True
 
     monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", _fake_embed)
@@ -106,67 +104,3 @@ async def test_vector_overfetch_retries_until_course_chunks_found(monkeypatch):
     vec_ks = [c.get("k") for c in session.calls if "vector" in c]
     assert vec_ks[0] == 50
     assert vec_ks[-1] >= 200
-
-
-@pytest.mark.asyncio
-async def test_global_retrieval_filters_graph_vector_and_fulltext_by_authorized_courses(monkeypatch):
-    session = _FakeSession()
-    monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))
-
-    async def _fake_embed(texts):
-        return [[0.0] * 8]
-
-    monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", _fake_embed)
-    chunks = await chunk_retriever.retrieve_chunks(
-        course_id=None,
-        course_ids=["owned-course", "enrolled-course"],
-        query="index",
-        concept_ids=["index-concept"],
-        overfetch_k=200,
-    )
-
-    assert [chunk["id"] for chunk in chunks] == ["ch1"]
-    assert len(session.queries) == 3
-    assert all("IN $course_ids" in query for query in session.queries)
-    assert all(call.get("course_ids") == ["owned-course", "enrolled-course"] for call in session.calls)
-
-
-@pytest.mark.asyncio
-async def test_empty_authorized_course_list_skips_retrieval(monkeypatch):
-    async def _unexpected_embed(_):
-        raise AssertionError("embedding must not run without authorized courses")
-
-    monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", _unexpected_embed)
-    assert await chunk_retriever.retrieve_chunks(
-        course_id=None, course_ids=[], query="index"
-    ) == []
-
-
-@pytest.mark.asyncio
-async def test_graph_evidence_reserves_budget_for_each_linked_concept(monkeypatch):
-    class GraphSession(_FakeSession):
-        async def run(self, query, **params):
-            self.calls.append(dict(params))
-            self.queries.append(query)
-            if "MATCH (c:Concept)" in query:
-                return _FakeResult(
-                    [{"id": f"c1-{i}", "concept_id": "c1", "course_id": "course",
-                      "text": "first concept", "index": i} for i in range(6)]
-                    + [{"id": f"c{i}", "concept_id": f"c{i}", "course_id": "course",
-                        "text": f"concept {i}", "index": 10 + i} for i in range(2, 7)]
-                )
-            return _FakeResult([])
-
-    session = GraphSession()
-    monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))
-
-    async def _fake_embed(_):
-        return [[0.0] * 8]
-
-    monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", _fake_embed)
-    chunks = await chunk_retriever.retrieve_chunks(
-        course_id=None, course_ids=["course"], query="compare",
-        concept_ids=[f"c{i}" for i in range(1, 7)], max_chunks=6,
-    )
-
-    assert [chunk["id"] for chunk in chunks] == ["c1-0", "c2", "c3", "c4", "c5", "c6"]

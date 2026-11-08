@@ -32,9 +32,6 @@ public class AiChatRequest {
     @JsonProperty("concept_ids")
     private List<String> conceptIds;
 
-    @JsonProperty("course_ids")
-    private List<String> courseIds;
-
     private List<AiChatHistoryMessage> history;
 
     @JsonProperty("reply_context")

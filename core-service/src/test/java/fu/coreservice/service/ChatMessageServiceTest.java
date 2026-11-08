@@ -42,8 +42,7 @@ class ChatMessageServiceTest {
     private final ClientHttpResponse response = mock(ClientHttpResponse.class);
     private final ChatTurn turn = new ChatTurn(10L, 2L, 20L, 21L,
             List.of(new AiChatHistoryMessage("assistant", "Learn Java and HTTP for Java Servlet")),
-            List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")),
-            List.of("7"));
+            List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")));
     private final ChatRequest request = ChatRequest.builder().message("Kế thừa?")
             .conceptIds(List.of("concept1")).build();
     private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper());
@@ -147,28 +146,9 @@ class ChatMessageServiceTest {
                 isNull(), anyInt(), eq(List.of()), eq(false));
     }
 
-    @Test
-    void globalCompletionPersistsAnswerAndProvenanceTogether() throws Exception {
-        when(storage.beginGlobalTurn(10L, request)).thenReturn(turn);
-        when(client.openChatStream(any())).thenReturn(response);
-        when(response.getBody()).thenReturn(new ByteArrayInputStream(
-                ("event: provenance\ndata: [\"7\"]\n\n"
-                        + "event: token\ndata: {\"token\":\"Answer\"}\n\n"
-                        + "event: sources\ndata: []\n\n"
-                        + "event: done\ndata: {}\n\n").getBytes(StandardCharsets.UTF_8)));
-
-        service.sendMessage(null, 10L, request).writeTo(new ByteArrayOutputStream());
-
-        verify(storage).finishGlobalTurn(eq(turn), eq("Answer"), eq(ChatMessageStatus.COMPLETED),
-                isNull(), anyInt(), eq(List.of()), eq(false), eq(List.of(7L)), eq(true));
-        verify(storage, never()).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
-    }
-
     private static class BlockingBody extends InputStream {
         final ByteArrayInputStream prefix = new ByteArrayInputStream(
-                "event: provenance\ndata: [\"7\"]\n\n"
-                        .concat("event: token\ndata: {\"token\":\"Partial\"}\n\n")
-                        .getBytes(StandardCharsets.UTF_8));
+                "event: token\ndata: {\"token\":\"Partial\"}\n\n".getBytes(StandardCharsets.UTF_8));
         final CountDownLatch waiting = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         @Override public int read(byte[] b, int off, int len) throws IOException {
@@ -186,9 +166,6 @@ class ChatMessageServiceTest {
 
     private ByteArrayOutputStream run(String events) throws Exception {
         when(client.openChatStream(any())).thenReturn(response);
-        if (events.contains("event: token") && !events.contains("event: provenance")) {
-            events = "event: provenance\ndata: [\"7\"]\n\n" + events;
-        }
         when(response.getBody()).thenReturn(new ByteArrayInputStream(events.getBytes(StandardCharsets.UTF_8)));
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         service.sendMessage(7L, 10L, request).writeTo(output);
@@ -202,8 +179,7 @@ class ChatMessageServiceTest {
         doAnswer(call -> { persisted.set(true); return null; }).when(storage).finishTurn(eq(turn),
                 eq("Kế thừa [1]"), eq(ChatMessageStatus.COMPLETED), isNull(), anyInt(), eq(expected), eq(false));
         when(client.openChatStream(any())).thenReturn(response);
-        byte[] bytes = ("event: provenance\r\ndata: [\"7\"]\r\n\r\n"
-                + "event: token\r\ndata: {\"token\":\"Kế thừa [1]\"}\r\n\r\n"
+        byte[] bytes = ("event: token\r\ndata: {\"token\":\"Kế thừa [1]\"}\r\n\r\n"
                 + "event: sources\r\ndata: [{\"citation\":1,\"doc_id\":\"40\",\"chunk_id\":\"chunk1\","
                 + "\"page\":3,\"index\":0,\"text\":\"Nguồn\"}]\r\n\r\n"
                 + "event: done\r\ndata: {}\r\n\r\n").getBytes(StandardCharsets.UTF_8);
@@ -225,7 +201,6 @@ class ChatMessageServiceTest {
         verify(client).openChatStream(upstream.capture());
         assertEquals("2", upstream.getValue().getUserId());
         assertEquals("7", upstream.getValue().getCourseId());
-        assertEquals(List.of("7"), upstream.getValue().getCourseIds());
         assertEquals(List.of("concept1"), upstream.getValue().getConceptIds());
         assertEquals(turn.history(), upstream.getValue().getHistory());
         assertEquals(turn.replyContext(), upstream.getValue().getReplyContext());
@@ -316,18 +291,6 @@ class ChatMessageServiceTest {
     }
 
     @Test
-    void retriesClarificationFinalizationBeforeMarkingTheTurnFailed() throws Exception {
-        doThrow(new RuntimeException("Commit acknowledgment failed"))
-                .doNothing().when(storage).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
-        var output = run("event: clarify\ndata: {\"candidates\":[{\"id\":\"a\",\"name\":\"A\"}]}\n\n"
-                + "event: done\ndata: {}\n\n");
-        assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("event: done\ndata: {}\n\n"));
-        verify(storage).finishTurn(eq(turn), eq(""), any(), isNull(), anyInt(), eq(List.of()), eq(true));
-        verify(storage).finishTurn(eq(turn), eq(""), eq(ChatMessageStatus.FAILED),
-                eq("Commit acknowledgment failed"), anyInt(), eq(List.of()), eq(true));
-    }
-
-    @Test
     void upstreamErrorRetainsPartialAnswerAsFailed() throws Exception {
         var output = run("event: token\ndata: {\"token\":\"Partial\"}\n\n"
                 + "event: error\ndata: {\"error\":\"Provider failed\",\"debug\":\"internal-only-detail\"}\n\n"
@@ -380,19 +343,9 @@ class ChatMessageServiceTest {
     void clientDisconnectClosesPythonAndRetainsInterruptedAnswer() throws Exception {
         when(client.openChatStream(any())).thenReturn(response);
         when(response.getBody()).thenReturn(new ByteArrayInputStream(
-                "event: provenance\ndata: [\"7\"]\n\n"
-                        .concat("event: token\ndata: {\"token\":\"Partial\"}\n\n")
-                        .getBytes(StandardCharsets.UTF_8)));
-        ByteArrayOutputStream forwarded = new ByteArrayOutputStream();
+                "event: token\ndata: {\"token\":\"Partial\"}\n\n".getBytes(StandardCharsets.UTF_8)));
         service.sendMessage(7L, 10L, request).writeTo(new OutputStream() {
             @Override public void write(int value) throws IOException { throw new IOException("Disconnected"); }
-            @Override public void write(byte[] bytes) throws IOException {
-                if (new String(bytes, StandardCharsets.UTF_8).contains("event: provenance")) {
-                    forwarded.write(bytes);
-                } else {
-                    throw new IOException("Disconnected");
-                }
-            }
         });
         verify(storage).finishTurn(eq(turn), eq("Partial"), eq(ChatMessageStatus.INTERRUPTED),
                 eq("Response stream unavailable"), anyInt(), eq(List.of()), eq(false));

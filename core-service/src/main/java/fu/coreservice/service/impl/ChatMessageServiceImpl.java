@@ -55,11 +55,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         AiChatRequest aiRequest = AiChatRequest.builder()
                 .courseId(courseId == null ? null : courseId.toString())
                 .userId(turn.userId().toString()).message(request.getMessage())
-                .courseIds(turn.authorizedCourseIds())
                 .history(turn.history())
                 .replyContext(turn.replyContext())
                 .conceptIds(request.getConceptIds() == null ? null : new ArrayList<>(request.getConceptIds())).build();
-        StreamExecution execution = new StreamExecution(turn, courseId == null);
+        StreamExecution execution = new StreamExecution(turn);
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             execution.mvcManaged = true;
             WebAsyncUtils.getAsyncManager(attributes.getRequest())
@@ -136,7 +135,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     /** One request-scoped owner for state, upstream resources and terminal persistence. */
     private class StreamExecution implements CallableProcessingInterceptor {
         private final ChatTurn turn;
-        private final boolean globalTurn;
         private final StreamState state = new StreamState();
         private final long started = System.nanoTime();
         private ClientHttpResponse upstream;
@@ -145,12 +143,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         private boolean finalized;
         private boolean mvcManaged;
         private boolean awaitingContainer;
-        private boolean clarificationFinalizationAttempted;
 
-        StreamExecution(ChatTurn turn, boolean globalTurn) {
-            this.turn = turn;
-            this.globalTurn = globalTurn;
-        }
+        StreamExecution(ChatTurn turn) { this.turn = turn; }
 
         synchronized boolean start() {
             if (stopped || finalized) return false;
@@ -173,16 +167,15 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         synchronized boolean accept(String event, String payload) throws IOException {
             if (stopped || finalized) return false;
-            acceptEvent(state, event, payload, turn.authorizedCourseIds());
+            acceptEvent(state, event, payload);
             return true;
         }
 
         synchronized boolean complete() throws IOException {
             if (deferInterruptedWorker()) return false;
             if (stopped || finalized) return false;
-            if (!state.failed && !state.clarification
-                    && (!state.sourcesReceived || !state.provenanceReceived)) {
-                throw new IOException("AI stream ended without sources or provenance");
+            if (!state.failed && !state.clarification && !state.sourcesReceived) {
+                throw new IOException("AI stream ended without sources");
             }
             persist();
             return true;
@@ -197,7 +190,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 state.error = truncateError(reason);
                 state.failed = status == ChatMessageStatus.FAILED;
                 // Only a successful clarify/done sequence removes the BOT placeholder.
-                state.clarification = state.clarification && clarificationFinalizationAttempted;
+                state.clarification = false;
                 running = worker;
             }
             if (running != null && running != Thread.currentThread()) running.interrupt();
@@ -239,15 +232,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         private void persist() {
             int latency = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - started) / 1_000_000);
-            if (state.clarification) clarificationFinalizationAttempted = true;
-            if (globalTurn) {
-                chatSessionService.finishGlobalTurn(turn, state.content.toString(), state.status,
-                        truncateError(state.error), latency, List.copyOf(state.sources), state.clarification,
-                        List.copyOf(state.sourceCourseIds), state.provenanceReceived);
-            } else {
-                chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
-                        latency, List.copyOf(state.sources), state.clarification);
-            }
+            chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
+                    latency, List.copyOf(state.sources), state.clarification);
             finalized = true; // Set only after the transactional call has committed.
         }
 
@@ -269,23 +255,20 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
     }
 
-    private void acceptEvent(StreamState state, String event, String payload,
-                             List<String> authorizedCourseIds) throws IOException {
+    private void acceptEvent(StreamState state, String event, String payload) throws IOException {
         JsonNode json = objectMapper.readTree(payload);
         if (json == null) {
             throw new IOException("Empty AI event");
         }
         switch (event) {
             case "token" -> {
-                if (state.failed || state.clarification || !state.provenanceReceived
-                        || !json.path("token").isTextual()) {
+                if (state.failed || state.clarification || !json.path("token").isTextual()) {
                     throw new IOException("Invalid token event");
                 }
                 state.content.append(json.get("token").textValue());
             }
             case "sources" -> {
-                if (state.failed || state.clarification || !state.provenanceReceived
-                        || state.sourcesReceived || !json.isArray()) {
+                if (state.failed || state.clarification || state.sourcesReceived || !json.isArray()) {
                     throw new IOException("Invalid sources event");
                 }
                 List<ChatSource> sources = new ArrayList<>();
@@ -312,29 +295,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 state.sources = sources;
                 state.sourcesReceived = true;
             }
-            case "provenance" -> {
-                if (state.failed || state.clarification || state.provenanceReceived || !json.isArray()) {
-                    throw new IOException("Invalid source provenance event");
-                }
-                Set<Long> courseIds = new HashSet<>();
-                for (JsonNode value : json) {
-                    if (!value.isTextual()) throw new IOException("Invalid source course ID");
-                    Long courseId;
-                    try {
-                        courseId = Long.valueOf(value.textValue());
-                    } catch (NumberFormatException e) {
-                        throw new IOException("Invalid source course ID", e);
-                    }
-                    if (courseId <= 0 || !authorizedCourseIds.contains(courseId.toString())
-                            || !courseIds.add(courseId)) {
-                        throw new IOException("Unauthorized or duplicate source course ID");
-                    }
-                }
-                state.sourceCourseIds = List.copyOf(courseIds);
-                state.provenanceReceived = true;
-            }
             case "clarify" -> {
-                if (!state.content.isEmpty() || state.sourcesReceived || state.provenanceReceived || state.failed
+                if (!state.content.isEmpty() || state.sourcesReceived || state.failed
                         || !json.path("candidates").isArray()) {
                     throw new IOException("Invalid clarification event");
                 }
@@ -400,7 +362,5 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         boolean failed;
         boolean clarification;
         boolean sourcesReceived;
-        List<Long> sourceCourseIds = List.of();
-        boolean provenanceReceived;
     }
 }

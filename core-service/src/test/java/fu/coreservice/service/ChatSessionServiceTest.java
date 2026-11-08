@@ -39,7 +39,6 @@ class ChatSessionServiceTest {
     @Mock ChatSessionRepository chatSessionRepository;
     @Mock ChatMessageRepository chatMessageRepository;
     @Mock MessageCitationRepository messageCitationRepository;
-    @Mock MessageSourceCourseRepository messageSourceCourseRepository;
     @InjectMocks ChatSessionServiceImpl service;
 
     private final User learner = User.builder().userId(2L).email("learner@example.com").build();
@@ -181,118 +180,13 @@ class ChatSessionServiceTest {
             return message;
         });
         ChatTurn turn = service.beginTurn(7L, 10L, ChatRequest.builder().message("OOP?").build());
-        assertEquals(new ChatTurn(10L, 2L, 20L, 21L, List.of(), List.of(), List.of("7")), turn);
+        assertEquals(new ChatTurn(10L, 2L, 20L, 21L), turn);
         ArgumentCaptor<ChatMessage> messages = ArgumentCaptor.forClass(ChatMessage.class);
         verify(chatMessageRepository, times(2)).saveAndFlush(messages.capture());
         assertEquals("OOP?", messages.getAllValues().getFirst().getContent());
         assertEquals(ChatMessageStatus.COMPLETED, messages.getAllValues().getFirst().getStatus());
         assertEquals(ChatMessageStatus.STREAMING, messages.getAllValues().get(1).getStatus());
         assertNotNull(session.getLastActive());
-    }
-
-    @Test
-    void beginGlobalTurnCapturesAllCoursesOwnedOrEnrolledByTheLearner() {
-        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
-        ChatMessage priorAnswer = ChatMessage.builder().messageId(30L).session(session)
-                .senderType(SenderType.BOT).content("Earlier answer").sourceProvenanceTracked(true).build();
-        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
-        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
-        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(7L, 8L));
-        when(chatMessageRepository.findBySessionAndStatusOrderByCreatedAtDescMessageIdDesc(
-                eq(session), eq(ChatMessageStatus.COMPLETED), any(Pageable.class)))
-                .thenReturn(List.of(priorAnswer));
-        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(30L)))
-                .thenReturn(List.of(MessageSourceCourse.builder().message(priorAnswer).courseId(7L).build()));
-        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
-            ChatMessage message = call.getArgument(0);
-            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
-            return message;
-        });
-
-        ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder().message("Java?").build());
-
-        assertEquals(List.of("7", "8"), turn.authorizedCourseIds());
-        assertEquals(List.of("7"), turn.history().getFirst().sourceCourseIds());
-        verify(courseRepository).findAccessibleCourseIdsByUser(learner);
-    }
-
-    @Test
-    void beginGlobalTurnCarriesReplyContextSourceCourses() {
-        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
-        ChatMessage question = ChatMessage.builder().messageId(29L).session(session)
-                .senderType(SenderType.USER).content("Original question").build();
-        ChatMessage replyTarget = ChatMessage.builder().messageId(30L).session(session)
-                .senderType(SenderType.BOT).content("Earlier answer").status(ChatMessageStatus.COMPLETED)
-                .sourceProvenanceTracked(true).replyToMessage(question).build();
-        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
-        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
-        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(7L, 8L));
-        when(chatMessageRepository.findByMessageIdAndSession(30L, session)).thenReturn(Optional.of(replyTarget));
-        when(messageSourceCourseRepository.findByMessage_MessageId(30L))
-                .thenReturn(List.of(MessageSourceCourse.builder().message(replyTarget).courseId(8L).build()));
-        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(30L)))
-                .thenReturn(List.of(MessageSourceCourse.builder().message(replyTarget).courseId(8L).build()));
-        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
-            ChatMessage message = call.getArgument(0);
-            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
-            return message;
-        });
-
-        ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder()
-                .message("Give an example").replyToMessageId(30L).build());
-
-        assertEquals(2, turn.replyContext().size());
-        assertEquals(List.of(), turn.replyContext().getFirst().sourceCourseIds());
-        assertEquals(List.of("8"), turn.replyContext().getLast().sourceCourseIds());
-    }
-
-    @Test
-    void beginGlobalTurnDoesNotReuseAnswersFromCoursesTheLearnerNoLongerCanAccess() {
-        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
-        ChatMessage revokedAnswer = ChatMessage.builder().messageId(30L).session(session)
-                .senderType(SenderType.BOT).content("Private course answer")
-                .sourceProvenanceTracked(true).build();
-        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
-        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
-        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(8L));
-        when(chatMessageRepository.findBySessionAndStatusOrderByCreatedAtDescMessageIdDesc(
-                eq(session), eq(ChatMessageStatus.COMPLETED), any(Pageable.class)))
-                .thenReturn(List.of(revokedAnswer));
-        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(30L)))
-                .thenReturn(List.of(MessageSourceCourse.builder().message(revokedAnswer).courseId(7L).build()));
-        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
-            ChatMessage message = call.getArgument(0);
-            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
-            return message;
-        });
-
-        ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder().message("Follow up").build());
-
-        assertTrue(turn.history().isEmpty());
-    }
-
-    @Test
-    void getGlobalMessagesRedactsRevokedCourseAnswersAndTheirCitations() {
-        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
-        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session).senderType(SenderType.BOT)
-                .content("Private answer").sourceProvenanceTracked(true).build();
-        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
-        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
-        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(8L));
-        when(chatMessageRepository.findBySession(eq(session), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(answer), PageRequest.of(0, 20), 1));
-        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(21L)))
-                .thenReturn(List.of(MessageSourceCourse.builder().message(answer).courseId(7L).build()));
-        when(messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(List.of(21L)))
-                .thenReturn(List.of(MessageCitation.builder().message(answer).citationNumber(1)
-                        .snippetText("Restricted source snippet").build()));
-
-        var response = service.getGlobalMessages(10L, 0, 20).getContent().getFirst();
-
-        assertFalse(response.getContent().contains("Private answer"));
-        assertFalse(response.getCitations().stream().anyMatch(c -> c.getSnippetText() != null
-                && c.getSnippetText().contains("Restricted source snippet")));
-        assertTrue(response.getCitations().isEmpty());
     }
 
     @Test
@@ -316,10 +210,7 @@ class ChatSessionServiceTest {
         assertEquals("Answer [1]", answer.getContent());
         assertEquals(ChatMessageStatus.COMPLETED, answer.getStatus());
         assertEquals(500, answer.getLatencyMs());
-        var citationOperations = inOrder(messageCitationRepository);
-        citationOperations.verify(messageCitationRepository).deleteByMessage_MessageId(21L);
-        citationOperations.verify(messageCitationRepository).flush();
-        citationOperations.verify(messageCitationRepository).saveAll(argThat(items -> {
+        verify(messageCitationRepository).saveAll(argThat(items -> {
             MessageCitation citation = items.iterator().next();
             return citation.getMessage() == answer && citation.getCitationNumber() == 1
                     && citation.getDocumentId().equals(40L) && citation.getVectorChunkId().equals("chunk1");
@@ -339,64 +230,6 @@ class ChatSessionServiceTest {
         verify(chatMessageRepository).delete(answer);
         verify(chatMessageRepository, never()).save(any());
         verifyNoInteractions(messageCitationRepository);
-    }
-
-    @Test
-    void globalCompletionSavesAnswerAndProvenanceInOneOperation() {
-        ChatSession session = ChatSession.builder().sessionId(10L).build();
-        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session)
-                .status(ChatMessageStatus.STREAMING).build();
-        when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
-
-        service.finishGlobalTurn(new ChatTurn(10L, 2L, 20L, 21L,
-                        List.of(), List.of(), List.of("7")),
-                "Answer", ChatMessageStatus.COMPLETED, null, 500, List.of(), false,
-                List.of(7L), true);
-
-        assertEquals("Answer", answer.getContent());
-        assertEquals(ChatMessageStatus.COMPLETED, answer.getStatus());
-        assertTrue(answer.isSourceProvenanceTracked());
-        var operations = inOrder(chatMessageRepository, messageSourceCourseRepository);
-        operations.verify(chatMessageRepository).saveAndFlush(answer);
-        operations.verify(messageSourceCourseRepository).deleteByMessage_MessageId(21L);
-        operations.verify(messageSourceCourseRepository).flush();
-        operations.verify(messageSourceCourseRepository).saveAll(argThat(items -> {
-            MessageSourceCourse sourceCourse = items.iterator().next();
-            return sourceCourse.getMessage() == answer && sourceCourse.getCourseId().equals(7L);
-        }));
-        operations.verify(chatMessageRepository).saveAndFlush(answer);
-    }
-
-    @Test
-    void globalClarificationSkipsProvenancePersistence() {
-        ChatMessage answer = ChatMessage.builder().messageId(21L)
-                .status(ChatMessageStatus.STREAMING).build();
-        when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
-
-        service.finishGlobalTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.COMPLETED,
-                null, 500, List.of(), true, List.of(7L), true);
-
-        verify(chatMessageRepository).delete(answer);
-        verifyNoInteractions(messageSourceCourseRepository);
-        verify(chatMessageRepository, never()).saveAndFlush(any());
-    }
-
-    @Test
-    void clarificationRetrySucceedsWhenPlaceholderWasAlreadyDeleted() {
-        when(chatMessageRepository.findById(21L)).thenReturn(Optional.empty());
-        service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.FAILED,
-                "Commit acknowledgment failed", 500, List.of(), true);
-        verify(chatMessageRepository).findById(21L);
-        verify(chatMessageRepository, never()).delete(any());
-        verifyNoInteractions(chatSessionRepository, messageCitationRepository);
-    }
-
-    @Test
-    void missingPlaceholderStillFailsForNonClarificationFinalization() {
-        when(chatMessageRepository.findById(21L)).thenReturn(Optional.empty());
-        assertEquals(ErrorCode.CHAT_MESSAGE_NOT_FOUND, assertThrows(AppException.class,
-                () -> service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.FAILED,
-                        "Failure", 500, List.of(), false)).getErrorCode());
     }
 
     @Test

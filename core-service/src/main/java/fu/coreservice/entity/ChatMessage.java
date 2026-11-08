@@ -38,11 +38,6 @@ public class ChatMessage {
     @Column(name = "content", nullable = false, columnDefinition = "TEXT")
     private String content;
 
-    @Builder.Default
-    @Column(name = "source_provenance_tracked", nullable = false)
-    @ColumnDefault("false")
-    private boolean sourceProvenanceTracked = false;
-
     // Existing messages and ordinary user messages are completed by default.
     // The streaming service must explicitly create a BOT message as STREAMING.
     @Builder.Default

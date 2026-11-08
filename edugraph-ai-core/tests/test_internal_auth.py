@@ -25,12 +25,3 @@ def test_internal_api_key_must_be_configured_and_nonempty(monkeypatch):
         Settings(_env_file=None)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, INTERNAL_API_KEY="")
-
-
-def test_concept_linking_cache_ttl_is_configurable_and_can_be_disabled(monkeypatch):
-    monkeypatch.setenv("INTERNAL_API_KEY", "test-key")
-    monkeypatch.setenv("CONCEPT_LINKING_CACHE_TTL_SECONDS", "0")
-
-    config = Settings(_env_file=None)
-
-    assert config.CONCEPT_LINKING_CACHE_TTL_SECONDS == 0
