@@ -46,6 +46,7 @@ class ChatRequest(BaseModel):
     concept_ids: Optional[List[str]] = None
     history: List[HistoryMessage] = Field(default_factory=list, max_length=12)
     reply_context: List[HistoryMessage] = Field(default_factory=list, max_length=2)
+    authorized_course_ids: Optional[List[str]] = None  # Danh sách course_ids user được phép truy cập (từ Spring Boot JWT)
 
 async def verify_course_exists(course_id: str):
     # Java authorizes owners/enrolled learners against its relational database.
@@ -105,7 +106,9 @@ async def _chat_explain_events(
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
         if linked_concept_ids is None:
-            link_res = await link_concepts(course_id, search_query)
+            # Sử dụng authorized_course_ids nếu có, fallback đến course_id
+            auth_ids = authorized_course_ids or ([course_id] if course_id else None)
+            link_res = await link_concepts(auth_ids, search_query)
             if link_res.get("clarify"):
                 # Gửi clarify event và kết thúc bằng done
                 yield format_sse("clarify", {"candidates": link_res["clarify"]})
@@ -123,6 +126,7 @@ async def _chat_explain_events(
             course_id=course_id,
             query=search_query,
             concept_ids=linked_concept_ids,
+            authorized_course_ids=authorized_course_ids,
             max_chunks=settings.CHAT_MAX_CHUNKS
         )
 

@@ -66,6 +66,7 @@ async def retrieve_chunks(
     course_id: Optional[str],
     query: str,
     concept_ids: Optional[List[str]] = None,
+    authorized_course_ids: Optional[List[str]] = None,
     max_chunks: int = 6,
     overfetch_k: Optional[int] = None
 ) -> List[Dict[str, Any]]:
@@ -78,18 +79,27 @@ async def retrieve_chunks(
     """
     graph_chunks = []
     
+    # Determine the effective course filter
+    # If authorized_course_ids is provided, use it; otherwise fall back to course_id
+    if authorized_course_ids:
+        course_filter = " AND c.course_id IN $authorized_course_ids"
+    elif course_id:
+        course_filter = " AND c.course_id = $course_id"
+    else:
+        course_filter = ""
+    
     # 1. Graph chunks nếu có concept_ids
     if concept_ids:
         query_graph = """
         MATCH (c:Concept)<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
         WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
           AND c.id IN $concept_ids
-          AND ($course_id IS NULL OR (c.course_id = $course_id AND ch.course_id = $course_id))
+          AND c.course_id IN $authorized_course_ids
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """
         async with neo4j_client.driver.session() as session:
-            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids)
+            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, authorized_course_ids=authorized_course_ids)
             graph_chunks = await res.data()
 
     # 2. Vector search
@@ -99,7 +109,7 @@ async def retrieve_chunks(
     vec_query = """
     CALL db.index.vector.queryNodes('chunk_embedding', $k, $vector)
     YIELD node, score
-    WHERE ($course_id IS NULL OR node.course_id = $course_id)
+    WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
@@ -108,7 +118,7 @@ async def retrieve_chunks(
     ft_cypher = """
     CALL db.index.fulltext.queryNodes('chunk_text', $ft_query)
     YIELD node, score
-    WHERE ($course_id IS NULL OR node.course_id = $course_id)
+    WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
