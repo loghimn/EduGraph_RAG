@@ -193,9 +193,16 @@ class ChatSessionServiceTest {
     @Test
     void beginGlobalTurnCapturesAllCoursesOwnedOrEnrolledByTheLearner() {
         ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
+        ChatMessage priorAnswer = ChatMessage.builder().messageId(30L).session(session)
+                .senderType(SenderType.BOT).content("Earlier answer").sourceProvenanceTracked(true).build();
         when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
         when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
         when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(7L, 8L));
+        when(chatMessageRepository.findBySessionAndStatusOrderByCreatedAtDescMessageIdDesc(
+                eq(session), eq(ChatMessageStatus.COMPLETED), any(Pageable.class)))
+                .thenReturn(List.of(priorAnswer));
+        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(30L)))
+                .thenReturn(List.of(MessageSourceCourse.builder().message(priorAnswer).courseId(7L).build()));
         when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
             ChatMessage message = call.getArgument(0);
             message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
@@ -205,7 +212,38 @@ class ChatSessionServiceTest {
         ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder().message("Java?").build());
 
         assertEquals(List.of("7", "8"), turn.authorizedCourseIds());
+        assertEquals(List.of("7"), turn.history().getFirst().sourceCourseIds());
         verify(courseRepository).findAccessibleCourseIdsByUser(learner);
+    }
+
+    @Test
+    void beginGlobalTurnCarriesReplyContextSourceCourses() {
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).build();
+        ChatMessage question = ChatMessage.builder().messageId(29L).session(session)
+                .senderType(SenderType.USER).content("Original question").build();
+        ChatMessage replyTarget = ChatMessage.builder().messageId(30L).session(session)
+                .senderType(SenderType.BOT).content("Earlier answer").status(ChatMessageStatus.COMPLETED)
+                .sourceProvenanceTracked(true).replyToMessage(question).build();
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        when(courseRepository.findAccessibleCourseIdsByUser(learner)).thenReturn(List.of(7L, 8L));
+        when(chatMessageRepository.findByMessageIdAndSession(30L, session)).thenReturn(Optional.of(replyTarget));
+        when(messageSourceCourseRepository.findByMessage_MessageId(30L))
+                .thenReturn(List.of(MessageSourceCourse.builder().message(replyTarget).courseId(8L).build()));
+        when(messageSourceCourseRepository.findByMessage_MessageIdIn(List.of(30L)))
+                .thenReturn(List.of(MessageSourceCourse.builder().message(replyTarget).courseId(8L).build()));
+        when(chatMessageRepository.saveAndFlush(any())).thenAnswer(call -> {
+            ChatMessage message = call.getArgument(0);
+            message.setMessageId(message.getSenderType() == SenderType.USER ? 20L : 21L);
+            return message;
+        });
+
+        ChatTurn turn = service.beginGlobalTurn(10L, ChatRequest.builder()
+                .message("Give an example").replyToMessageId(30L).build());
+
+        assertEquals(2, turn.replyContext().size());
+        assertEquals(List.of(), turn.replyContext().getFirst().sourceCourseIds());
+        assertEquals(List.of("8"), turn.replyContext().getLast().sourceCourseIds());
     }
 
     @Test
@@ -301,6 +339,46 @@ class ChatSessionServiceTest {
         verify(chatMessageRepository).delete(answer);
         verify(chatMessageRepository, never()).save(any());
         verifyNoInteractions(messageCitationRepository);
+    }
+
+    @Test
+    void globalCompletionSavesAnswerAndProvenanceInOneOperation() {
+        ChatSession session = ChatSession.builder().sessionId(10L).build();
+        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session)
+                .status(ChatMessageStatus.STREAMING).build();
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
+
+        service.finishGlobalTurn(new ChatTurn(10L, 2L, 20L, 21L,
+                        List.of(), List.of(), List.of("7")),
+                "Answer", ChatMessageStatus.COMPLETED, null, 500, List.of(), false,
+                List.of(7L), true);
+
+        assertEquals("Answer", answer.getContent());
+        assertEquals(ChatMessageStatus.COMPLETED, answer.getStatus());
+        assertTrue(answer.isSourceProvenanceTracked());
+        var operations = inOrder(chatMessageRepository, messageSourceCourseRepository);
+        operations.verify(chatMessageRepository).saveAndFlush(answer);
+        operations.verify(messageSourceCourseRepository).deleteByMessage_MessageId(21L);
+        operations.verify(messageSourceCourseRepository).flush();
+        operations.verify(messageSourceCourseRepository).saveAll(argThat(items -> {
+            MessageSourceCourse sourceCourse = items.iterator().next();
+            return sourceCourse.getMessage() == answer && sourceCourse.getCourseId().equals(7L);
+        }));
+        operations.verify(chatMessageRepository).saveAndFlush(answer);
+    }
+
+    @Test
+    void globalClarificationSkipsProvenancePersistence() {
+        ChatMessage answer = ChatMessage.builder().messageId(21L)
+                .status(ChatMessageStatus.STREAMING).build();
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
+
+        service.finishGlobalTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.COMPLETED,
+                null, 500, List.of(), true, List.of(7L), true);
+
+        verify(chatMessageRepository).delete(answer);
+        verifyNoInteractions(messageSourceCourseRepository);
+        verify(chatMessageRepository, never()).saveAndFlush(any());
     }
 
     @Test

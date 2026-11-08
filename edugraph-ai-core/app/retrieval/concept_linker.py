@@ -8,7 +8,10 @@ from app.config import settings
 from app.core.text_utils import normalize_concept_key, normalize_text_unaccent
 from app.db.neo4j_client import neo4j_client
 
-_CONCEPT_INDEX_CACHE: OrderedDict[Tuple[str, ...], Tuple[float, Dict[str, Any]]] = OrderedDict()
+_CONCEPT_INDEX_CACHE: OrderedDict[
+    Tuple[str, ...],
+    Tuple[float, Tuple[Tuple[str, Optional[int]], ...], Dict[str, Any]]
+] = OrderedDict()
 _CONCEPT_INDEX_CACHE_LIMIT = 128
 
 def extract_ngrams(tokens: List[str], max_n: int = 4) -> List[Tuple[str, int, int]]:
@@ -186,6 +189,45 @@ def _scope_key(course_id: Optional[str], course_ids: Optional[List[str]]) -> Tup
         return ("course", course_id)
     return ("all",)
 
+
+async def _get_scope_versions(
+    course_id: Optional[str], course_ids: Optional[List[str]]
+) -> Tuple[Tuple[str, Optional[int]], ...]:
+    if course_ids is not None:
+        scoped_course_ids = sorted(set(course_ids))
+        query = """
+        MATCH (course:Course)
+        WHERE course.id IN $course_ids
+        RETURN course.id AS course_id, coalesce(course.version, 0) AS version
+        ORDER BY course.id
+        """
+        params = {"course_ids": scoped_course_ids}
+    elif course_id is not None:
+        scoped_course_ids = [course_id]
+        query = """
+        MATCH (course:Course {id: $course_id})
+        RETURN course.id AS course_id, coalesce(course.version, 0) AS version
+        """
+        params = {"course_id": course_id}
+    else:
+        scoped_course_ids = []
+        query = """
+        MATCH (course:Course)
+        RETURN course.id AS course_id, coalesce(course.version, 0) AS version
+        ORDER BY course.id
+        """
+        params = {}
+
+    async with neo4j_client.driver.session() as session:
+        result = await session.run(query, **params)
+        rows = await result.data()
+
+    versions = {row["course_id"]: row["version"] for row in rows}
+    if course_ids is None and course_id is None:
+        return tuple(sorted(versions.items()))
+    return tuple((item, versions.get(item)) for item in scoped_course_ids)
+
+
 async def link_concepts(course_id: Optional[str] = None,
                         message: Optional[str] = None,
                         course_ids: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -197,17 +239,19 @@ async def link_concepts(course_id: Optional[str] = None,
 
     key = _scope_key(course_id, course_ids)
     ttl = max(0, getattr(settings, "CONCEPT_LINKING_CACHE_TTL_SECONDS", 60))
+    versions = await _get_scope_versions(course_id, course_ids) if ttl else ()
     cached = _CONCEPT_INDEX_CACHE.get(key)
     now = time.monotonic()
-    if ttl and cached and now - cached[0] < ttl:
+    if ttl and cached and cached[1] == versions and now - cached[0] < ttl:
         _CONCEPT_INDEX_CACHE.move_to_end(key)
-        index = cached[1]
+        index = cached[2]
     else:
         _CONCEPT_INDEX_CACHE.pop(key, None)
         concepts = await get_course_concepts_for_linking(course_id=course_id, course_ids=course_ids)
-        index = _build_concept_index(concepts)
+        index = await asyncio.get_running_loop().run_in_executor(
+            None, _build_concept_index, concepts)
         if ttl:
-            _CONCEPT_INDEX_CACHE[key] = (now, index)
+            _CONCEPT_INDEX_CACHE[key] = (now, versions, index)
             _CONCEPT_INDEX_CACHE.move_to_end(key)
             while len(_CONCEPT_INDEX_CACHE) > _CONCEPT_INDEX_CACHE_LIMIT:
                 _CONCEPT_INDEX_CACHE.popitem(last=False)

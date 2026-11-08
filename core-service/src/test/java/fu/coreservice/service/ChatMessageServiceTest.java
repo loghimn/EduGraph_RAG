@@ -147,6 +147,23 @@ class ChatMessageServiceTest {
                 isNull(), anyInt(), eq(List.of()), eq(false));
     }
 
+    @Test
+    void globalCompletionPersistsAnswerAndProvenanceTogether() throws Exception {
+        when(storage.beginGlobalTurn(10L, request)).thenReturn(turn);
+        when(client.openChatStream(any())).thenReturn(response);
+        when(response.getBody()).thenReturn(new ByteArrayInputStream(
+                ("event: provenance\ndata: [\"7\"]\n\n"
+                        + "event: token\ndata: {\"token\":\"Answer\"}\n\n"
+                        + "event: sources\ndata: []\n\n"
+                        + "event: done\ndata: {}\n\n").getBytes(StandardCharsets.UTF_8)));
+
+        service.sendMessage(null, 10L, request).writeTo(new ByteArrayOutputStream());
+
+        verify(storage).finishGlobalTurn(eq(turn), eq("Answer"), eq(ChatMessageStatus.COMPLETED),
+                isNull(), anyInt(), eq(List.of()), eq(false), eq(List.of(7L)), eq(true));
+        verify(storage, never()).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+    }
+
     private static class BlockingBody extends InputStream {
         final ByteArrayInputStream prefix = new ByteArrayInputStream(
                 "event: provenance\ndata: [\"7\"]\n\n"

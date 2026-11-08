@@ -104,8 +104,11 @@ async def test_linker_matches_concepts_after_candidate_limit(monkeypatch):
     concepts.append({"id": "target", "name": "Zebra Concept", "aliases": [], "course_id": "course"})
 
     class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
         async def data(self):
-            return concepts
+            return self.rows
 
     class Session:
         async def __aenter__(self):
@@ -117,7 +120,9 @@ async def test_linker_matches_concepts_after_candidate_limit(monkeypatch):
         async def run(self, query, **params):
             assert "LIMIT" not in query
             assert params["course_ids"] == ["course"]
-            return Result()
+            if "RETURN course.id AS course_id" in query:
+                return Result([{"course_id": "course", "version": 0}])
+            return Result(concepts)
 
     class Driver:
         def session(self):
@@ -140,8 +145,11 @@ async def test_clarification_returns_all_matching_candidates(monkeypatch):
     ]
 
     class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
         async def data(self):
-            return concepts
+            return self.rows
 
     class Session:
         async def __aenter__(self):
@@ -151,7 +159,9 @@ async def test_clarification_returns_all_matching_candidates(monkeypatch):
             return False
 
         async def run(self, query, **params):
-            return Result()
+            if "RETURN course.id AS course_id" in query:
+                return Result([{"course_id": "clarify-course", "version": 0}])
+            return Result(concepts)
 
     class Driver:
         def session(self):
@@ -182,12 +192,15 @@ async def test_empty_course_scope_does_not_query_concepts(monkeypatch):
 async def test_scoped_concept_index_is_reused_between_turns(monkeypatch):
     from app.retrieval import concept_linker
 
-    queries = []
+    concept_queries = []
+    version_queries = []
 
     class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
         async def data(self):
-            return [{"id": "cached", "name": "Cached Topic", "aliases": [],
-                     "course_id": "cached-course"}]
+            return self.rows
 
     class Session:
         async def __aenter__(self):
@@ -197,8 +210,12 @@ async def test_scoped_concept_index_is_reused_between_turns(monkeypatch):
             return False
 
         async def run(self, query, **params):
-            queries.append(query)
-            return Result()
+            if "RETURN course.id AS course_id" in query:
+                version_queries.append(query)
+                return Result([{"course_id": "cached-course", "version": 1}])
+            concept_queries.append(query)
+            return Result([{"id": "cached", "name": "Cached Topic", "aliases": [],
+                            "course_id": "cached-course"}])
 
     class Driver:
         def session(self):
@@ -212,4 +229,107 @@ async def test_scoped_concept_index_is_reused_between_turns(monkeypatch):
         )
         assert result["concept_ids"] == ["cached"]
 
-    assert len(queries) == 1
+    assert len(concept_queries) == 1
+    assert len(version_queries) == 2
+
+
+@pytest.mark.asyncio
+async def test_scoped_index_refreshes_after_course_version_changes(monkeypatch):
+    from app.config import settings
+    from app.retrieval import concept_linker
+
+    version = 1
+    concept_queries = []
+    monkeypatch.setattr(settings, "CONCEPT_LINKING_CACHE_TTL_SECONDS", 60)
+    concept_linker._CONCEPT_INDEX_CACHE.clear()
+
+    class Result:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def data(self):
+            return self.rows
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **params):
+            if "RETURN course.id AS course_id" in query:
+                return Result([{"course_id": "archive-course", "version": version}])
+            concept_queries.append(query)
+            concepts = [
+                {"id": "active", "name": "Shared Topic", "aliases": [], "course_id": "archive-course"}
+            ]
+            if version == 1:
+                concepts.insert(0, {
+                    "id": "archived", "name": "Shared Topic", "aliases": [],
+                    "course_id": "archive-course",
+                })
+            return Result(concepts)
+
+    class Driver:
+        def session(self):
+            return Session()
+
+    monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
+
+    before_archive = await link_concepts(
+        course_id=None, message="Shared Topic", course_ids=["archive-course"]
+    )
+    assert {candidate["id"] for candidate in before_archive["clarify"]} == {"active", "archived"}
+
+    version = 2
+    after_archive = await link_concepts(
+        course_id=None, message="Shared Topic", course_ids=["archive-course"]
+    )
+
+    assert after_archive == {"concept_ids": ["active"], "clarify": None}
+    assert len(concept_queries) == 2
+
+
+@pytest.mark.asyncio
+async def test_concept_index_build_runs_outside_event_loop(monkeypatch):
+    import threading
+    from app.config import settings
+    from app.retrieval import concept_linker
+
+    loop_thread = threading.get_ident()
+    build_threads = []
+    monkeypatch.setattr(settings, "CONCEPT_LINKING_CACHE_TTL_SECONDS", 0)
+
+    class Result:
+        async def data(self):
+            return [{"id": "offloaded", "name": "Offloaded Topic", "aliases": []}]
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def run(self, query, **params):
+            return Result()
+
+    class Driver:
+        def session(self):
+            return Session()
+
+    original_build = concept_linker._build_concept_index
+
+    def build_index(concepts):
+        build_threads.append(threading.get_ident())
+        return original_build(concepts)
+
+    monkeypatch.setattr(concept_linker.neo4j_client, "driver", Driver())
+    monkeypatch.setattr(concept_linker, "_build_concept_index", build_index)
+
+    result = await link_concepts(message="Offloaded Topic", course_ids=["offload-course"])
+
+    assert result["concept_ids"] == ["offloaded"]
+    assert build_threads
+    assert all(thread_id != loop_thread for thread_id in build_threads)

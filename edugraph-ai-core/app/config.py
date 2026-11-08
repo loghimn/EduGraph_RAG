@@ -69,6 +69,7 @@ class Settings(BaseSettings):
     CHAT_MAX_CHUNKS: int = 6
     MIN_CHARS_PER_PAGE: int = 100
     ALIAS_FUZZY_MIN_LEN: int = 4
+    CONCEPT_LINKING_CACHE_TTL_SECONDS: float = 60.0
 
     # Learning Paths Constants
     ISOLATED_CONCEPTS_WARNING_THRESHOLD: float = 0.2

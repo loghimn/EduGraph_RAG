@@ -196,6 +196,8 @@ async def retrieve_chunks(
 
     # Reserve one evidence chunk per linked concept before filling by graph order.
     for concept_id in concept_ids or []:
+        if len(selected) >= max_chunks:
+            break
         candidate = next((ch for ch in graph_chunks
                           if ch.get("concept_id") == concept_id and ch["id"] not in seen_ids), None)
         if candidate is not None and len(selected) < max_chunks:

@@ -59,7 +59,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 .history(turn.history())
                 .replyContext(turn.replyContext())
                 .conceptIds(request.getConceptIds() == null ? null : new ArrayList<>(request.getConceptIds())).build();
-        StreamExecution execution = new StreamExecution(turn);
+        StreamExecution execution = new StreamExecution(turn, courseId == null);
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             execution.mvcManaged = true;
             WebAsyncUtils.getAsyncManager(attributes.getRequest())
@@ -136,6 +136,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     /** One request-scoped owner for state, upstream resources and terminal persistence. */
     private class StreamExecution implements CallableProcessingInterceptor {
         private final ChatTurn turn;
+        private final boolean globalTurn;
         private final StreamState state = new StreamState();
         private final long started = System.nanoTime();
         private ClientHttpResponse upstream;
@@ -146,7 +147,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         private boolean awaitingContainer;
         private boolean clarificationFinalizationAttempted;
 
-        StreamExecution(ChatTurn turn) { this.turn = turn; }
+        StreamExecution(ChatTurn turn, boolean globalTurn) {
+            this.turn = turn;
+            this.globalTurn = globalTurn;
+        }
 
         synchronized boolean start() {
             if (stopped || finalized) return false;
@@ -236,11 +240,13 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         private void persist() {
             int latency = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - started) / 1_000_000);
             if (state.clarification) clarificationFinalizationAttempted = true;
-            chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
-                    latency, List.copyOf(state.sources), state.clarification);
-            if (!state.clarification) {
-                chatSessionService.recordSourceCourseProvenance(
-                        turn, List.copyOf(state.sourceCourseIds), state.provenanceReceived);
+            if (globalTurn) {
+                chatSessionService.finishGlobalTurn(turn, state.content.toString(), state.status,
+                        truncateError(state.error), latency, List.copyOf(state.sources), state.clarification,
+                        List.copyOf(state.sourceCourseIds), state.provenanceReceived);
+            } else {
+                chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
+                        latency, List.copyOf(state.sources), state.clarification);
             }
             finalized = true; // Set only after the transactional call has committed.
         }

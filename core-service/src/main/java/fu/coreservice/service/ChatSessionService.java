@@ -21,5 +21,7 @@ public interface ChatSessionService {
     ChatTurn beginGlobalTurn(Long sessionId, ChatRequest request);
     void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
                     int latencyMs, List<ChatSource> sources, boolean clarification);
-    void recordSourceCourseProvenance(ChatTurn turn, List<Long> courseIds, boolean tracked);
+    void finishGlobalTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
+                          int latencyMs, List<ChatSource> sources, boolean clarification,
+                          List<Long> sourceCourseIds, boolean provenanceTracked);
 }

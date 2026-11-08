@@ -38,6 +38,7 @@ def no_data_events() -> List[str]:
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(max_length=4_000)
+    source_course_ids: List[str] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):
@@ -95,6 +96,11 @@ async def _chat_explain_events(
                 yield event
             return
 
+        context_course_ids = {
+            str(source_course_id)
+            for item in [*(history or []), *(reply_context or [])]
+            for source_course_id in item.get("source_course_ids", [])
+        }
         history = prepare_history(history)
         reply_context = prepare_history(reply_context)
         search_query = message
@@ -147,12 +153,12 @@ async def _chat_explain_events(
 
         if course_id is None and any(chunk.get("course_id") is None for chunk in chunks):
             raise ValueError("Retrieved source is missing course provenance")
-        source_course_ids = sorted({
+        source_course_ids = {
             str(chunk["course_id"]) for chunk in chunks if chunk.get("course_id") is not None
-        })
+        } | context_course_ids
         if course_id is not None:
-            source_course_ids = [str(course_id)]
-        yield format_sse("provenance", source_course_ids)
+            source_course_ids.add(str(course_id))
+        yield format_sse("provenance", sorted(source_course_ids))
 
         # 3. Dựng prompt cho nhánh explain
         prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query,

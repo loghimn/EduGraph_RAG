@@ -385,6 +385,39 @@ def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_ver
 @patch("app.api.chat.link_concepts", new_callable=AsyncMock)
 @patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
 @patch("app.api.chat.llm_client")
+def test_global_provenance_includes_context_courses(mock_llm, mock_retrieve, mock_link):
+    mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
+    mock_retrieve.return_value = [
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0,
+         "text": "Current source.", "course_id": "course-8"}
+    ]
+
+    async def fake_stream(prompt, priority=True):
+        yield "Answer [1]."
+    mock_llm.generate_stream = fake_stream
+
+    resp = client.post(
+        "/chat",
+        headers={"X-Internal-Key": "test-internal-api-key"},
+        json={
+            "course_id": None,
+            "course_ids": ["course-7", "course-8"],
+            "user_id": "u1",
+            "message": "Follow up",
+            "history": [{"role": "assistant", "content": "Earlier answer",
+                         "source_course_ids": ["course-7"]}],
+            "reply_context": [{"role": "assistant", "content": "Selected answer",
+                               "source_course_ids": ["course-7"]}],
+        },
+    )
+
+    assert resp.status_code == 200
+    assert 'event: provenance\ndata: ["course-7", "course-8"]' in resp.text
+
+
+@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.api.chat.llm_client")
 def test_chat_global_without_authorized_courses_returns_no_data(mock_llm, mock_retrieve, mock_link):
     from app.api.chat import NO_DATA_MESSAGE
 
