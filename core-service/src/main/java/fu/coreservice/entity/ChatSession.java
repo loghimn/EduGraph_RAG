@@ -28,7 +28,7 @@ public class ChatSession {
     private User learner;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "course_id", nullable = false)
+    @JoinColumn(name = "course_id", nullable = true)
     private Course course;
 
     @ManyToOne(fetch = FetchType.LAZY)

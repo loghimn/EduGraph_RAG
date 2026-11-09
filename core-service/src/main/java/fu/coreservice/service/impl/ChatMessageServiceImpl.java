@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -45,9 +46,20 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ObjectMapper objectMapper;
 
     @Override
+    @Transactional
     public StreamingResponseBody sendMessage(Long courseId, Long sessionId, ChatRequest request) {
-        ChatTurn turn = chatSessionService.beginTurn(courseId, sessionId, request);
-        AiChatRequest aiRequest = AiChatRequest.builder().courseId(courseId.toString())
+        ChatTurn turn;
+        if (courseId == null) {
+            turn = chatSessionService.beginGlobalTurn(sessionId, request);
+        } else {
+            turn = chatSessionService.beginTurn(courseId, sessionId, request);
+        }
+        List<String> authorizedCourseIds = courseId == null
+                ? chatSessionService.getGlobalChatCourseIds() : List.of(courseId.toString());
+        AiChatRequest aiRequest = AiChatRequest.builder()
+                .courseId(courseId == null ? null : courseId.toString())
+                .authorizedCourseIds(authorizedCourseIds)
+                .courseNames(chatSessionService.getChatCourseNames(authorizedCourseIds))
                 .userId(turn.userId().toString()).message(request.getMessage())
                 .history(turn.history())
                 .replyContext(turn.replyContext())

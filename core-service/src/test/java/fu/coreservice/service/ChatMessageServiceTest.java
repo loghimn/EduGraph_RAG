@@ -27,6 +27,7 @@ import org.springframework.http.client.ClientHttpResponse;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -54,6 +55,37 @@ class ChatMessageServiceTest {
 
     @AfterEach
     void resetRequestContext() { RequestContextHolder.resetRequestAttributes(); }
+
+    @Test
+    void globalChatSendsServerAuthorizedCoursesToPython() throws Exception {
+        when(storage.beginGlobalTurn(10L, request)).thenReturn(turn);
+        when(storage.getGlobalChatCourseIds()).thenReturn(List.of("26", "28"));
+        when(storage.getChatCourseNames(List.of("26", "28")))
+                .thenReturn(Map.of("26", "Data structures", "28", "Databases"));
+        when(client.openChatStream(any())).thenReturn(response);
+        when(response.getBody()).thenReturn(new ByteArrayInputStream(
+                "event: sources\ndata: []\n\nevent: done\ndata: {}\n\n".getBytes(StandardCharsets.UTF_8)));
+        service.sendMessage(null, 10L, request).writeTo(new ByteArrayOutputStream());
+        ArgumentCaptor<AiChatRequest> payload = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(payload.capture());
+        assertNull(payload.getValue().getCourseId());
+        assertEquals(List.of("26", "28"), payload.getValue().getAuthorizedCourseIds());
+        var json = new ObjectMapper().valueToTree(payload.getValue());
+        assertEquals("26", json.get("authorized_course_ids").get(0).asText());
+        assertEquals("Data structures", json.get("course_names").get("26").asText());
+        assertEquals("Databases", json.get("course_names").get("28").asText());
+    }
+
+    @Test
+    void courseChatSendsOnlySelectedCourseToPython() throws Exception {
+        run("event: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        ArgumentCaptor<AiChatRequest> payload = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(payload.capture());
+        assertEquals("7", payload.getValue().getCourseId());
+        assertEquals(List.of("7"), payload.getValue().getAuthorizedCourseIds());
+        verify(storage).getChatCourseNames(List.of("7"));
+        verify(storage, never()).getGlobalChatCourseIds();
+    }
 
     private MockHttpServletRequest mvcRequest() {
         MockHttpServletRequest servletRequest = new MockHttpServletRequest();

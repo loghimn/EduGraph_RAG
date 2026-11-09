@@ -10,9 +10,17 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
+import java.util.List;
 
 @Repository
 public interface CourseRepository extends JpaRepository<Course, Long> {
+    @Query("""
+        SELECT c.courseId FROM Course c
+        WHERE c.isPublic = true AND c.notebook = false
+        ORDER BY c.courseId
+        """)
+    List<Long> findGlobalChatCourseIds();
+
     Page<Course> findByUserAndNotebookTrue(User user, Pageable pageable);
 
     @Query("SELECT c FROM Course c WHERE c.user = :user AND c.notebook = false")

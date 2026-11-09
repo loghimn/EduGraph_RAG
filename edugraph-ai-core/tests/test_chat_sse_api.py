@@ -35,7 +35,7 @@ def test_context_failure_keeps_original_question_and_streams_answer(
         context_field: [{"role": "assistant", "content": "Previous answer"}]
     })
     assert resp.status_code == 200
-    mock_link.assert_awaited_once_with("c1", question)
+    mock_link.assert_awaited_once_with(["c1"], question)
     assert mock_retrieve.call_args.kwargs["query"] == question
     assert "Học Java và HTTP [1]" in resp.text
     assert "event: sources" in resp.text
@@ -57,7 +57,7 @@ def test_context_failure_without_matching_concept_still_returns_no_data(mock_llm
     })
     assert NO_DATA_MESSAGE in resp.text
     assert "event: error" not in resp.text
-    mock_link.assert_awaited_once_with("c1", "Học cái nào trước?")
+    mock_link.assert_awaited_once_with(["c1"], "Học cái nào trước?")
     mock_llm.generate_stream.assert_not_called()
 
 
@@ -85,7 +85,7 @@ async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
         frames = [frame async for frame in chat_explain_stream_generator(
             "c1", "Java Servlet?", history=[{"role": "assistant", "content": "Previous answer"}])]
     assert cancelled
-    linker.assert_awaited_once_with("c1", "Java Servlet?")
+    linker.assert_awaited_once_with(["c1"], "Java Servlet?")
     assert NO_DATA_MESSAGE in "".join(frames)
     assert "event: error" not in "".join(frames)
 
@@ -124,7 +124,7 @@ def test_reply_uses_selected_message_without_recent_history(mock_llm, mock_retri
     assert resp.status_code == 200
     mock_resolve.assert_awaited_once_with("Give an example", [],
                                           [{"role": "assistant", "content": "Servlet handles HTTP "}])
-    mock_link.assert_awaited_once_with("c1", "Java Servlet HTTP example")
+    mock_link.assert_awaited_once_with(["c1"], "Java Servlet HTTP example")
     assert "Example [1]" in resp.text
 
 
@@ -152,7 +152,7 @@ def test_followup_links_and_retrieves_using_contextual_question(mock_llm, mock_r
     assert resp.status_code == 200
     mock_resolve.assert_awaited_once_with("Học cái nào trước?",
                                           [{"role": "assistant", "content": "Cần Java và HTTP "}])
-    mock_link.assert_awaited_once_with("c1", resolved)
+    mock_link.assert_awaited_once_with(["c1"], resolved)
     assert mock_retrieve.call_args.kwargs["query"] == resolved
     assert "Học Java trước [1]" in resp.text
     assert "event: done" in resp.text
@@ -170,7 +170,7 @@ def test_changed_topic_still_returns_no_data(mock_llm, mock_link, mock_resolve):
         "course_id": "c1", "user_id": "u1", "message": "weather tomorrow",
         "history": [{"role": "assistant", "content": "Learn Java Servlet"}]
     })
-    mock_link.assert_awaited_once_with("c1", "weather tomorrow")
+    mock_link.assert_awaited_once_with(["c1"], "weather tomorrow")
     assert NO_DATA_MESSAGE in resp.text
     mock_llm.generate_stream.assert_not_called()
 
@@ -198,7 +198,7 @@ def test_chat_no_concepts_returns_message_without_retrieval_or_llm(
     mock_retrieve.assert_not_awaited()
     mock_llm.generate_stream.assert_not_called()
     if concept_ids is None:
-        mock_link.assert_awaited_once_with("c1", "weather tomorrow")
+        mock_link.assert_awaited_once_with(["c1"], "weather tomorrow")
     else:
         mock_link.assert_not_awaited()
 
@@ -272,7 +272,7 @@ def test_chat_enrolled_user_authorized_by_java(mock_link, mock_neo4j):
     )
     assert resp.status_code == 200
     assert "event: clarify" in resp.text
-    mock_link.assert_awaited_once_with("c1", "hello")
+    mock_link.assert_awaited_once_with(["c1"], "hello")
 
 @patch("app.api.chat.verify_course_exists", new=AsyncMock())
 @patch("app.api.chat.link_concepts")
@@ -281,7 +281,7 @@ def test_chat_clarify_sse(mock_link):
     mock_link.return_value = {
         "concept_ids": [],
         "clarify": [
-            {"id": "c1", "name": "Bàn dữ liệu"},
+            {"id": "c1", "name": "Bàn dữ liá»‡u"},
             {"id": "c2", "name": "Bản ghi"}
         ]
     }
@@ -297,7 +297,7 @@ def test_chat_clarify_sse(mock_link):
     content = resp.text
     assert "event: clarify" in content
     assert "event: done" in content
-    assert "Bàn dữ liệu" in content
+    assert "Bàn dữ liá»‡u" in content
 
 @patch("app.api.chat.verify_course_exists", new=AsyncMock())
 @patch("app.api.chat.link_concepts")
@@ -306,12 +306,12 @@ def test_chat_clarify_sse(mock_link):
 def test_chat_explain_normal_sse_stream(mock_llm, mock_retrieve, mock_link):
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = [
-        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index trong SQL giúp tăng tốc độ tìm kiếm."}
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index trong SQL giúp tăng tốc độ tìm kiếmm."}
     ]
     
     # Mock LLM stream trả về từng token có kèm trích dẫn [1]
     async def fake_stream(prompt, priority=True):
-        tokens = ["Index ", "trong ", "SQL ", "rất ", "hữu ", "ích [1]."]
+        tokens = ["Index ", "trong ", "SQL ", "rất ", "hữu ích [1]."]
         for t in tokens:
             yield t
     mock_llm.generate_stream = fake_stream
@@ -338,7 +338,7 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
     # Khi truyền concept_ids tường minh
     mock_retrieve.return_value = [{"id": "ch1", "text": "Reference"}]
     async def fake_stream(prompt, priority=True):
-        yield "Đã hiểu."
+        yield "Đã hiá»ƒu."
     mock_llm.generate_stream = fake_stream
 
     resp = client.post(
@@ -347,7 +347,94 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
         json={"course_id": "c1", "user_id": "u1", "message": "Giải thích", "concept_ids": ["c1", "c2"]}
     )
     assert resp.status_code == 200
-    # Không được gọi link_concepts
+    # Không Ä‘ược gọi link_concepts
     mock_link.assert_not_called()
     mock_retrieve.assert_called_once()
     assert mock_retrieve.call_args[1]["concept_ids"] == ["c1", "c2"]
+
+@patch("app.api.chat.verify_course_exists", new_callable=AsyncMock)
+@patch("app.api.chat.link_concepts")
+@patch("app.api.chat.retrieve_chunks")
+@patch("app.api.chat.llm_client")
+def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_verify):
+    mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
+    mock_retrieve.return_value = [
+        {"id": "ch1", "doc_id": "d1", "page": 1, "index": 0, "text": "Index helps search."}
+    ]
+
+    async def fake_stream(prompt, priority=True):
+        yield "Index [1]."
+    mock_llm.generate_stream = fake_stream
+
+    resp = client.post(
+        "/chat",
+        headers={"X-Internal-Key": "test-internal-api-key"},
+        json={"course_id": None, "user_id": "u1", "message": "What is index?",
+              "authorized_course_ids": ["26", "28"]}
+    )
+    assert resp.status_code == 200
+    mock_verify.assert_not_awaited()
+    mock_link.assert_awaited_once_with(["26", "28"], "What is index?")
+    assert mock_retrieve.call_args.kwargs["course_id"] is None
+    assert mock_retrieve.call_args.kwargs["authorized_course_ids"] == ["26", "28"]
+    assert "event: sources" in resp.text
+    assert "ch1" in resp.text
+
+
+@pytest.mark.parametrize("scope", [None, []])
+def test_global_chat_without_authorized_courses_does_not_search(scope):
+    from app.api.chat import NO_DATA_MESSAGE
+    with patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker, \
+         patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
+        resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+            "user_id": "u1", "message": "Servlet?", "authorized_course_ids": scope,
+            "concept_ids": ["servlet"],
+        })
+    assert NO_DATA_MESSAGE in resp.text
+    linker.assert_not_awaited()
+    retriever.assert_not_awaited()
+
+
+@patch("app.api.chat.verify_course_exists", new_callable=AsyncMock)
+def test_course_chat_does_not_search_other_authorized_courses(mock_verify):
+    with patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker:
+        linker.return_value = {"concept_ids": [], "clarify": None}
+        client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+            "course_id": "26", "user_id": "u1", "message": "Servlet?",
+            "authorized_course_ids": ["26", "28"],
+        })
+    linker.assert_awaited_once_with(["26"], "Servlet?")
+
+
+def test_global_clarification_uses_current_java_names_for_existing_graph_concepts():
+    # No Course.name is present: these concepts were ingested before the
+    # metadata change. Use the real linker through the HTTP/SSE endpoint.
+    rows = [
+        {"id": "c1", "name": "Bàn", "aliases": [], "course_id": "26"},
+        {"id": "c2", "name": "Bản", "aliases": [], "course_id": "28"},
+    ]
+    result = AsyncMock()
+    result.data.side_effect = lambda: [dict(row) for row in rows]
+    session = AsyncMock()
+    session.run.return_value = result
+    driver = MagicMock()
+    driver.session.return_value.__aenter__.return_value = session
+    with patch("app.retrieval.concept_linker.neo4j_client.driver", driver), \
+         patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
+        for title in ["Existing course", "Renamed course"]:
+            resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+                "user_id": "u1", "message": "ban", "authorized_course_ids": ["26", "28"],
+                "course_names": {"26": title, "28": "Second course", "private": "Excluded"},
+            })
+            assert resp.status_code == 200
+            frame = next(frame for frame in resp.text.split("\n\n") if frame.startswith("event: clarify\n"))
+            candidates = json.loads(frame.split("data: ", 1)[1])["candidates"]
+            assert {candidate["id"]: candidate for candidate in candidates} == {
+                "c1": {"id": "c1", "name": "Bàn", "course_id": "26", "course_name": title},
+                "c2": {"id": "c2", "name": "Bản", "course_id": "28", "course_name": "Second course"},
+            }
+        retriever.assert_not_awaited()
+    for call in session.run.call_args_list:
+        assert "course.name" not in call.args[0]
+        assert call.kwargs["authorized_course_ids"] == ["26", "28"]
+

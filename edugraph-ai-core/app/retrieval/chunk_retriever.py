@@ -50,17 +50,25 @@ def sanitize_fulltext_query(query: str) -> str:
         return "*"
     return " ".join(tokens)
 
-async def _course_has_chunks(course_id: str) -> bool:
-    """Trả về True nếu course còn ít nhất một Chunk (chống retry vô tận khi course trống)."""
-    q = "MATCH (c:Chunk {course_id: $course_id}) RETURN count(c) AS n"
+async def _authorized_courses_have_chunks(authorized_course_ids: List[str]) -> bool:
+    """Only retry when at least one chunk exists within the search scope."""
+    if not authorized_course_ids:
+        return False
+    q = """
+    MATCH (c:Chunk)
+    WHERE c.course_id IN $authorized_course_ids
+    RETURN 1 AS n
+    LIMIT 1
+    """
     async with neo4j_client.driver.session() as s:
-        rec = await (await s.run(q, course_id=course_id)).single()
+        rec = await (await s.run(q, authorized_course_ids=authorized_course_ids)).single()
         return bool(rec and rec["n"])
 
 async def retrieve_chunks(
-    course_id: str,
+    course_id: Optional[str],
     query: str,
     concept_ids: Optional[List[str]] = None,
+    authorized_course_ids: Optional[List[str]] = None,
     max_chunks: int = 6,
     overfetch_k: Optional[int] = None
 ) -> List[Dict[str, Any]]:
@@ -73,16 +81,27 @@ async def retrieve_chunks(
     """
     graph_chunks = []
     
+    # All three queries use this list. A missing list falls back to the
+    # authorized course supplied by the internal caller; an explicit empty
+    # list grants no access and must never become an unfiltered search.
+    if authorized_course_ids is None:
+        authorized_course_ids = [course_id] if course_id else []
+    if not authorized_course_ids:
+        return []
+    
     # 1. Graph chunks nếu có concept_ids
     if concept_ids:
         query_graph = """
-        MATCH (c:Concept {course_id: $course_id})<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk {course_id: $course_id})
-        WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE' AND c.id IN $concept_ids
+        MATCH (c:Concept)<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
+        WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
+          AND c.id IN $concept_ids
+          AND c.course_id IN $authorized_course_ids
+          AND ch.course_id IN $authorized_course_ids
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """
         async with neo4j_client.driver.session() as session:
-            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids)
+            res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, authorized_course_ids=authorized_course_ids)
             graph_chunks = await res.data()
 
     # 2. Vector search
@@ -92,7 +111,7 @@ async def retrieve_chunks(
     vec_query = """
     CALL db.index.vector.queryNodes('chunk_embedding', $k, $vector)
     YIELD node, score
-    WHERE node.course_id = $course_id
+    WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
@@ -101,7 +120,7 @@ async def retrieve_chunks(
     ft_cypher = """
     CALL db.index.fulltext.queryNodes('chunk_text', $ft_query)
     YIELD node, score
-    WHERE node.course_id = $course_id
+    WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
     """
 
@@ -117,7 +136,7 @@ async def retrieve_chunks(
         # rồi mới lọc course_id, nên retry với k lớn dần khi kết quả rỗng.
         while True:
             try:
-                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id)
+                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id, authorized_course_ids=authorized_course_ids)
                 vector_results = await res_vec.data()
             except Exception:
                 # Nếu vector index chưa sẵn sàng trong mock/test
@@ -126,7 +145,7 @@ async def retrieve_chunks(
             if vector_results or fetch_k >= max_k:
                 break
             try:
-                if not await _course_has_chunks(course_id):
+                if not await _authorized_courses_have_chunks(authorized_course_ids):
                     break
             except Exception:
                 break
@@ -136,7 +155,7 @@ async def retrieve_chunks(
             )
 
         try:
-            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id)
+            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id, authorized_course_ids=authorized_course_ids)
             fulltext_results = await res_ft.data()
         except Exception:
             # Nếu fulltext index chưa sẵn sàng
