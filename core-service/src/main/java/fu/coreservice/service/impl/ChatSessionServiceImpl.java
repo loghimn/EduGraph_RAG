@@ -130,8 +130,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         validatePage(page, size);
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
-        Page<ChatSession> sessions = chatSessionRepository.findByLearnerAndCourseIsNull(
-                user, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "lastActive", "sessionId")));
+        Page<ChatSession> sessions = chatSessionRepository.findByLearnerAndCourseIsPublic(user, true, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "lastActive", "sessionId")));
         return toPageResponse(sessions, this::toSessionResponse);
     }
 
@@ -142,15 +141,18 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
-                .filter(item -> item.getCourse() == null)
+                .filter(item -> item.getCourse() == null || item.getCourse().isPublic())
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         Page<ChatMessage> messages = chatMessageRepository.findBySession(session,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "messageId")));
         List<Long> ids = messages.getContent().stream().map(ChatMessage::getMessageId).toList();
         Map<Long, List<ChatCitationResponse>> citations = ids.isEmpty() ? Map.of()
                 : messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(ids)
-                    .stream().collect(Collectors.groupingBy(c -> c.getMessage().getMessageId(),
-                            Collectors.mapping(this::toCitationResponse, Collectors.toList())));
+                        .stream()
+                        .filter(citation -> citation.getMessage().getSession().getCourse() == null
+                                || citation.getMessage().getSession().getCourse().isPublic())
+                        .collect(Collectors.groupingBy(c -> c.getMessage().getMessageId(),
+                                Collectors.mapping(this::toCitationResponse, Collectors.toList())));
         return toPageResponse(messages, message -> ChatMessageResponse.builder()
                 .messageId(message.getMessageId()).senderType(message.getSenderType())
                 .replyToMessageId(message.getReplyToMessage() == null ? null
