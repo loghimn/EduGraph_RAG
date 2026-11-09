@@ -25,6 +25,11 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.util.List;
 import java.util.UUID;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.springframework.http.client.ClientHttpResponse;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.AdditionalAnswers.delegatesTo;
@@ -61,7 +66,8 @@ class ChatTurnTransactionTest {
         });
         var repositories = new JpaRepositoryFactory(SharedEntityManagerCreator.createSharedEntityManager(factory));
         courses = mock(CourseRepository.class, delegatesTo(repositories.getRepository(CourseRepository.class)));
-        messages = repositories.getRepository(ChatMessageRepository.class);
+        messages = mock(ChatMessageRepository.class,
+                delegatesTo(repositories.getRepository(ChatMessageRepository.class)));
         var manager = new JpaTransactionManager(factory);
         storage = transactional(new ChatSessionServiceImpl(
                 repositories.getRepository(UserRepository.class), courses,
@@ -133,6 +139,53 @@ class ChatTurnTransactionTest {
                 .replyToMessageId(turn.assistantMessageId()).build());
         assertTrue(nextTurn.history().stream().anyMatch(message -> message.content().equals("Original [1]")));
         assertEquals("Original [1]", nextTurn.replyContext().getLast().content());
+    }
+
+    @Test
+    void clarificationReceiptRollsBackIfDeletingPlaceholderFails() {
+        var turn = storage.beginGlobalTurn(sessionId, ChatRequest.builder().message("Stack?").build());
+        doThrow(new IllegalStateException("delete failed")).when(messages).delete(any(ChatMessage.class));
+        assertThrows(IllegalStateException.class, () -> storage.finishTurn(turn, "", ChatMessageStatus.COMPLETED,
+                null, 100, List.of(), true));
+        assertNull(messages.findById(turn.userMessageId()).orElseThrow().getFinalizedClarificationAnswerId());
+        assertEquals(ChatMessageStatus.STREAMING,
+                messages.findById(turn.assistantMessageId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void lostClarificationCommitAcknowledgmentStillEndsStreamWithDone() throws Exception {
+        ChatSessionService uncertainStorage = mock(ChatSessionService.class, delegatesTo(storage));
+        AtomicBoolean lostAcknowledgment = new AtomicBoolean();
+        doAnswer(call -> {
+            storage.finishTurn(call.getArgument(0), call.getArgument(1), call.getArgument(2),
+                    call.getArgument(3), call.getArgument(4), call.getArgument(5), call.getArgument(6));
+            if (Boolean.TRUE.equals(call.getArgument(6)) && lostAcknowledgment.compareAndSet(false, true)) {
+                throw new IllegalStateException("Commit acknowledgment lost");
+            }
+            return null;
+        }).when(uncertainStorage).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+        ClientHttpResponse response = mock(ClientHttpResponse.class);
+        when(ai.openChatStream(any())).thenReturn(response);
+        when(response.getBody()).thenReturn(new ByteArrayInputStream((
+                "event: clarify\ndata: {\"candidates\":[{\"id\":\"a\",\"name\":\"A\"}]}\n\n"
+                        + "event: done\ndata: {}\n\n").getBytes(StandardCharsets.UTF_8)));
+        ChatMessageService uncertainService = transactional(
+                new ChatMessageServiceImpl(uncertainStorage, ai, new ObjectMapper()), ChatMessageService.class,
+                new JpaTransactionManager(factory));
+        var callback = uncertainService.sendMessage(null, sessionId, ChatRequest.builder().message("Stack?").build());
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertDoesNotThrow(() -> callback.writeTo(output));
+        String events = output.toString(StandardCharsets.UTF_8);
+        assertTrue(lostAcknowledgment.get());
+        assertTrue(events.contains("event: clarify\n"));
+        assertTrue(events.endsWith("event: done\ndata: {}\n\n"));
+        assertEquals(1, events.split("event: done", -1).length - 1);
+        assertEquals(0, messages.findBySenderType(SenderType.BOT).size());
+        var question = messages.findBySenderType(SenderType.USER).getFirst();
+        assertNotNull(question.getFinalizedClarificationAnswerId());
+        assertEquals(1, storage.getGlobalMessages(sessionId, 0, 20).getTotalElements());
+        verify(uncertainStorage, times(2)).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+        verify(response).close();
     }
 
     private <T> T transactional(T target, Class<T> type, JpaTransactionManager manager) {

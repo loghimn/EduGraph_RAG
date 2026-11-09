@@ -252,14 +252,50 @@ class ChatSessionServiceTest {
     @Test
     void clarificationRemovesBotPlaceholderWithoutSavingCitations() {
         ChatSession session = ChatSession.builder().sessionId(10L).build();
-        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session)
+        ChatMessage question = ChatMessage.builder().messageId(20L).session(session).senderType(SenderType.USER).build();
+        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session).replyToMessage(question)
                 .status(ChatMessageStatus.STREAMING).build();
         when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
         service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.COMPLETED,
                 null, 500, List.of(), true);
         verify(chatMessageRepository).delete(answer);
+        assertEquals(21L, question.getFinalizedClarificationAnswerId());
+        verify(chatMessageRepository).saveAndFlush(question);
         verify(chatMessageRepository, never()).save(any());
         verifyNoInteractions(messageCitationRepository);
+    }
+
+    @Test
+    void missingClarificationAnswerWithMatchingReceiptIsAlreadyFinalized() {
+        ChatSession session = ChatSession.builder().sessionId(10L).build();
+        ChatMessage question = ChatMessage.builder().messageId(20L).session(session).senderType(SenderType.USER)
+                .finalizedClarificationAnswerId(21L).build();
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.empty());
+        when(chatMessageRepository.findById(20L)).thenReturn(Optional.of(question));
+        service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.FAILED,
+                "Lost acknowledgment", 999, List.of(), false);
+        verify(chatMessageRepository, never()).saveAndFlush(any());
+        verify(chatMessageRepository, never()).delete(any());
+        verifyNoInteractions(chatSessionRepository, messageCitationRepository);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"no_receipt", "wrong_answer", "wrong_session", "wrong_sender", "missing_question"})
+    void missingAnswerWithoutMatchingClarificationReceiptRemainsNotFound(String scenario) {
+        ChatSession session = ChatSession.builder().sessionId(scenario.equals("wrong_session") ? 99L : 10L).build();
+        ChatMessage question = ChatMessage.builder().messageId(20L).session(session)
+                .senderType(scenario.equals("wrong_sender") ? SenderType.BOT : SenderType.USER)
+                .finalizedClarificationAnswerId(scenario.equals("no_receipt") ? null
+                        : scenario.equals("wrong_answer") ? 99L : 21L).build();
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.empty());
+        when(chatMessageRepository.findById(20L)).thenReturn(scenario.equals("missing_question")
+                ? Optional.empty() : Optional.of(question));
+        assertEquals(ErrorCode.CHAT_MESSAGE_NOT_FOUND, assertThrows(AppException.class,
+                () -> service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "", ChatMessageStatus.FAILED,
+                        "Retry", 999, List.of(), false)).getErrorCode());
+        verify(chatMessageRepository, never()).saveAndFlush(any());
+        verify(chatMessageRepository, never()).delete(any());
+        verifyNoInteractions(chatSessionRepository, messageCitationRepository);
     }
 
     @ParameterizedTest

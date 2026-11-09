@@ -323,8 +323,16 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     public void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
                            int latencyMs, List<ChatSource> sources, boolean clarification) {
         Long answerMessageId = turn.assistantMessageId();
-        ChatMessage answer = chatMessageRepository.findById(answerMessageId)
-                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        ChatMessage answer = chatMessageRepository.findById(answerMessageId).orElse(null);
+        if (answer == null) {
+            boolean finalizedClarification = chatMessageRepository.findById(turn.userMessageId())
+                    .filter(question -> question.getSenderType() == SenderType.USER
+                            && question.getSession().getSessionId().equals(turn.sessionId())
+                            && answerMessageId.equals(question.getFinalizedClarificationAnswerId()))
+                    .isPresent();
+            if (finalizedClarification) return;
+            throw new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
+        }
 
         // A retry can follow a successful commit whose acknowledgment was lost.
         // Finalized answers (and their citations) must remain unchanged.
@@ -332,8 +340,17 @@ public class ChatSessionServiceImpl implements ChatSessionService {
             return;
         }
 
-        // If clarification is true, delete the answer message
+        // Record the receipt and remove the placeholder in the same transaction.
+        // Recovery may arrive as FAILED with clarification=false after a lost ack.
         if (clarification) {
+            ChatMessage question = answer.getReplyToMessage();
+            if (question == null || question.getSenderType() != SenderType.USER
+                    || !question.getMessageId().equals(turn.userMessageId())
+                    || !question.getSession().getSessionId().equals(turn.sessionId())) {
+                throw new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND);
+            }
+            question.setFinalizedClarificationAnswerId(answerMessageId);
+            chatMessageRepository.saveAndFlush(question);
             chatMessageRepository.delete(answer);
             return;
         }
