@@ -63,6 +63,12 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
     private OwnedSession requireOwnedSession(Long courseId, Long sessionId) {
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        if (courseId == null) {
+            ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
+                    .filter(item -> item.getCourse() == null)
+                    .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+            return new OwnedSession(user, session);
+        }
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
         if (!course.getUser().getUserId().equals(user.getUserId())

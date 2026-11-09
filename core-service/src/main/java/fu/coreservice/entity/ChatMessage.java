@@ -31,6 +31,11 @@ public class ChatMessage {
     @JoinColumn(name = "reply_to_message_id", foreignKey = @ForeignKey(name = "fk_chat_messages_reply_to"))
     private ChatMessage replyToMessage;
 
+    // Durable receipt on the USER message after its clarification BOT is
+    // deleted. Scalar by design: the referenced answer no longer exists.
+    @Column(name = "finalized_clarification_answer_id")
+    private Long finalizedClarificationAnswerId;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "sender_type", nullable = false)
     private SenderType senderType;

@@ -1,4 +1,5 @@
-from typing import List, Dict, Any, Tuple
+import asyncio
+from typing import List, Dict, Any, Tuple, Optional
 from rapidfuzz import fuzz
 
 from app.config import settings
@@ -19,18 +20,42 @@ def extract_ngrams(tokens: List[str], max_n: int = 4) -> List[Tuple[str, int, in
             ngrams.append((ngram, i, i+n))
     return ngrams
 
-async def get_course_concepts_for_linking(course_id: str) -> List[Dict[str, Any]]:
+async def get_course_concepts_for_linking(
+    authorized_course_ids: List[str], concept_ids: Optional[List[str]] = None,
+    course_names: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Tải tên và aliases của concepts trong course để phục vụ linker.
+    Bắt buộc lọc theo authorized_course_ids để ngăn chặn data leakage.
+    Ngay cả khi client truyền concept_ids, vẫn phải kiểm tra course_id có thuộc authorized hay không.
+
+    :param authorized_course_ids: Danh sách course_ids mà user được phép truy cập
+        (global: môn public không phải notebook; chat môn: môn đang chọn).
+    :param concept_ids: (Optional) Danh sách concept_ids do client cung cấp -
+        sẽ được filter thêm theo authorized_course_ids.
+    :return: List dict chứa id, name, aliases, course_id, course_name của concepts.
     """
+    # Java quyết định phạm vi; danh sách rỗng không được tìm trên toàn graph.
+    if not authorized_course_ids:
+        return []
     query = """
-    MATCH (c:Concept {course_id: $course_id})
+    MATCH (c:Concept)
     WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
-    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases
+      AND c.course_id IN $authorized_course_ids
+    RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
+           c.course_id AS course_id
     """
     async with neo4j_client.driver.session() as session:
-        res = await session.run(query, course_id=course_id)
-        return await res.data()
+        res = await session.run(query, authorized_course_ids=authorized_course_ids)
+        res_data = await res.data()
+        # Java reads current relational metadata for the authorized scope.
+        # Existing Neo4j Course nodes need no name backfill or re-ingestion.
+        for concept in res_data:
+            concept["course_name"] = (course_names or {}).get(concept["course_id"])
+        # Apply concept_ids filter in Python if provided
+        if concept_ids:
+            return [r for r in res_data if r.get("id") in set(concept_ids)]
+        return res_data
 
 def link_concepts_from_data(
     message: str,
@@ -65,7 +90,9 @@ def link_concepts_from_data(
             "unaccent_name": unaccent_name,
             "aliases": aliases,
             "norm_aliases": norm_aliases,
-            "unaccent_aliases": unaccent_aliases
+            "unaccent_aliases": unaccent_aliases,
+            "course_id": c.get("course_id"),
+            "course_name": c.get("course_name"),
         }
 
     # 2. Tokenize message cho n-grams
@@ -112,7 +139,9 @@ def link_concepts_from_data(
 
         if len(unaccent_hit_ids) > 1:
             # Khớp không dấu mà ra nhiều concept -> gửi clarify (SPEC §8)
-            candidates = [{"id": cid, "name": concept_map[cid]["name"]} for cid in unaccent_hit_ids]
+            candidates = [{"id": cid, "name": concept_map[cid]["name"],
+                           "course_id": concept_map[cid].get("course_id"),
+                           "course_name": concept_map[cid].get("course_name")} for cid in unaccent_hit_ids]
             return {"concept_ids": [], "clarify": candidates}
         elif len(unaccent_hit_ids) == 1:
             linked_ids.add(unaccent_hit_ids[0])
@@ -152,12 +181,18 @@ def link_concepts_from_data(
     # No lexical match: do not suggest unrelated nearest concepts.
     return {"concept_ids": [], "clarify": None}
 
-async def link_concepts(course_id: str, message: str) -> Dict[str, Any]:
+async def link_concepts(authorized_course_ids: List[str], message: str,
+                        course_names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Hàm chính gọi từ API hoặc dịch vụ chat.
+    Sử dụng asyncio.to_thread để隔离 CPU-bound concept matching khỏi Event Loop,
+    đảm bảo SSE stream mượt mà và heartbeat không bị mất.
     """
-    concepts = await get_course_concepts_for_linking(course_id)
+    concepts = await get_course_concepts_for_linking(authorized_course_ids, course_names=course_names)
     if not concepts:
         return {"concept_ids": [], "clarify": None}
 
-    return link_concepts_from_data(message, concepts)
+    # Chuyển ngữ khớp concepts (n-gram, fuzzy matching) sang Thread Pool
+    # để tránh chặn (block) FastAPI Event Loop, gây lag SSE & timeout heartbeat.
+    result = await asyncio.to_thread(link_concepts_from_data, message, concepts)
+    return result

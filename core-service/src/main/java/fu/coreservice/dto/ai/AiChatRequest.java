@@ -9,6 +9,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Body gửi tới POST /chat của Python (snake_case theo ChatRequest của FastAPI).
@@ -23,6 +24,12 @@ public class AiChatRequest {
 
     @JsonProperty("course_id")
     private String courseId;
+
+    @JsonProperty("authorized_course_ids")
+    private List<String> authorizedCourseIds;
+
+    @JsonProperty("course_names")
+    private Map<String, String> courseNames;
 
     @JsonProperty("user_id")
     private String userId;
