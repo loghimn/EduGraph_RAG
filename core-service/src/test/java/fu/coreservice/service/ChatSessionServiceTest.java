@@ -13,6 +13,9 @@ import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -72,6 +75,21 @@ class ChatSessionServiceTest {
     void globalChatPreservesEmptyCourseScope() {
         when(courseRepository.findGlobalChatCourseIds()).thenReturn(List.of());
         assertTrue(service.getGlobalChatCourseIds().isEmpty());
+    }
+
+    @Test
+    void chatCourseNamesComeFromCurrentRelationalMetadata() {
+        course.setCourseName("Data structures");
+        when(courseRepository.findAllById(List.of(7L))).thenReturn(List.of(course));
+        assertEquals("Data structures", service.getChatCourseNames(List.of("7")).get("7"));
+        course.setCourseName("Renamed course");
+        assertEquals("Renamed course", service.getChatCourseNames(List.of("7")).get("7"));
+    }
+
+    @Test
+    void emptyChatScopeDoesNotLoadCourseMetadata() {
+        assertTrue(service.getChatCourseNames(List.of()).isEmpty());
+        verifyNoInteractions(courseRepository);
     }
 
     @Test
@@ -244,6 +262,47 @@ class ChatSessionServiceTest {
         verifyNoInteractions(messageCitationRepository);
     }
 
+    @ParameterizedTest
+    @EnumSource(value = ChatMessageStatus.class, names = {"COMPLETED", "FAILED", "INTERRUPTED"})
+    void retriesCannotModifyOrDeleteTerminalAnswers(ChatMessageStatus terminalStatus) {
+        var lastActive = java.time.LocalDateTime.of(2026, 11, 9, 10, 0);
+        ChatSession session = ChatSession.builder().sessionId(10L).lastActive(lastActive).build();
+        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session)
+                .status(terminalStatus).content("Original [1]").errorMessage("Original error").latencyMs(500).build();
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
+        for (ChatMessageStatus retryStatus : List.of(ChatMessageStatus.FAILED, ChatMessageStatus.COMPLETED)) {
+            for (boolean clarification : List.of(false, true)) {
+                service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "Retry", retryStatus,
+                        "Retry error", 999, List.of(new ChatSource(1, 99L, "replacement", 1, 0, "Retry")),
+                        clarification);
+            }
+        }
+        assertEquals(terminalStatus, answer.getStatus());
+        assertEquals("Original [1]", answer.getContent());
+        assertEquals("Original error", answer.getErrorMessage());
+        assertEquals(500, answer.getLatencyMs());
+        assertEquals(lastActive, session.getLastActive());
+        verify(chatMessageRepository, never()).saveAndFlush(any());
+        verify(chatMessageRepository, never()).delete(any());
+        verifyNoInteractions(chatSessionRepository, messageCitationRepository);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ChatMessageStatus.class, names = {"FAILED", "INTERRUPTED"})
+    void streamingAnswersStillPersistPartialContentOnFailureOrInterruption(ChatMessageStatus status) {
+        ChatSession session = ChatSession.builder().sessionId(10L).build();
+        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session)
+                .status(ChatMessageStatus.STREAMING).build();
+        when(chatMessageRepository.findById(21L)).thenReturn(Optional.of(answer));
+        service.finishTurn(new ChatTurn(10L, 2L, 20L, 21L), "Partial", status,
+                "Stream stopped", 500, List.of(), false);
+        assertEquals(status, answer.getStatus());
+        assertEquals("Partial", answer.getContent());
+        assertEquals("Stream stopped", answer.getErrorMessage());
+        verify(chatMessageRepository).saveAndFlush(answer);
+        verify(chatSessionRepository).save(session);
+    }
+
     @Test
     void createsSessionForAuthenticatedLearnerWithDefaultTitle() {
         allowLearner();
@@ -291,6 +350,25 @@ class ChatSessionServiceTest {
         var response = service.getMySessions(7L, 0, 10);
         assertEquals(1, response.getTotalElements());
         assertEquals(10L, response.getContent().getFirst().getSessionId());
+    }
+
+    @Test
+    void listsCurrentUsersGlobalSessionsWithPaginationAndStableSort() {
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        Pageable pageable = PageRequest.of(1, 2, Sort.by(Sort.Direction.DESC, "lastActive", "sessionId"));
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).title("Global").build();
+        when(chatSessionRepository.findByLearnerAndCourseIsNull(learner, pageable))
+                .thenReturn(new PageImpl<>(List.of(session), pageable, 3));
+
+        var response = service.getGlobalSessions(1, 2);
+
+        assertEquals(3, response.getTotalElements());
+        assertEquals(1, response.getPage());
+        assertEquals(2, response.getSize());
+        assertEquals(2, response.getTotalPages());
+        assertEquals(10L, response.getContent().getFirst().getSessionId());
+        assertNull(response.getContent().getFirst().getCourseId());
+        verify(chatSessionRepository, never()).findByLearnerAndCourseIsPublic(any(), any(), any());
     }
 
     @Test
@@ -350,6 +428,75 @@ class ChatSessionServiceTest {
                 .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
         assertTrue(service.getMessages(7L, 10L, 0, 20).getContent().isEmpty());
         verifyNoInteractions(messageCitationRepository);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"global", "enrolled", "owner"})
+    void globalHistoryPreservesMessagesAndCitationsForAllowedSessions(String access) {
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        boolean global = access.equals("global");
+        if (!global) {
+            when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+            if (access.equals("owner")) {
+                course.setUser(learner);
+            } else {
+                when(courseEnrollmentRepository.existsByCourse_CourseIdAndUser(7L, learner)).thenReturn(true);
+            }
+        }
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner)
+                .course(global ? null : course).build();
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        ChatMessage answer = ChatMessage.builder().messageId(21L).session(session).senderType(SenderType.BOT)
+                .content("Explanation [1]").build();
+        Pageable pageable = PageRequest.of(1, 2, Sort.by(Sort.Direction.ASC, "createdAt", "messageId"));
+        when(chatMessageRepository.findBySession(session, pageable))
+                .thenReturn(new PageImpl<>(List.of(answer), pageable, 3));
+        when(messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(List.of(21L)))
+                .thenReturn(List.of(MessageCitation.builder().citationId(30L).message(answer)
+                        .citationNumber(1).documentId(40L).build()));
+
+        var result = service.getGlobalMessages(10L, 1, 2);
+
+        assertEquals(3, result.getTotalElements());
+        assertEquals(1, result.getPage());
+        assertEquals(2, result.getSize());
+        var bot = result.getContent().getFirst();
+        assertEquals("Explanation [1]", bot.getContent());
+        assertEquals(40L, bot.getCitations().getFirst().getDocumentId());
+        if (global) {
+            verifyNoInteractions(courseRepository, courseEnrollmentRepository);
+        }
+    }
+
+    @Test
+    void globalRouteDeniesCourseHistoryAfterLearnerLeavesPublicCourse() {
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).course(course).build();
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        // No enrollment remains. Match the course history route's decision.
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.getGlobalMessages(10L, 0, 20)).getErrorCode());
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.getMessages(7L, 10L, 0, 20)).getErrorCode());
+        verifyNoInteractions(chatMessageRepository, messageCitationRepository);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void globalHistoryKeepsMissingForeignAndPrivateSessionsNotFound(boolean privateSession) {
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        if (privateSession) {
+            course.setPublic(false);
+            ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).course(course).build();
+            when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        } else {
+            when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.empty());
+        }
+        assertEquals(ErrorCode.CHAT_SESSION_NOT_FOUND, assertThrows(AppException.class,
+                () -> service.getGlobalMessages(10L, 0, 20)).getErrorCode());
+        verifyNoInteractions(courseRepository, courseEnrollmentRepository,
+                chatMessageRepository, messageCitationRepository);
     }
 
     @Test

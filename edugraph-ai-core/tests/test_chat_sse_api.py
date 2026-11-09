@@ -405,3 +405,36 @@ def test_course_chat_does_not_search_other_authorized_courses(mock_verify):
         })
     linker.assert_awaited_once_with(["26"], "Servlet?")
 
+
+def test_global_clarification_uses_current_java_names_for_existing_graph_concepts():
+    # No Course.name is present: these concepts were ingested before the
+    # metadata change. Use the real linker through the HTTP/SSE endpoint.
+    rows = [
+        {"id": "c1", "name": "Bàn", "aliases": [], "course_id": "26"},
+        {"id": "c2", "name": "Bản", "aliases": [], "course_id": "28"},
+    ]
+    result = AsyncMock()
+    result.data.side_effect = lambda: [dict(row) for row in rows]
+    session = AsyncMock()
+    session.run.return_value = result
+    driver = MagicMock()
+    driver.session.return_value.__aenter__.return_value = session
+    with patch("app.retrieval.concept_linker.neo4j_client.driver", driver), \
+         patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
+        for title in ["Existing course", "Renamed course"]:
+            resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+                "user_id": "u1", "message": "ban", "authorized_course_ids": ["26", "28"],
+                "course_names": {"26": title, "28": "Second course", "private": "Excluded"},
+            })
+            assert resp.status_code == 200
+            frame = next(frame for frame in resp.text.split("\n\n") if frame.startswith("event: clarify\n"))
+            candidates = json.loads(frame.split("data: ", 1)[1])["candidates"]
+            assert {candidate["id"]: candidate for candidate in candidates} == {
+                "c1": {"id": "c1", "name": "Bàn", "course_id": "26", "course_name": title},
+                "c2": {"id": "c2", "name": "Bản", "course_id": "28", "course_name": "Second course"},
+            }
+        retriever.assert_not_awaited()
+    for call in session.run.call_args_list:
+        assert "course.name" not in call.args[0]
+        assert call.kwargs["authorized_course_ids"] == ["26", "28"]
+

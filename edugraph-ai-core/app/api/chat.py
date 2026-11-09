@@ -47,6 +47,7 @@ class ChatRequest(BaseModel):
     history: List[HistoryMessage] = Field(default_factory=list, max_length=12)
     reply_context: List[HistoryMessage] = Field(default_factory=list, max_length=2)
     authorized_course_ids: Optional[List[str]] = None  # Danh sách course_ids user được phép truy cập (từ Spring Boot JWT)
+    course_names: Dict[str, str] = Field(default_factory=dict)
 
 async def verify_course_exists(course_id: str):
     # Java authorizes owners/enrolled learners against its relational database.
@@ -68,9 +69,11 @@ async def chat_explain_stream_generator(
     concept_ids: Optional[List[str]] = None,
     authorized_course_ids: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
-    reply_context: Optional[List[Dict[str, str]]] = None
+    reply_context: Optional[List[Dict[str, str]]] = None,
+    course_names: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
-    events = _chat_explain_events(course_id, message, concept_ids, authorized_course_ids, history, reply_context)
+    events = _chat_explain_events(course_id, message, concept_ids, authorized_course_ids, history, reply_context,
+                                  course_names)
     stream = with_sse_heartbeats(events, settings.CHAT_HEARTBEAT_INTERVAL_SECONDS)
     try:
         async for frame in stream:
@@ -85,7 +88,8 @@ async def _chat_explain_events(
     concept_ids: Optional[List[str]] = None,
     authorized_course_ids: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
-    reply_context: Optional[List[Dict[str, str]]] = None
+    reply_context: Optional[List[Dict[str, str]]] = None,
+    course_names: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
     try:
         # Java supplies global access. Per-course chat must remain scoped to
@@ -121,7 +125,11 @@ async def _chat_explain_events(
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
         if linked_concept_ids is None:
-            link_res = await link_concepts(authorized_course_ids, search_query)
+            if course_names:
+                scoped_names = {cid: course_names[cid] for cid in authorized_course_ids if cid in course_names}
+                link_res = await link_concepts(authorized_course_ids, search_query, course_names=scoped_names)
+            else:
+                link_res = await link_concepts(authorized_course_ids, search_query)
             if link_res.get("clarify"):
                 # Gửi clarify event và kết thúc bằng done
                 yield format_sse("clarify", {"candidates": link_res["clarify"]})
@@ -196,6 +204,6 @@ async def chat_endpoint(
     return StreamingResponse(
         chat_explain_stream_generator(req.course_id, req.message, req.concept_ids, req.authorized_course_ids,
                                       [item.model_dump() for item in req.history],
-                                      [item.model_dump() for item in req.reply_context]),
+                                      [item.model_dump() for item in req.reply_context], req.course_names),
         media_type="text/event-stream"
     )

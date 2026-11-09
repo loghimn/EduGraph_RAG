@@ -50,16 +50,18 @@ def sanitize_fulltext_query(query: str) -> str:
         return "*"
     return " ".join(tokens)
 
-async def _course_has_chunks(course_id: Optional[str]) -> bool:
-    """Trả về True nếu còn ít nhất một Chunk (chống retry vô tận khi rỗng)."""
-    if course_id is None:
-        q = "MATCH (c:Chunk) RETURN count(c) AS n"
-        params = {}
-    else:
-        q = "MATCH (c:Chunk {course_id: $course_id}) RETURN count(c) AS n"
-        params = {"course_id": course_id}
+async def _authorized_courses_have_chunks(authorized_course_ids: List[str]) -> bool:
+    """Only retry when at least one chunk exists within the search scope."""
+    if not authorized_course_ids:
+        return False
+    q = """
+    MATCH (c:Chunk)
+    WHERE c.course_id IN $authorized_course_ids
+    RETURN 1 AS n
+    LIMIT 1
+    """
     async with neo4j_client.driver.session() as s:
-        rec = await (await s.run(q, **params)).single()
+        rec = await (await s.run(q, authorized_course_ids=authorized_course_ids)).single()
         return bool(rec and rec["n"])
 
 async def retrieve_chunks(
@@ -94,6 +96,7 @@ async def retrieve_chunks(
         WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
           AND c.id IN $concept_ids
           AND c.course_id IN $authorized_course_ids
+          AND ch.course_id IN $authorized_course_ids
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
         ORDER BY ch.index ASC
         """
@@ -142,7 +145,7 @@ async def retrieve_chunks(
             if vector_results or fetch_k >= max_k:
                 break
             try:
-                if not await _course_has_chunks(course_id):
+                if not await _authorized_courses_have_chunks(authorized_course_ids):
                     break
             except Exception:
                 break

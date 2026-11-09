@@ -130,7 +130,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         validatePage(page, size);
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
-        Page<ChatSession> sessions = chatSessionRepository.findByLearnerAndCourseIsPublic(user, true, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "lastActive", "sessionId")));
+        Page<ChatSession> sessions = chatSessionRepository.findByLearnerAndCourseIsNull(user, PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "lastActive", "sessionId")));
         return toPageResponse(sessions, this::toSessionResponse);
     }
 
@@ -143,6 +143,9 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
                 .filter(item -> item.getCourse() == null || item.getCourse().isPublic())
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
+        if (session.getCourse() != null) {
+            requireCourseAccess(session.getCourse().getCourseId());
+        }
         Page<ChatMessage> messages = chatMessageRepository.findBySession(session,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "messageId")));
         List<Long> ids = messages.getContent().stream().map(ChatMessage::getMessageId).toList();
@@ -279,6 +282,14 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .map(String::valueOf).toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, String> getChatCourseNames(List<String> courseIds) {
+        if (courseIds.isEmpty()) return Map.of();
+        return courseRepository.findAllById(courseIds.stream().map(Long::valueOf).toList()).stream()
+                .collect(Collectors.toMap(course -> course.getCourseId().toString(), Course::getCourseName));
+    }
+
     private void validatePage(int page, int size) {
         if (page < 0 || size < 1 || size > 100) {
             throw new AppException(ErrorCode.INVALID_PARAMETER);
@@ -314,6 +325,12 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         Long answerMessageId = turn.assistantMessageId();
         ChatMessage answer = chatMessageRepository.findById(answerMessageId)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+
+        // A retry can follow a successful commit whose acknowledgment was lost.
+        // Finalized answers (and their citations) must remain unchanged.
+        if (answer.getStatus() != ChatMessageStatus.STREAMING) {
+            return;
+        }
 
         // If clarification is true, delete the answer message
         if (clarification) {

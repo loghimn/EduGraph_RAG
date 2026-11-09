@@ -21,7 +21,8 @@ def extract_ngrams(tokens: List[str], max_n: int = 4) -> List[Tuple[str, int, in
     return ngrams
 
 async def get_course_concepts_for_linking(
-    authorized_course_ids: List[str], concept_ids: Optional[List[str]] = None
+    authorized_course_ids: List[str], concept_ids: Optional[List[str]] = None,
+    course_names: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Tải tên và aliases của concepts trong course để phục vụ linker.
@@ -41,13 +42,16 @@ async def get_course_concepts_for_linking(
     MATCH (c:Concept)
     WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
       AND c.course_id IN $authorized_course_ids
-    OPTIONAL MATCH (course:Course {id: c.course_id})
     RETURN c.id AS id, c.name AS name, coalesce(c.aliases, []) AS aliases,
-           c.course_id AS course_id, course.name AS course_name
+           c.course_id AS course_id
     """
     async with neo4j_client.driver.session() as session:
         res = await session.run(query, authorized_course_ids=authorized_course_ids)
         res_data = await res.data()
+        # Java reads current relational metadata for the authorized scope.
+        # Existing Neo4j Course nodes need no name backfill or re-ingestion.
+        for concept in res_data:
+            concept["course_name"] = (course_names or {}).get(concept["course_id"])
         # Apply concept_ids filter in Python if provided
         if concept_ids:
             return [r for r in res_data if r.get("id") in set(concept_ids)]
@@ -177,13 +181,14 @@ def link_concepts_from_data(
     # No lexical match: do not suggest unrelated nearest concepts.
     return {"concept_ids": [], "clarify": None}
 
-async def link_concepts(authorized_course_ids: List[str], message: str) -> Dict[str, Any]:
+async def link_concepts(authorized_course_ids: List[str], message: str,
+                        course_names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Hàm chính gọi từ API hoặc dịch vụ chat.
     Sử dụng asyncio.to_thread để隔离 CPU-bound concept matching khỏi Event Loop,
     đảm bảo SSE stream mượt mà và heartbeat không bị mất.
     """
-    concepts = await get_course_concepts_for_linking(authorized_course_ids)
+    concepts = await get_course_concepts_for_linking(authorized_course_ids, course_names=course_names)
     if not concepts:
         return {"concept_ids": [], "clarify": None}
 
