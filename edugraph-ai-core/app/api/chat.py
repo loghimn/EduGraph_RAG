@@ -97,7 +97,7 @@ async def _chat_explain_events(
         elif authorized_course_ids is None:
             authorized_course_ids = []
         if not authorized_course_ids:
-            logger.info("Chat retrieval stopped: no authorized courses course_id=%s", course_id)
+            logger.info("Chat retrieval stopped: no authorized courses")
             for event in no_data_events():
                 yield event
             return
@@ -130,7 +130,7 @@ async def _chat_explain_events(
             linked_concept_ids = link_res.get("concept_ids", [])
 
         if not linked_concept_ids:
-            logger.info("Chat retrieval stopped: no linked concepts course_id=%s", course_id)
+            logger.info("Chat retrieval stopped: no linked concepts")
             for event in no_data_events():
                 yield event
             return
@@ -146,8 +146,8 @@ async def _chat_explain_events(
 
         if not chunks:
             logger.info(
-                "Chat retrieval stopped: no chunks course_id=%s linked_concepts=%d",
-                course_id, len(linked_concept_ids),
+                "Chat retrieval stopped: no chunks linked_concepts=%d",
+                len(linked_concept_ids),
             )
             for event in no_data_events():
                 yield event
