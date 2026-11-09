@@ -163,4 +163,13 @@ class MessageFeedbackServiceTest {
         assertThrows(AppException.class, () -> service.saveFeedback(7L, 10L, 21L, request((short) 1, "x".repeat(2001))));
         verifyNoInteractions(userRepository, chatSessionRepository, messageFeedbackRepository);
     }
+    @Test
+    void notebookFeedbackRejectsNonOwnerWithoutConsultingEnrollments() {
+        course.setNotebook(true);
+        when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.getFeedback(7L, 10L, 21L)).getErrorCode());
+        verifyNoInteractions(courseEnrollmentRepository, chatSessionRepository, chatMessageRepository, messageFeedbackRepository);
+    }
 }

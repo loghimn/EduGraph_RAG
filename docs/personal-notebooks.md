@@ -29,3 +29,27 @@ Notebook records are excluded from instructor course listings and public course 
 Graph reads require ownership for notebooks, even if a stale enrollment exists.
 Files and AI processing require the same Supabase, database and AI core configuration
 as course materials. No additional AI service or graph namespace is needed.
+
+## Chat with uploaded materials
+
+Open **Personal Notebook** and select **Chat with documents** in its sidebar, then
+choose a notebook. The URL `/notebooks/{id}?view=chat` opens that private workspace.
+The notebook navbar remains active and its sidebar contains documents, graph and chat
+navigation above the conversation history. Legacy `/ask-ai?notebookId={id}` links
+redirect to the notebook workspace; general Ask AI lists public knowledge and courses.
+Only processed (`COMPLETED`) documents are available. The UI polls while processing
+is pending, displays a document-management link, and enables chat when a document
+becomes ready. Pending files are not promised as answer sources.
+
+The existing `/api/courses/{notebookId}/chat/sessions` endpoints persist notebook
+conversations, streaming responses and citations. No new database tables are needed.
+The backend checks notebook ownership for session creation, messages, history and
+feedback, even when stale enrollment records exist. Java forwards only the notebook ID
+as `course_id` / `authorized_course_ids` to Python. Existing graph/vector retrieval
+therefore remains inside that notebook. Public/global chat continues to exclude notebooks.
+Changing the selected source remounts the chat workspace, clears its local draft/history
+and aborts the previous stream; the old conversation remains saved under its own scope.
+
+Validation: notebook owner/non-owner service tests, scoped SSE payload tests,
+frontend URL scope tests, TypeScript, lint and translation checks. A full live answer
+requires the database, Supabase, AI core and model service to be running.
