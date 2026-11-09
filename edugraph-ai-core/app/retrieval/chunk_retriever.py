@@ -134,7 +134,7 @@ async def retrieve_chunks(
         # rồi mới lọc course_id, nên retry với k lớn dần khi kết quả rỗng.
         while True:
             try:
-                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id)
+                res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id, authorized_course_ids=authorized_course_ids)
                 vector_results = await res_vec.data()
             except Exception:
                 # Nếu vector index chưa sẵn sàng trong mock/test
@@ -153,7 +153,7 @@ async def retrieve_chunks(
             )
 
         try:
-            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id)
+            res_ft = await session.run(ft_cypher, ft_query=ft_query_str, course_id=course_id, authorized_course_ids=authorized_course_ids)
             fulltext_results = await res_ft.data()
         except Exception:
             # Nếu fulltext index chưa sẵn sàng
