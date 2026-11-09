@@ -19,6 +19,7 @@ public interface ChatSessionService {
     PageResponse<ChatMessageResponse> getGlobalMessages(Long sessionId, int page, int size);
     ChatTurn beginTurn(Long courseId, Long sessionId, ChatRequest request);
     ChatTurn beginGlobalTurn(Long sessionId, ChatRequest request);
+    List<String> getGlobalChatCourseIds();
     void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
                     int latencyMs, List<ChatSource> sources, boolean clarification);
 }

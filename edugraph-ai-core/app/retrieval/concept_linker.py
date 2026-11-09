@@ -29,12 +29,12 @@ async def get_course_concepts_for_linking(
     Ngay cả khi client truyền concept_ids, vẫn phải kiểm tra course_id có thuộc authorized hay không.
 
     :param authorized_course_ids: Danh sách course_ids mà user được phép truy cập
-        (khóa học đã đăng ký + notebook cá nhân sở hữu).
+        (global: môn public không phải notebook; chat môn: môn đang chọn).
     :param concept_ids: (Optional) Danh sách concept_ids do client cung cấp -
         sẽ được filter thêm theo authorized_course_ids.
     :return: List dict chứa id, name, aliases, course_id, course_name của concepts.
     """
-    # Nếu authorized_course_ids rỗng, trả về ngay (user chưa đăng ký khóa học nào)
+    # Java quyết định phạm vi; danh sách rỗng không được tìm trên toàn graph.
     if not authorized_course_ids:
         return []
     query = """

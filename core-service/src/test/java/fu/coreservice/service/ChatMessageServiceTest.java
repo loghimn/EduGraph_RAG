@@ -55,6 +55,32 @@ class ChatMessageServiceTest {
     @AfterEach
     void resetRequestContext() { RequestContextHolder.resetRequestAttributes(); }
 
+    @Test
+    void globalChatSendsServerAuthorizedCoursesToPython() throws Exception {
+        when(storage.beginGlobalTurn(10L, request)).thenReturn(turn);
+        when(storage.getGlobalChatCourseIds()).thenReturn(List.of("26", "28"));
+        when(client.openChatStream(any())).thenReturn(response);
+        when(response.getBody()).thenReturn(new ByteArrayInputStream(
+                "event: sources\ndata: []\n\nevent: done\ndata: {}\n\n".getBytes(StandardCharsets.UTF_8)));
+        service.sendMessage(null, 10L, request).writeTo(new ByteArrayOutputStream());
+        ArgumentCaptor<AiChatRequest> payload = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(payload.capture());
+        assertNull(payload.getValue().getCourseId());
+        assertEquals(List.of("26", "28"), payload.getValue().getAuthorizedCourseIds());
+        var json = new ObjectMapper().valueToTree(payload.getValue());
+        assertEquals("26", json.get("authorized_course_ids").get(0).asText());
+    }
+
+    @Test
+    void courseChatSendsOnlySelectedCourseToPython() throws Exception {
+        run("event: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        ArgumentCaptor<AiChatRequest> payload = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(payload.capture());
+        assertEquals("7", payload.getValue().getCourseId());
+        assertEquals(List.of("7"), payload.getValue().getAuthorizedCourseIds());
+        verify(storage, never()).getGlobalChatCourseIds();
+    }
+
     private MockHttpServletRequest mvcRequest() {
         MockHttpServletRequest servletRequest = new MockHttpServletRequest();
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));

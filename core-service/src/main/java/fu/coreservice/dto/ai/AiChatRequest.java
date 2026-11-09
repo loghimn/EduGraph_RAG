@@ -24,6 +24,9 @@ public class AiChatRequest {
     @JsonProperty("course_id")
     private String courseId;
 
+    @JsonProperty("authorized_course_ids")
+    private List<String> authorizedCourseIds;
+
     @JsonProperty("user_id")
     private String userId;
 

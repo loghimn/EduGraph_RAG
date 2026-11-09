@@ -104,3 +104,50 @@ async def test_vector_overfetch_retries_until_course_chunks_found(monkeypatch):
     vec_ks = [c.get("k") for c in session.calls if "vector" in c]
     assert vec_ks[0] == 50
     assert vec_ks[-1] >= 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, ["c1"]])
+async def test_retrieval_uses_course_scope_for_graph_vector_and_fulltext(monkeypatch, scope):
+    class ScopedSession(_FakeSession):
+        async def run(self, query, **params):
+            self.calls.append(dict(params))
+            # Model Cypher's IN null / IN [] behavior instead of returning
+            # rows unconditionally as the overfetch fake does.
+            if "c1" not in (params.get("authorized_course_ids") or []):
+                return _FakeResult([])
+            if "concept_ids" in params:
+                chunk_id = "graph"
+            elif "vector" in params:
+                chunk_id = "vector"
+            else:
+                chunk_id = "fulltext"
+            return _FakeResult([{"id": chunk_id, "text": "Servlet", "index": 0}])
+
+    session = ScopedSession()
+    monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))
+
+    async def embed(texts):
+        return [[0.0] * 8]
+
+    monkeypatch.setattr(chunk_retriever.embed_model, "embed_batch", embed)
+    chunks = await chunk_retriever.retrieve_chunks(
+        course_id="c1", query="Servlet", concept_ids=["servlet"],
+        authorized_course_ids=scope,
+    )
+    assert {ch["id"] for ch in chunks} == {"graph", "vector", "fulltext"}
+    assert len(session.calls) == 3
+    assert all(call["authorized_course_ids"] == ["c1"] for call in session.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("course_id,scope", [("c1", []), (None, None)])
+async def test_retrieval_without_access_does_not_query_database(monkeypatch, course_id, scope):
+    session = _FakeSession()
+    monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))
+    chunks = await chunk_retriever.retrieve_chunks(
+        course_id=course_id, query="Servlet", concept_ids=["servlet"],
+        authorized_course_ids=scope,
+    )
+    assert chunks == []
+    assert session.calls == []

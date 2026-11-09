@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import json
 import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -35,7 +35,7 @@ def test_context_failure_keeps_original_question_and_streams_answer(
         context_field: [{"role": "assistant", "content": "Previous answer"}]
     })
     assert resp.status_code == 200
-    mock_link.assert_awaited_once_with("c1", question)
+    mock_link.assert_awaited_once_with(["c1"], question)
     assert mock_retrieve.call_args.kwargs["query"] == question
     assert "Học Java và HTTP [1]" in resp.text
     assert "event: sources" in resp.text
@@ -57,7 +57,7 @@ def test_context_failure_without_matching_concept_still_returns_no_data(mock_llm
     })
     assert NO_DATA_MESSAGE in resp.text
     assert "event: error" not in resp.text
-    mock_link.assert_awaited_once_with("c1", "Học cái nào trước?")
+    mock_link.assert_awaited_once_with(["c1"], "Học cái nào trước?")
     mock_llm.generate_stream.assert_not_called()
 
 
@@ -85,7 +85,7 @@ async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
         frames = [frame async for frame in chat_explain_stream_generator(
             "c1", "Java Servlet?", history=[{"role": "assistant", "content": "Previous answer"}])]
     assert cancelled
-    linker.assert_awaited_once_with("c1", "Java Servlet?")
+    linker.assert_awaited_once_with(["c1"], "Java Servlet?")
     assert NO_DATA_MESSAGE in "".join(frames)
     assert "event: error" not in "".join(frames)
 
@@ -124,7 +124,7 @@ def test_reply_uses_selected_message_without_recent_history(mock_llm, mock_retri
     assert resp.status_code == 200
     mock_resolve.assert_awaited_once_with("Give an example", [],
                                           [{"role": "assistant", "content": "Servlet handles HTTP "}])
-    mock_link.assert_awaited_once_with("c1", "Java Servlet HTTP example")
+    mock_link.assert_awaited_once_with(["c1"], "Java Servlet HTTP example")
     assert "Example [1]" in resp.text
 
 
@@ -152,7 +152,7 @@ def test_followup_links_and_retrieves_using_contextual_question(mock_llm, mock_r
     assert resp.status_code == 200
     mock_resolve.assert_awaited_once_with("Học cái nào trước?",
                                           [{"role": "assistant", "content": "Cần Java và HTTP "}])
-    mock_link.assert_awaited_once_with("c1", resolved)
+    mock_link.assert_awaited_once_with(["c1"], resolved)
     assert mock_retrieve.call_args.kwargs["query"] == resolved
     assert "Học Java trước [1]" in resp.text
     assert "event: done" in resp.text
@@ -170,7 +170,7 @@ def test_changed_topic_still_returns_no_data(mock_llm, mock_link, mock_resolve):
         "course_id": "c1", "user_id": "u1", "message": "weather tomorrow",
         "history": [{"role": "assistant", "content": "Learn Java Servlet"}]
     })
-    mock_link.assert_awaited_once_with("c1", "weather tomorrow")
+    mock_link.assert_awaited_once_with(["c1"], "weather tomorrow")
     assert NO_DATA_MESSAGE in resp.text
     mock_llm.generate_stream.assert_not_called()
 
@@ -198,7 +198,7 @@ def test_chat_no_concepts_returns_message_without_retrieval_or_llm(
     mock_retrieve.assert_not_awaited()
     mock_llm.generate_stream.assert_not_called()
     if concept_ids is None:
-        mock_link.assert_awaited_once_with("c1", "weather tomorrow")
+        mock_link.assert_awaited_once_with(["c1"], "weather tomorrow")
     else:
         mock_link.assert_not_awaited()
 
@@ -272,7 +272,7 @@ def test_chat_enrolled_user_authorized_by_java(mock_link, mock_neo4j):
     )
     assert resp.status_code == 200
     assert "event: clarify" in resp.text
-    mock_link.assert_awaited_once_with("c1", "hello")
+    mock_link.assert_awaited_once_with(["c1"], "hello")
 
 @patch("app.api.chat.verify_course_exists", new=AsyncMock())
 @patch("app.api.chat.link_concepts")
@@ -369,12 +369,39 @@ def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_ver
     resp = client.post(
         "/chat",
         headers={"X-Internal-Key": "test-internal-api-key"},
-        json={"course_id": None, "user_id": "u1", "message": "What is index?"}
+        json={"course_id": None, "user_id": "u1", "message": "What is index?",
+              "authorized_course_ids": ["26", "28"]}
     )
     assert resp.status_code == 200
     mock_verify.assert_not_awaited()
-    mock_link.assert_awaited_once_with(None, "What is index?")
+    mock_link.assert_awaited_once_with(["26", "28"], "What is index?")
     assert mock_retrieve.call_args.kwargs["course_id"] is None
+    assert mock_retrieve.call_args.kwargs["authorized_course_ids"] == ["26", "28"]
     assert "event: sources" in resp.text
     assert "ch1" in resp.text
+
+
+@pytest.mark.parametrize("scope", [None, []])
+def test_global_chat_without_authorized_courses_does_not_search(scope):
+    from app.api.chat import NO_DATA_MESSAGE
+    with patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker, \
+         patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
+        resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+            "user_id": "u1", "message": "Servlet?", "authorized_course_ids": scope,
+            "concept_ids": ["servlet"],
+        })
+    assert NO_DATA_MESSAGE in resp.text
+    linker.assert_not_awaited()
+    retriever.assert_not_awaited()
+
+
+@patch("app.api.chat.verify_course_exists", new_callable=AsyncMock)
+def test_course_chat_does_not_search_other_authorized_courses(mock_verify):
+    with patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker:
+        linker.return_value = {"concept_ids": [], "clarify": None}
+        client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
+            "course_id": "26", "user_id": "u1", "message": "Servlet?",
+            "authorized_course_ids": ["26", "28"],
+        })
+    linker.assert_awaited_once_with(["26"], "Servlet?")
 

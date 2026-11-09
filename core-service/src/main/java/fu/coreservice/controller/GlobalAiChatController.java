@@ -24,8 +24,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
- * Global chat endpoints — no course restriction.
- * Used by the Python AI core when course_id is null (full graph chat).
+ * Global chat searches public courses only, excluding every personal notebook.
+ * Python receives course_id=null and a server-authorized course ID list.
  */
 @RestController
 @RequestMapping("/api/chat")

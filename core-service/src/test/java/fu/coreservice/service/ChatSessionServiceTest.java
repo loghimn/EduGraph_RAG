@@ -63,6 +63,18 @@ class ChatSessionServiceTest {
     }
 
     @Test
+    void globalChatUsesPublicNonNotebookCoursesFromRepository() {
+        when(courseRepository.findGlobalChatCourseIds()).thenReturn(List.of(26L, 28L));
+        assertEquals(List.of("26", "28"), service.getGlobalChatCourseIds());
+    }
+
+    @Test
+    void globalChatPreservesEmptyCourseScope() {
+        when(courseRepository.findGlobalChatCourseIds()).thenReturn(List.of());
+        assertTrue(service.getGlobalChatCourseIds().isEmpty());
+    }
+
+    @Test
     void replyToOldBotPersistsReferenceAndCapturesItsOriginalQuestion() {
         allowLearner();
         ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();

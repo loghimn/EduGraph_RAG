@@ -79,14 +79,13 @@ async def retrieve_chunks(
     """
     graph_chunks = []
     
-    # Determine the effective course filter
-    # If authorized_course_ids is provided, use it; otherwise fall back to course_id
-    if authorized_course_ids:
-        course_filter = " AND c.course_id IN $authorized_course_ids"
-    elif course_id:
-        course_filter = " AND c.course_id = $course_id"
-    else:
-        course_filter = ""
+    # All three queries use this list. A missing list falls back to the
+    # authorized course supplied by the internal caller; an explicit empty
+    # list grants no access and must never become an unfiltered search.
+    if authorized_course_ids is None:
+        authorized_course_ids = [course_id] if course_id else []
+    if not authorized_course_ids:
+        return []
     
     # 1. Graph chunks nếu có concept_ids
     if concept_ids:

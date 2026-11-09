@@ -54,6 +54,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
         AiChatRequest aiRequest = AiChatRequest.builder()
                 .courseId(courseId == null ? null : courseId.toString())
+                .authorizedCourseIds(courseId == null
+                        ? chatSessionService.getGlobalChatCourseIds()
+                        : List.of(courseId.toString()))
                 .userId(turn.userId().toString()).message(request.getMessage())
                 .history(turn.history())
                 .replyContext(turn.replyContext())

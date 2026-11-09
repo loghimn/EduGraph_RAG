@@ -272,6 +272,13 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         return new CourseAccess(user, course);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> getGlobalChatCourseIds() {
+        return courseRepository.findGlobalChatCourseIds().stream()
+                .map(String::valueOf).toList();
+    }
+
     private void validatePage(int page, int size) {
         if (page < 0 || size < 1 || size > 100) {
             throw new AppException(ErrorCode.INVALID_PARAMETER);
