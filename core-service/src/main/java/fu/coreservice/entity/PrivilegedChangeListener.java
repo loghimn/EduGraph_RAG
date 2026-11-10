@@ -39,7 +39,8 @@ public class PrivilegedChangeListener {
     public void updated(Object entity) {
         if (entity instanceof User user) {
             if (user.isPrivilegeSnapshotLoaded() && (user.getPrivilegeSnapshotRole() != user.getRole()
-                    || !Objects.equals(user.getPrivilegeSnapshotActive(), user.getIsActive()))) {
+                    || !Objects.equals(user.getPrivilegeSnapshotActive(), user.getIsActive())
+                    || user.getPrivilegeSnapshotApprovalStatus() != user.getApprovalStatus())) {
                 signal("USER_PRIVILEGE_CHANGED", "USER");
             }
             user.capturePrivilegeSnapshot();

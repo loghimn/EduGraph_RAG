@@ -7,6 +7,10 @@ import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;
 import fu.coreservice.dto.auth.RegisterRequest;
+import fu.coreservice.dto.auth.RegisterResponse;
+import fu.coreservice.dto.auth.RegistrationRole;
+import fu.coreservice.entity.ApprovalStatus;
+import fu.coreservice.entity.UserRole;
 import fu.coreservice.dto.auth.UserInfoResponse;
 import fu.coreservice.entity.User;
 import fu.coreservice.entity.UserSession;
@@ -18,6 +22,7 @@ import fu.coreservice.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -55,7 +60,8 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
+    public RegisterResponse register(RegisterRequest request) {
+        if (request.getRole() == null) throw new AppException(ErrorCode.INVALID_REQUEST);
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new AppException(ErrorCode.EMAIL_ALREADY_EXISTS);
         }
@@ -67,11 +73,16 @@ public class AuthServiceImpl implements AuthService {
                 .email(request.getEmail())
                 .username(request.getUsername())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
-                .role(request.getRole())
+                .role(UserRole.valueOf(request.getRole().name()))
+                .approvalStatus(request.getRole() == RegistrationRole.INSTRUCTOR
+                        ? ApprovalStatus.PENDING : ApprovalStatus.NOT_REQUIRED)
                 .isActive(true)
                 .build();
 
         user = userRepository.save(user);
+        if (user.getApprovalStatus() == ApprovalStatus.PENDING) {
+            return RegisterResponse.builder().approvalStatus(ApprovalStatus.PENDING).build();
+        }
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
         String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
         String refreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
@@ -83,7 +94,9 @@ public class AuthServiceImpl implements AuthService {
                 .build();
         userSessionRepository.save(session);
 
-        return buildAuthResponse(accessToken, refreshToken);
+        return RegisterResponse.builder().approvalStatus(user.getApprovalStatus())
+                .accessToken(accessToken).refreshToken(refreshToken).tokenType("Bearer")
+                .expiresIn(jwtService.getAccessTokenExpiration() / 1000).build();
     }
 
     @Override
@@ -93,13 +106,14 @@ public class AuthServiceImpl implements AuthService {
             // Serialize credential verification and issuance with password changes.
             User user = userRepository.findLockedByEmail(request.getEmail())
                     .orElseThrow(() -> new AppException(ErrorCode.INVALID_CREDENTIALS));
-            authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
-            );
-
-            if (!user.getIsActive()) {
-                throw new AppException(ErrorCode.ACCOUNT_DISABLED);
+            try {
+                authenticationManager.authenticate(
+                        new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword()));
+            } catch (DisabledException ex) {
+                user.requireCanAuthenticate();
+                throw ex;
             }
+            user.requireCanAuthenticate();
 
             UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
             String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
@@ -141,7 +155,7 @@ public class AuthServiceImpl implements AuthService {
             throw new AppException(ErrorCode.REFRESH_TOKEN_EXPIRED);
         }
 
-        if (!Boolean.TRUE.equals(user.getIsActive())) throw new AppException(ErrorCode.ACCOUNT_DISABLED);
+        user.requireCanAuthenticate();
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
         String newAccessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
         String newRefreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
@@ -180,6 +194,7 @@ public class AuthServiceImpl implements AuthService {
                 .username(user.getUsername())
                 .role(user.getRole())
                 .isActive(user.getIsActive())
+                .approvalStatus(user.getApprovalStatus())
                 .build();
     }
 

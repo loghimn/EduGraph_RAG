@@ -1,6 +1,5 @@
 package fu.coreservice.dto.auth;
 
-import fu.coreservice.entity.UserRole;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -29,5 +28,5 @@ public class RegisterRequest {
     private String password;
 
     @NotNull(message = "Role is required")
-    private UserRole role;
+    private RegistrationRole role;
 }

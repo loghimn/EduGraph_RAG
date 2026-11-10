@@ -1,6 +1,7 @@
 package fu.coreservice.dto.auth;
 
 import fu.coreservice.entity.UserRole;
+import fu.coreservice.entity.ApprovalStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -19,4 +20,5 @@ public class UserInfoResponse {
     private String username;
     private UserRole role;
     private Boolean isActive;
+    private ApprovalStatus approvalStatus;
 }
