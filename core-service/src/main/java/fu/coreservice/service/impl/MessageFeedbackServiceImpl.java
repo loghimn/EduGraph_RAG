@@ -72,7 +72,8 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
         if (!course.getUser().getUserId().equals(user.getUserId())
-                && !courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user)) {
+                && (course.isNotebook()
+                    || !courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user))) {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
         ChatSession session = chatSessionRepository.findBySessionIdAndCourseAndLearner(sessionId, course, user)

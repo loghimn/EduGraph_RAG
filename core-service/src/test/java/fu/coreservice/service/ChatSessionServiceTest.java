@@ -543,4 +543,34 @@ class ChatSessionServiceTest {
         }
         verifyNoInteractions(userRepository, courseRepository, chatSessionRepository);
     }
+    @Test
+    void notebookOwnerCanCreatePrivateChatWithoutEnrollment() {
+        course.setNotebook(true);
+        course.setPublic(false);
+        course.setUser(learner);
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+        when(chatSessionRepository.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
+        var result = service.createSession(7L, new ChatSessionCreateRequest());
+        assertEquals(7L, result.getCourseId());
+        verifyNoInteractions(courseEnrollmentRepository);
+    }
+
+    @Test
+    void notebookChatRejectsNonOwnerEvenIfAnEnrollmentExists() {
+        course.setNotebook(true);
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+        // No enrollment lookup is allowed to grant access to a private notebook.
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.createSession(7L, new ChatSessionCreateRequest())).getErrorCode());
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.getMySessions(7L, 0, 10)).getErrorCode());
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.getMessages(7L, 10L, 0, 10)).getErrorCode());
+        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
+                () -> service.beginTurn(7L, 10L, ChatRequest.builder().message("Read my document").build())).getErrorCode());
+        verifyNoInteractions(courseEnrollmentRepository, chatSessionRepository, chatMessageRepository);
+    }
+
 }
