@@ -5,6 +5,8 @@ import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;
 import fu.coreservice.dto.auth.RegisterRequest;
+import fu.coreservice.dto.auth.RegisterResponse;
+import fu.coreservice.entity.ApprovalStatus;
 import fu.coreservice.dto.auth.UserInfoResponse;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.service.AuthService;
@@ -58,19 +60,21 @@ public class AuthController {
 
     @Operation(
             summary = "Register a new account",
-            description = "Create a new user account with email, username, password, and role",
+            description = "Register STUDENT (tokens issued immediately) or INSTRUCTOR (pending admin approval, no tokens). ADMIN is not allowed.",
             responses = {
                     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Account created successfully"),
                     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Email/username already exists or invalid input")
             }
     )
     @PostMapping("/register")
-    public ResponseEntity<ApiResponse<AuthResponse>> register(@Valid @RequestBody RegisterRequest request) {
-        AuthResponse response = authService.register(request);
+    public ResponseEntity<ApiResponse<RegisterResponse>> register(@Valid @RequestBody RegisterRequest request) {
+        RegisterResponse response = authService.register(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(
-                ApiResponse.<AuthResponse>builder()
+                ApiResponse.<RegisterResponse>builder()
                         .success(true)
-                        .message("Account created successfully")
+                        .message(response.getApprovalStatus() == ApprovalStatus.PENDING
+                                ? "Account created successfully. Please wait for admin approval"
+                                : "Account created successfully")
                         .data(response)
                         .build()
         );

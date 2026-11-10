@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import fu.coreservice.exception.AppException;
+import fu.coreservice.exception.ErrorCode;
 
 import java.time.LocalDateTime;
 
@@ -21,11 +23,14 @@ public class User {
     @Transient
     private Boolean privilegeSnapshotActive;
     @Transient
+    private ApprovalStatus privilegeSnapshotApprovalStatus;
+    @Transient
     private boolean privilegeSnapshotLoaded;
 
     public void capturePrivilegeSnapshot() {
         privilegeSnapshotRole = role;
         privilegeSnapshotActive = isActive;
+        privilegeSnapshotApprovalStatus = approvalStatus;
         privilegeSnapshotLoaded = true;
     }
 
@@ -46,6 +51,35 @@ public class User {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private UserRole role;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "approval_status", nullable = false, length = 32,
+            columnDefinition = "varchar(32) default 'NOT_REQUIRED'")
+    @Builder.Default
+    private ApprovalStatus approvalStatus = ApprovalStatus.NOT_REQUIRED;
+
+    @Column(name = "reviewed_by")
+    private Long reviewedBy;
+
+    @Column(name = "reviewed_at")
+    private LocalDateTime reviewedAt;
+
+    @Column(name = "rejection_reason", length = 1000)
+    private String rejectionReason;
+
+    public boolean isApprovalSatisfied() {
+        return role != UserRole.INSTRUCTOR || approvalStatus == ApprovalStatus.APPROVED;
+    }
+
+    public void requireCanAuthenticate() {
+        if (!Boolean.TRUE.equals(isActive)) {
+            throw new AppException(ErrorCode.ACCOUNT_DISABLED);
+        }
+        if (!isApprovalSatisfied()) {
+            throw new AppException(approvalStatus == ApprovalStatus.REJECTED
+                    ? ErrorCode.INSTRUCTOR_APPROVAL_REJECTED : ErrorCode.INSTRUCTOR_APPROVAL_PENDING);
+        }
+    }
 
     @Column(name = "is_active", nullable = false)
     @Builder.Default

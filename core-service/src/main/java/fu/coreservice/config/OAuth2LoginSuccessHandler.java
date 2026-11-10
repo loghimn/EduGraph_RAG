@@ -3,6 +3,7 @@ package fu.coreservice.config;
 import fu.coreservice.entity.User;
 import fu.coreservice.entity.UserRole;
 import fu.coreservice.entity.UserSession;
+import fu.coreservice.exception.AppException;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.repository.UserSessionRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -11,6 +12,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -33,6 +36,7 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
     private final JwtService jwtService;
     private final UserDetailsService userDetailsService;
     private final PasswordEncoder passwordEncoder;
+    private final OAuth2LoginFailureHandler failureHandler;
 
     @Value("${app.oauth2.frontend-success-url}")
     private String frontendSuccessUrl;
@@ -53,6 +57,18 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
         // Create or find existing user
         User user = userRepository.findByEmail(email)
                 .orElseGet(() -> createOAuth2User(email, name));
+
+        // OAuth authentication must not bypass account approval or leave a usable session.
+        try {
+            user.requireCanAuthenticate();
+        } catch (AppException ex) {
+            SecurityContextHolder.clearContext();
+            var session = request.getSession(false);
+            if (session != null) session.invalidate();
+            failureHandler.onAuthenticationFailure(request, response,
+                    new DisabledException(ex.getMessage()));
+            return;
+        }
 
         // Generate JWT tokens
         UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());

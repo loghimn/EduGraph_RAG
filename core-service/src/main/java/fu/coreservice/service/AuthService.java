@@ -1,6 +1,7 @@
 package fu.coreservice.service;
 
 import fu.coreservice.dto.auth.AuthResponse;
+import fu.coreservice.dto.auth.RegisterResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;
 import fu.coreservice.dto.auth.RegisterRequest;
@@ -9,7 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 public interface AuthService {
 
-    AuthResponse register(RegisterRequest request);
+    RegisterResponse register(RegisterRequest request);
 
     AuthResponse login(LoginRequest request, HttpServletRequest httpRequest);
 

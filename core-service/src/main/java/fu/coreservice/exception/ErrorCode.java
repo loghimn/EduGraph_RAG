@@ -16,6 +16,9 @@ public enum ErrorCode {
 
     INVALID_RESET_OTP("AUTH_007", "OTP is invalid, expired or has exceeded the attempt limit", HttpStatus.BAD_REQUEST),
     CURRENT_PASSWORD_INCORRECT("AUTH_008", "Current password is incorrect", HttpStatus.BAD_REQUEST),
+    INSTRUCTOR_APPROVAL_PENDING("AUTH_009", "Instructor account is awaiting admin approval", HttpStatus.FORBIDDEN),
+    INSTRUCTOR_APPROVAL_REJECTED("AUTH_010", "Instructor registration has been rejected", HttpStatus.FORBIDDEN),
+    INSTRUCTOR_REVIEW_NOT_PENDING("USER_004", "Only pending instructor registrations can be reviewed", HttpStatus.CONFLICT),
 
     // Validation
     VALIDATION_FAILED("VALIDATION_001", "Validation failed", HttpStatus.BAD_REQUEST),

@@ -25,7 +25,7 @@ public class CustomUserDetailsService implements UserDetailsService {
         return new User(
                 user.getEmail(),
                 user.getPasswordHash(),
-                user.getIsActive(),
+                Boolean.TRUE.equals(user.getIsActive()) && user.isApprovalSatisfied(),
                 true,
                 true,
                 true,

@@ -13,6 +13,7 @@ import fu.coreservice.exception.GlobalExceptionHandler;
 import fu.coreservice.repository.*;
 import fu.coreservice.service.ActivityAlertService;
 import fu.coreservice.service.ActivityLogService;
+import fu.coreservice.service.InstructorApprovalService;
 import jakarta.servlet.Filter;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -49,7 +50,7 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-class AdminActivityLogControllerTest {
+class AdminControllerTest {
     private AnnotationConfigWebApplicationContext context;
     private MockMvc mvc;
     private ActivityLogService service;
@@ -135,7 +136,7 @@ class AdminActivityLogControllerTest {
     void controllerMethodSecurityAlsoPreventsDirectNonAdminInvocation() {
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
                 "student@test.local", null, AuthorityUtils.createAuthorityList("ROLE_STUDENT")));
-        assertThatThrownBy(() -> context.getBean(AdminActivityLogController.class).get(7L))
+        assertThatThrownBy(() -> context.getBean(AdminController.class).get(7L))
                 .isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(service);
     }
@@ -165,9 +166,10 @@ class AdminActivityLogControllerTest {
 
     @Configuration
     @EnableWebMvc
-    @Import({SecurityConfig.class, AdminActivityLogController.class, JacksonConfig.class})
+    @Import({SecurityConfig.class, AdminController.class, JacksonConfig.class})
     static class TestConfig {
         @Bean ActivityLogService activityLogService() { return mock(ActivityLogService.class); }
+        @Bean InstructorApprovalService instructorApprovalService() { return mock(InstructorApprovalService.class); }
         @Bean ActivityAlertService activityAlertService() { return mock(ActivityAlertService.class); }
         @Bean JwtService jwtService() { return mock(JwtService.class); }
         @Bean UserDetailsService userDetailsService() { return mock(UserDetailsService.class); }
