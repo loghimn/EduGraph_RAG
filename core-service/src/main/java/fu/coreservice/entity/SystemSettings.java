@@ -7,6 +7,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
+@EntityListeners(PrivilegedChangeListener.class)
 @Table(
         name = "system_settings",
         uniqueConstraints = {

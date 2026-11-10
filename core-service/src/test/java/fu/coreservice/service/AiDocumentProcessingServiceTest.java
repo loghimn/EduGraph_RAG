@@ -48,6 +48,7 @@ import static org.mockito.Mockito.after;
 
 @ExtendWith(MockitoExtension.class)
 class AiDocumentProcessingServiceTest {
+    @org.mockito.Mock ActivityAlertService alerts;
 
     @Mock
     private AiCoreClient aiCoreClient;
@@ -109,6 +110,7 @@ class AiDocumentProcessingServiceTest {
         verify(documentRepository).save(document);
         assertEquals(JobStatus.DONE, job.getJobStatus());
         verify(documentProcessingJobRepository).save(job);
+        org.mockito.Mockito.verifyNoInteractions(alerts);
     }
 
     @Test
@@ -126,6 +128,34 @@ class AiDocumentProcessingServiceTest {
         verify(documentRepository).save(document);
         assertEquals(JobStatus.FAILED, job.getJobStatus());
         assertEquals(1000, job.getErrorMessage().length());
+    }
+
+    @Test
+    void unsupportedInputFailureDoesNotBecomeSystemAlert() {
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenReturn(AiDocumentStatusResponse.builder()
+                .status("FAILED").error("unsupported file").build());
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(Optional.of(job));
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        org.mockito.Mockito.verifyNoInteractions(alerts);
+    }
+
+    @Test
+    void exhaustedSystemFailureRaisesCriticalAlertWithoutAnotherAutomaticRetry() {
+        stubInlineTransactions();
+        document.setDocStatus(UploadStatus.PENDING);
+        job.setRetryCount(3);
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(Optional.of(job));
+        doThrow(new AiCoreException(503, "upstream private payload", java.util.Map.of()))
+                .when(aiCoreClient).storeDocumentFile(anyLong(), anyString(), any(), any());
+        service.triggerPipelineAsync(1L, 10L, 7L, "a.pdf", MediaType.APPLICATION_PDF,
+                new ByteArrayResource(new byte[]{1}));
+        verify(alerts, timeout(3000)).critical("DOCUMENT_PROCESS_EXHAUSTED", "DOCUMENT", "SYSTEM_ERROR");
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        verify(aiCoreClient, never()).triggerIngest(any());
     }
 
     @Test

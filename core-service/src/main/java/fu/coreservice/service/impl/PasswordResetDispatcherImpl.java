@@ -1,6 +1,7 @@
 package fu.coreservice.service.impl;
 
 import fu.coreservice.entity.User;
+import fu.coreservice.service.ActivityAlertService;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.service.PasswordResetDispatcher;
 import fu.coreservice.service.PasswordResetMailer;
@@ -27,10 +28,12 @@ public class PasswordResetDispatcherImpl implements PasswordResetDispatcher {
     private final PasswordResetMailer mailer;
     private final TaskExecutor executor;
     private final TransactionTemplate transactions;
+    private final ActivityAlertService alerts;
 
     public PasswordResetDispatcherImpl(UserRepository users, PasswordEncoder encoder,
             PasswordResetMailer mailer, @Qualifier("passwordResetExecutor") TaskExecutor executor,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager, ActivityAlertService alerts) {
+        this.alerts = alerts;
         this.users = users;
         this.encoder = encoder;
         this.mailer = mailer;
@@ -44,6 +47,7 @@ public class PasswordResetDispatcherImpl implements PasswordResetDispatcher {
         try {
             executor.execute(() -> process(email));
         } catch (RejectedExecutionException ex) {
+            alerts.repeatedSystemFailure("PASSWORD_RESET_QUEUE", "USER");
             // Keep the public response identical, without a caller-runs fallback.
             log.warn("Password reset queue is full or shutting down");
         }
@@ -60,9 +64,11 @@ public class PasswordResetDispatcherImpl implements PasswordResetDispatcher {
                 transactions.executeWithoutResult(status ->
                         users.clearPasswordResetOtpIfMatches(delivery.userId(), delivery.hash()));
                 // Never log OTPs, hashes, addresses or mail-provider exception text.
+                alerts.repeatedSystemFailure("PASSWORD_RESET_DELIVERY", "USER");
                 log.warn("Password reset email delivery failed for userId={}", delivery.userId());
             }
         } catch (RuntimeException ex) {
+            alerts.repeatedSystemFailure("PASSWORD_RESET_DELIVERY", "USER");
             // No worker outcome changes the public forgot-password response.
             log.warn("Password reset background processing failed");
         }

@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.ActivityAlertService;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.client.AiCoreClient;
@@ -44,6 +46,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ChatSessionService chatSessionService;
     private final AiCoreClient aiCoreClient;
     private final ObjectMapper objectMapper;
+
+    private final ActivityAlertService alerts;
 
     @Override
     @Transactional
@@ -241,6 +245,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
                     latency, List.copyOf(state.sources), state.clarification);
             finalized = true; // Set only after the transactional call has committed.
+            if (state.status == ChatMessageStatus.FAILED) {
+                alerts.repeatedSystemFailure("CHAT_GENERATE", "CHAT_MESSAGE");
+            }
         }
 
         @Override

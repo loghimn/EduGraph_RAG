@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.ActivityAlertService;
+
 import fu.coreservice.config.JwtService;
 import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
@@ -36,9 +38,13 @@ public class AuthServiceImpl implements AuthService {
     private final AuthenticationManager authenticationManager;
     private final UserDetailsService userDetailsService;
 
+    private final ActivityAlertService alerts;
+
     public AuthServiceImpl(UserRepository userRepository, UserSessionRepository userSessionRepository,
                            PasswordEncoder passwordEncoder, JwtService jwtService,
-                           AuthenticationManager authenticationManager, UserDetailsService userDetailsService) {
+                           AuthenticationManager authenticationManager, UserDetailsService userDetailsService,
+                           ActivityAlertService alerts) {
+        this.alerts = alerts;
         this.userRepository = userRepository;
         this.userSessionRepository = userSessionRepository;
         this.passwordEncoder = passwordEncoder;
@@ -83,31 +89,40 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public AuthResponse login(LoginRequest request, HttpServletRequest httpRequest) {
-        // Serialize credential verification and issuance with password changes.
-        User user = userRepository.findLockedByEmail(request.getEmail())
-                .orElseThrow(() -> new AppException(ErrorCode.INVALID_CREDENTIALS));
-        authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
-        );
+        try {
+            // Serialize credential verification and issuance with password changes.
+            User user = userRepository.findLockedByEmail(request.getEmail())
+                    .orElseThrow(() -> new AppException(ErrorCode.INVALID_CREDENTIALS));
+            authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+            );
 
-        if (!user.getIsActive()) {
-            throw new AppException(ErrorCode.ACCOUNT_DISABLED);
+            if (!user.getIsActive()) {
+                throw new AppException(ErrorCode.ACCOUNT_DISABLED);
+            }
+
+            UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
+            String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
+            String refreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
+
+            UserSession session = UserSession.builder()
+                    .user(user)
+                    .refreshToken(refreshToken)
+                    .ipAddress(getClientIp(httpRequest))
+                    .userAgent(httpRequest.getHeader("User-Agent"))
+                    .expiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000))
+                    .build();
+            userSessionRepository.save(session);
+
+            alerts.loginSucceeded(request.getEmail());
+            return buildAuthResponse(accessToken, refreshToken);
+        } catch (org.springframework.security.authentication.BadCredentialsException ex) {
+            alerts.loginFailed(request.getEmail());
+            throw ex;
+        } catch (AppException ex) {
+            if (ex.getErrorCode() == ErrorCode.INVALID_CREDENTIALS) alerts.loginFailed(request.getEmail());
+            throw ex;
         }
-
-        UserDetails userDetails = userDetailsService.loadUserByUsername(user.getEmail());
-        String accessToken = jwtService.generateAccessToken(userDetails, user.getUserId(), user.getRole().name());
-        String refreshToken = jwtService.generateRefreshToken(userDetails, user.getUserId(), user.getRole().name());
-
-        UserSession session = UserSession.builder()
-                .user(user)
-                .refreshToken(refreshToken)
-                .ipAddress(getClientIp(httpRequest))
-                .userAgent(httpRequest.getHeader("User-Agent"))
-                .expiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000))
-                .build();
-        userSessionRepository.save(session);
-
-        return buildAuthResponse(accessToken, refreshToken);
     }
 
     @Override

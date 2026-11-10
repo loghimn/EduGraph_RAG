@@ -1,6 +1,10 @@
 package fu.coreservice.exception;
 
 import fu.coreservice.dto.ApiResponse;
+import fu.coreservice.service.ActivityAlertService;
+import fu.coreservice.repository.ChatSessionRepository;
+import fu.coreservice.repository.LearningPathPlanRepository;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -27,8 +31,13 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@RequiredArgsConstructor
 @Slf4j
 public class GlobalExceptionHandler {
+    private final ActivityAlertService alerts;
+    private final ChatSessionRepository sessions;
+    private final LearningPathPlanRepository plans;
+    private final fu.coreservice.repository.ChatMessageRepository messages;
 
     @ExceptionHandler(AsyncRequestTimeoutException.class)
     public ResponseEntity<ApiResponse<Void>> handleAsyncTimeout(AsyncRequestTimeoutException ex,
@@ -114,6 +123,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException ex) {
+        alerts.accessDenied("SYSTEM");
         ErrorCode errorCode = ErrorCode.ACCESS_DENIED;
 
         return ResponseEntity.status(errorCode.getHttpStatus()).body(
@@ -180,6 +190,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AiCoreException.class)
     public ResponseEntity<ApiResponse<Map<String, Object>>> handleAiCoreException(AiCoreException ex) {
+        if (ex.getHttpStatus() == 403) alerts.accessDenied("KNOWLEDGE_GRAPH");
+        else if (ex.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
         log.warn("AI core call failed. status={}, detail={}", ex.getHttpStatus(), ex.getDetail());
 
         HttpStatus status = HttpStatus.resolve(ex.getHttpStatus());
@@ -199,6 +211,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception ex) {
+        alerts.critical("UNEXPECTED_SYSTEM_ERROR", "SYSTEM", "INTERNAL_SERVER_ERROR");
         log.error("Unexpected exception occurred", ex);
         ErrorCode errorCode = ErrorCode.INTERNAL_SERVER_ERROR;
 
@@ -214,6 +227,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AppException.class)
     public ResponseEntity<ApiResponse<Void>> handleAppException(AppException ex) {
         ErrorCode errorCode = ex.getErrorCode();
+        if (errorCode == ErrorCode.ACCESS_DENIED || errorCode == ErrorCode.COURSE_ACCESS_DENIED) {
+            alerts.accessDenied("COURSE");
+        } else if (errorCode == ErrorCode.INTERNAL_SERVER_ERROR) {
+            alerts.critical("UNEXPECTED_SYSTEM_ERROR", "SYSTEM", errorCode.name());
+        } else if (errorCode.getHttpStatus().is5xxServerError()) {
+            alerts.repeatedSystemFailure(errorCode.name(), "SYSTEM");
+        } else if (errorCode == ErrorCode.CHAT_SESSION_NOT_FOUND || errorCode == ErrorCode.LEARNING_PATH_NOT_FOUND
+                || errorCode == ErrorCode.CHAT_MESSAGE_NOT_FOUND) {
+            observeMaskedRejection(errorCode);
+        }
 
         return ResponseEntity.status(errorCode.getHttpStatus()).contentType(MediaType.APPLICATION_JSON).body(
                 ApiResponse.<Void>builder()
@@ -223,4 +246,25 @@ public class GlobalExceptionHandler {
                         .build()
         );
     }
+    // Preserve 404 responses while recognizing access to existing, inaccessible private resources.
+    private void observeMaskedRejection(ErrorCode code) {
+        try {
+            var attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+            if (!(attributes instanceof org.springframework.web.context.request.ServletRequestAttributes servlet)) return;
+            Object variables = servlet.getRequest().getAttribute(
+                    org.springframework.web.servlet.HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+            if (!(variables instanceof Map<?, ?> ids)) return;
+            String key = code == ErrorCode.CHAT_SESSION_NOT_FOUND ? "sessionId"
+                    : code == ErrorCode.CHAT_MESSAGE_NOT_FOUND ? "messageId" : "planId";
+            Object id = ids.get(key);
+            if (id == null) return;
+            long value = Long.parseLong(id.toString());
+            if (code == ErrorCode.CHAT_MESSAGE_NOT_FOUND && messages.existsById(value)) alerts.accessDenied("CHAT_MESSAGE");
+            if (code == ErrorCode.CHAT_SESSION_NOT_FOUND && sessions.existsById(value)) alerts.accessDenied("CHAT_SESSION");
+            if (code == ErrorCode.LEARNING_PATH_NOT_FOUND && plans.existsById(value)) alerts.accessDenied("LEARNING_PATH");
+        } catch (RuntimeException ignored) {
+            // Audit enrichment must never change the original response.
+        }
+    }
+
 }

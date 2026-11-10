@@ -6,7 +6,7 @@ import org.springframework.web.context.request.async.AsyncRequestTimeoutExceptio
 import static org.junit.jupiter.api.Assertions.*;
 
 class ChatAsyncExceptionHandlerTest {
-    private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+    private final GlobalExceptionHandler handler = new GlobalExceptionHandler(org.mockito.Mockito.mock(fu.coreservice.service.ActivityAlertService.class), org.mockito.Mockito.mock(fu.coreservice.repository.ChatSessionRepository.class), org.mockito.Mockito.mock(fu.coreservice.repository.LearningPathPlanRepository.class), org.mockito.Mockito.mock(fu.coreservice.repository.ChatMessageRepository.class));
 
     @Test
     void timeoutBeforeCommitReturns503Json() {

@@ -36,6 +36,7 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class ChatSessionServiceTest {
+    @Mock ActivityAlertService alerts;
     @Mock UserRepository userRepository;
     @Mock CourseRepository courseRepository;
     @Mock CourseEnrollmentRepository courseEnrollmentRepository;

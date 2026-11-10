@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.ActivityAlertService;
+
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.document.DocumentDownloadResponse;
@@ -47,6 +49,8 @@ public class DocumentServiceImpl implements DocumentService {
     private final UserRepository userRepository;
     private final AiDocumentProcessingService aiDocumentProcessingService;
     private final AiCoreClient aiCoreClient;
+
+    private final ActivityAlertService alerts;
 
     @Override
     @Transactional
@@ -358,6 +362,7 @@ public class DocumentServiceImpl implements DocumentService {
             try {
                 supabaseStorageService.deleteFile(storagePath);
             } catch (Exception e) {
+                alerts.critical("DOCUMENT_CLEANUP_FAILED", "DOCUMENT", "DATA_INCONSISTENCY");
                 log.warn("Failed to delete Supabase file during cancel. documentId={}, path={}, reason={}",
                         documentId, storagePath, e.getMessage());
             }
@@ -373,6 +378,7 @@ public class DocumentServiceImpl implements DocumentService {
             deleteStorage.run();
         }
 
+        alerts.destructiveAfterCommit(currentUser.getUserId(), "DOCUMENT_CANCEL", "DOCUMENT");
         log.info("Document cancelled. documentId={}", documentId);
         return mapToResponse(document);
     }

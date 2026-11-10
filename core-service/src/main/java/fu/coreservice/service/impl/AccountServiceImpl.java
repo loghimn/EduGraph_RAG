@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.ActivityAlertService;
+
 import fu.coreservice.service.AccountService;
 import fu.coreservice.service.PasswordResetDispatcher;
 
@@ -30,6 +32,8 @@ public class AccountServiceImpl implements AccountService {
     private final UserSessionRepository sessions;
     private final PasswordEncoder encoder;
     private final PasswordResetDispatcher resetDispatcher;
+
+    private final ActivityAlertService alerts;
 
     @Override
     @Transactional
@@ -74,7 +78,10 @@ public class AccountServiceImpl implements AccountService {
         }
         if (!encoder.matches(request.otp(), user.getPasswordResetOtpHash())) {
             user.setPasswordResetOtpAttempts(attempts + 1);
-            if (attempts + 1 >= 5) clearOtp(user);
+            if (attempts + 1 >= 5) {
+                clearOtp(user);
+                alerts.otpLimitReached(user.getUserId());
+            }
             // This exception must not roll back the persisted failed-attempt counter.
             throw new InvalidResetOtpException();
         }

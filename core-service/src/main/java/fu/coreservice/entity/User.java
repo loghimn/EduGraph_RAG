@@ -8,6 +8,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 
 @Entity
+@EntityListeners(PrivilegedChangeListener.class)
 @Table(name = "users")
 @Getter
 @Setter
@@ -15,6 +16,18 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 public class User {
+    @Transient
+    private UserRole privilegeSnapshotRole;
+    @Transient
+    private Boolean privilegeSnapshotActive;
+    @Transient
+    private boolean privilegeSnapshotLoaded;
+
+    public void capturePrivilegeSnapshot() {
+        privilegeSnapshotRole = role;
+        privilegeSnapshotActive = isActive;
+        privilegeSnapshotLoaded = true;
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

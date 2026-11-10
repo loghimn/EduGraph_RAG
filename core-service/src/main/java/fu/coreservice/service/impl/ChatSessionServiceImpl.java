@@ -7,6 +7,7 @@ import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.*;
 import fu.coreservice.service.ChatSessionService;
+import fu.coreservice.service.ActivityAlertService;
 import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.dto.ai.AiChatHistoryMessage;
 import fu.coreservice.dto.chat.ChatSource;
@@ -36,6 +37,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     private final ChatSessionRepository chatSessionRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final MessageCitationRepository messageCitationRepository;
+    private final ActivityAlertService alerts;
 
     @Override
     @Transactional
@@ -52,7 +54,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         if (request.getReplyToMessageId() != null) {
             if (request.getReplyToMessageId() <= 0) throw new AppException(ErrorCode.INVALID_REQUEST);
             replyTarget = chatMessageRepository.findByMessageIdAndSession(request.getReplyToMessageId(), session)
-                    .orElseThrow(() -> new AppException(ErrorCode.CHAT_REPLY_NOT_FOUND));
+                    .orElseThrow(() -> rejectedReply(request.getReplyToMessageId()));
             if (replyTarget.getStatus() != ChatMessageStatus.COMPLETED
                     || replyTarget.getContent() == null || replyTarget.getContent().isBlank()) {
                 throw new AppException(ErrorCode.CHAT_REPLY_NOT_READY);
@@ -182,7 +184,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         if (request.getReplyToMessageId() != null) {
             if (request.getReplyToMessageId() <= 0) throw new AppException(ErrorCode.INVALID_REQUEST);
             replyTarget = chatMessageRepository.findByMessageIdAndSession(request.getReplyToMessageId(), session)
-                    .orElseThrow(() -> new AppException(ErrorCode.CHAT_REPLY_NOT_FOUND));
+                    .orElseThrow(() -> rejectedReply(request.getReplyToMessageId()));
             if (replyTarget.getStatus() != ChatMessageStatus.COMPLETED
                     || replyTarget.getContent() == null || replyTarget.getContent().isBlank()) {
                 throw new AppException(ErrorCode.CHAT_REPLY_NOT_READY);
@@ -391,6 +393,15 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
             messageCitationRepository.saveAll(citations);
         }
+    }
+
+    private AppException rejectedReply(Long messageId) {
+        try {
+            if (chatMessageRepository.existsById(messageId)) alerts.accessDenied("CHAT_MESSAGE");
+        } catch (RuntimeException ignored) {
+            // Preserve the original reply-not-found response if audit enrichment fails.
+        }
+        return new AppException(ErrorCode.CHAT_REPLY_NOT_FOUND);
     }
 
     private record CourseAccess(User user, Course course) {}

@@ -20,6 +20,7 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class DocumentControlServiceTest {
+    @org.mockito.Mock ActivityAlertService alerts;
     @Mock DocumentRepository documents;
     @Mock DocumentProcessingJobRepository jobs;
     @Mock CourseRepository courses;

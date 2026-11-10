@@ -40,6 +40,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AiRagServiceTest {
+    @Mock ActivityAlertService alerts;
 
     @Mock
     private AiCoreClient aiCoreClient;
@@ -90,6 +91,7 @@ class AiRagServiceTest {
                 .thenReturn(Map.of("status", "ARCHIVED", "graph_version", 9));
         assertEquals(200, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
         verify(aiCoreClient).conceptLifecycle(7L, 15L, "concept-a", "archive", 8L);
+        verify(alerts).destructiveAfterCommit(15L, "CONCEPT_ARCHIVE", "CONCEPT");
     }
 
     @Test
