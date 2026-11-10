@@ -22,6 +22,7 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class AccountServiceTest {
+    @Mock ActivityAlertService alerts;
     @Mock UserRepository users;
     @Mock UserSessionRepository sessions;
     @Mock PasswordResetDispatcher dispatcher;
@@ -30,7 +31,7 @@ class AccountServiceTest {
     User user;
 
     @BeforeEach void setup() {
-        service = new AccountServiceImpl(users, sessions, encoder, dispatcher);
+        service = new AccountServiceImpl(users, sessions, encoder, dispatcher, alerts);
         user = User.builder().userId(1L).email("student@example.com").username("student")
                 .passwordHash(encoder.encode("old-password")).isActive(true).build();
     }
@@ -96,5 +97,23 @@ class AccountServiceTest {
         var response = service.update(new UpdateProfileRequest("  newname  "));
         assertThat(response.getUsername()).isEqualTo("newname");
         assertThat(response.getEmail()).isEqualTo("student@example.com");
+        verifyNoInteractions(alerts);
+    }
+
+    @Test void fifthWrongOtpAlertsOnceAndFurtherUseOfClearedOtpDoesNotRepeat() {
+        user.setPasswordResetOtpHash(encoder.encode("012345"));
+        user.setPasswordResetOtpExpiresAt(LocalDateTime.now().plusMinutes(5));
+        when(users.findLockedByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(user.getEmail(), "999999", "new-password")))
+                    .isInstanceOf(AppException.class);
+        }
+        verifyNoInteractions(alerts);
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(() -> service.resetPassword(new ResetPasswordRequest(user.getEmail(), "999999", "new-password")))
+                    .isInstanceOf(AppException.class);
+        }
+        verify(alerts).otpLimitReached(1L);
+        verifyNoMoreInteractions(alerts);
     }
 }

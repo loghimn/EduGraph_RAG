@@ -3,6 +3,7 @@ package fu.coreservice.service.impl;
 import fu.coreservice.service.LearnerMasteryService;
 
 import fu.coreservice.service.AiRagService;
+import fu.coreservice.service.ActivityAlertService;
 
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
@@ -48,6 +49,7 @@ public class AiRagServiceImpl implements AiRagService {
     private final CourseEnrollmentRepository courseEnrollmentRepository;
     private final DocumentRepository documentRepository;
     private final LearnerMasteryService masteryService;
+    private final ActivityAlertService alerts;
 
     @Override
     public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraph(Long courseId) {
@@ -161,6 +163,7 @@ public class AiRagServiceImpl implements AiRagService {
                     .data(plan)
                     .build());
         } catch (AiCoreException e) {
+            observeAiFailure(e);
             // Relay status + payload gốc từ Python (403/404/409 có payload quan trọng cho frontend)
             HttpStatus status = HttpStatus.resolve(e.getHttpStatus());
             if (status == null || status.is2xxSuccessful()) {
@@ -242,6 +245,7 @@ public class AiRagServiceImpl implements AiRagService {
         try {
             Map<String, Object> result = aiCoreClient.conceptLifecycle(
                     courseId, owner.getUserId(), conceptId, action, expectedVersion);
+            if ("archive".equals(action)) alerts.destructiveAfterCommit(owner.getUserId(), "CONCEPT_ARCHIVE", "CONCEPT");
             return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
                     .success(true).message("Concept operation completed").data(result).build());
         } catch (AiCoreException e) {
@@ -267,6 +271,7 @@ public class AiRagServiceImpl implements AiRagService {
 
     private ResponseEntity<ApiResponse<Map<String, Object>>> relayAiCoreError(
             AiCoreException e, Long courseId, String message) {
+        observeAiFailure(e);
         HttpStatus status = HttpStatus.resolve(e.getHttpStatus());
         if (status == null || status.is2xxSuccessful()) {
             status = HttpStatus.BAD_GATEWAY;
@@ -279,4 +284,9 @@ public class AiRagServiceImpl implements AiRagService {
                 .data(e.getBody().isEmpty() ? null : e.getBody())
                 .build());
     }
+    private void observeAiFailure(AiCoreException error) {
+        if (error.isUserAuthorizationFailure()) alerts.accessDenied("KNOWLEDGE_GRAPH");
+        else if (error.getHttpStatus() == 403 || error.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
+    }
+
 }

@@ -8,6 +8,7 @@ import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.DocumentProcessingJob;
+import fu.coreservice.entity.ErrorCategory;
 import fu.coreservice.entity.JobStatus;
 import fu.coreservice.entity.UploadStatus;
 import fu.coreservice.exception.AppException;
@@ -17,6 +18,8 @@ import fu.coreservice.repository.DocumentProcessingJobRepository;
 import fu.coreservice.repository.DocumentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -48,6 +51,7 @@ import static org.mockito.Mockito.after;
 
 @ExtendWith(MockitoExtension.class)
 class AiDocumentProcessingServiceTest {
+    @org.mockito.Mock ActivityAlertService alerts;
 
     @Mock
     private AiCoreClient aiCoreClient;
@@ -109,6 +113,7 @@ class AiDocumentProcessingServiceTest {
         verify(documentRepository).save(document);
         assertEquals(JobStatus.DONE, job.getJobStatus());
         verify(documentProcessingJobRepository).save(job);
+        org.mockito.Mockito.verifyNoInteractions(alerts);
     }
 
     @Test
@@ -126,6 +131,51 @@ class AiDocumentProcessingServiceTest {
         verify(documentRepository).save(document);
         assertEquals(JobStatus.FAILED, job.getJobStatus());
         assertEquals(1000, job.getErrorMessage().length());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unsupported file", "FileNotFoundError: /tmp/password.pdf"})
+    void authoritativeUserErrorDoesNotBecomeSystemAlert(String error) {
+        job.setErrorCategory(ErrorCategory.USER_ERROR);
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenReturn(AiDocumentStatusResponse.builder()
+                .status("FAILED").error(error).build());
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(Optional.of(job));
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        org.mockito.Mockito.verifyNoInteractions(alerts);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"SYSTEM_ERROR", "UNCATEGORIZED", "NO_JOB"})
+    void ambiguousErrorTextCannotSuppressRepeatedFailureAlert(String category) {
+        if (category.equals("SYSTEM_ERROR")) job.setErrorCategory(ErrorCategory.SYSTEM_ERROR);
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenReturn(AiDocumentStatusResponse.builder()
+                .status("FAILED").error("FileNotFoundError: /tmp/password.pdf").build());
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(category.equals("NO_JOB") ? Optional.empty() : Optional.of(job));
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        verify(alerts).repeatedSystemFailure("DOCUMENT_PROCESS", "DOCUMENT");
+        org.mockito.Mockito.verifyNoMoreInteractions(alerts);
+    }
+
+    @Test
+    void exhaustedSystemFailureRaisesCriticalAlertWithoutAnotherAutomaticRetry() {
+        stubInlineTransactions();
+        document.setDocStatus(UploadStatus.PENDING);
+        job.setRetryCount(3);
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(Optional.of(job));
+        doThrow(new AiCoreException(503, "upstream private payload", java.util.Map.of()))
+                .when(aiCoreClient).storeDocumentFile(anyLong(), anyString(), any(), any());
+        service.triggerPipelineAsync(1L, 10L, 7L, "a.pdf", MediaType.APPLICATION_PDF,
+                new ByteArrayResource(new byte[]{1}));
+        verify(alerts, timeout(3000)).critical("DOCUMENT_PROCESS_EXHAUSTED", "DOCUMENT", "SYSTEM_ERROR");
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        verify(aiCoreClient, never()).triggerIngest(any());
     }
 
     @Test

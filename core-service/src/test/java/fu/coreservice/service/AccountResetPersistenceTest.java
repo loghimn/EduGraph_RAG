@@ -77,9 +77,9 @@ class AccountResetPersistenceTest {
         pending = new ConcurrentLinkedQueue<>();
         PasswordResetDispatcher dispatcher = new PasswordResetDispatcherImpl(
                 repositories.getRepository(UserRepository.class), encoder, mailer,
-                task -> pending.add(task), new JpaTransactionManager(factory));
+                task -> pending.add(task), new JpaTransactionManager(factory), mock(ActivityAlertService.class));
         AccountServiceImpl target = new AccountServiceImpl(repositories.getRepository(UserRepository.class),
-                repositories.getRepository(UserSessionRepository.class), encoder, dispatcher);
+                repositories.getRepository(UserSessionRepository.class), encoder, dispatcher, mock(ActivityAlertService.class));
         TransactionInterceptor interceptor = new TransactionInterceptor();
         interceptor.setTransactionManager(new JpaTransactionManager(factory));
         interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());

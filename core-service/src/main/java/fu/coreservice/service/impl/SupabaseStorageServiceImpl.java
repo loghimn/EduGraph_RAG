@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.ActivityAlertService;
+
 import fu.coreservice.config.SupabaseStorageConfig;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
@@ -26,6 +28,8 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
 
     private final SupabaseStorageConfig supabaseStorageConfig;
     private final RestTemplate supabaseRestTemplate;
+
+    private final ActivityAlertService alerts;
 
     private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
             "application/pdf",
@@ -182,6 +186,7 @@ public class SupabaseStorageServiceImpl implements SupabaseStorageService {
             supabaseRestTemplate.exchange(url, HttpMethod.DELETE, new HttpEntity<>(headers), String.class);
             log.info("Deleted file from Supabase. path={}", filePath);
         } catch (RestClientException e) {
+            alerts.critical("STORAGE_CLEANUP_FAILED", "DOCUMENT", "DATA_INCONSISTENCY");
             log.warn("Failed to delete file from Supabase (best-effort). path={}, reason={}", filePath, e.getMessage());
         }
     }

@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.service.ActivityAlertService;
+
 import fu.coreservice.service.AiDocumentProcessingService;
 
 import fu.coreservice.client.AiCoreClient;
@@ -56,6 +58,8 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     private static final int MAX_PIPELINE_CONCURRENCY = 4;
     private final Semaphore pipelineConcurrency = new Semaphore(MAX_PIPELINE_CONCURRENCY);
 
+    private final ActivityAlertService alerts;
+
     private static final int MAX_RETRY_ATTEMPTS = 3;
     // Lỗi Python 4xx do người dùng — KHÔNG retry (permanent)
     private static final Set<Integer> USER_ERROR_HTTP_STATUSES = Set.of(400, 413, 415, 422);
@@ -80,6 +84,7 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                             t.getMessage() == null ? String.valueOf(t) : t.getMessage(),
                             ErrorCategory.SYSTEM_ERROR, jobId);
                 } catch (Exception markEx) {
+                    alerts.critical("DOCUMENT_RECOVERY_FAILED", "DOCUMENT", "DATA_INCONSISTENCY");
                     log.error("Failed to mark document FAILED after pipeline crash. documentId={}, jobId={}",
                             documentId, jobId, markEx);
                 }
@@ -172,6 +177,9 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                 job.setErrorMessage(truncate(message));
                 job.setErrorCategory(category);
                 documentProcessingJobRepository.save(job);
+                if (category == ErrorCategory.SYSTEM_ERROR) {
+                    alerts.critical("DOCUMENT_PROCESS_EXHAUSTED", "DOCUMENT", "SYSTEM_ERROR");
+                }
             });
         });
     }
@@ -250,6 +258,7 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                             t.getMessage() == null ? String.valueOf(t) : t.getMessage(),
                             ErrorCategory.SYSTEM_ERROR, jobId);
                 } catch (Exception markEx) {
+                    alerts.critical("DOCUMENT_RECOVERY_FAILED", "DOCUMENT", "DATA_INCONSISTENCY");
                     log.error("Failed to mark document FAILED after pipeline retry crash. documentId={}, jobId={}",
                             documentId, jobId, markEx);
                 }
@@ -306,9 +315,11 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                     applyStatus(current, status);
                 });
             } catch (AppException e) {
+                alerts.repeatedSystemFailure("AI_STATUS_POLL", "DOCUMENT");
                 // AI core không phản hồi — giữ nguyên trạng thái, thử lại ở lần poll sau
                 log.warn("Skipping status sync, AI core unavailable. documentId={}", documentId);
             } catch (Exception e) {
+                alerts.repeatedSystemFailure("DOCUMENT_STATUS_SYNC", "DOCUMENT");
                 log.warn("Failed to sync document status. documentId={}, reason={}", documentId, e.getMessage());
             }
         }
@@ -354,6 +365,8 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                     job.setErrorMessage(truncate(status.getError()));
                     documentProcessingJobRepository.save(job);
                 });
+                boolean inputError = latestJob.map(job -> job.getErrorCategory() == ErrorCategory.USER_ERROR).orElse(false);
+                if (!inputError) alerts.repeatedSystemFailure("DOCUMENT_PROCESS", "DOCUMENT");
                 log.warn("Document processing failed. documentId={}", document.getDocumentId());
             }
             case "PROCESSING", "UPLOADED" -> {

@@ -2,6 +2,7 @@ package fu.coreservice.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.dto.ApiResponse;
+import fu.coreservice.service.ActivityAlertService;
 import fu.coreservice.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +37,7 @@ public class SecurityConfig {
     private final OAuth2LoginFailureHandler oAuth2LoginFailureHandler;
     private final PasswordEncoder passwordEncoder;
     private final ObjectMapper objectMapper;
+    private final ActivityAlertService alerts;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -57,6 +59,15 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exceptions -> exceptions
+                        .accessDeniedHandler((request, response, denied) -> {
+                            alerts.accessDenied("SYSTEM");
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.setContentType("application/json");
+                            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                            objectMapper.writeValue(response.getOutputStream(), ApiResponse.<Void>builder()
+                                    .success(false).errorCode(ErrorCode.ACCESS_DENIED.getCode())
+                                    .message(ErrorCode.ACCESS_DENIED.getMessage()).build());
+                        })
                         .defaultAuthenticationEntryPointFor((request, response, authException) -> {
 
                             ErrorCode errorCode = ErrorCode.UNAUTHORIZED;

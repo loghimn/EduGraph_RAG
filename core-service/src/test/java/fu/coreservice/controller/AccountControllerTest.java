@@ -17,7 +17,7 @@ class AccountControllerTest {
     @BeforeEach void setup() {
         service = mock(AccountService.class);
         mvc = MockMvcBuilders.standaloneSetup(new AccountController(service))
-                .setControllerAdvice(new GlobalExceptionHandler()).build();
+                .setControllerAdvice(new GlobalExceptionHandler(org.mockito.Mockito.mock(fu.coreservice.service.ActivityAlertService.class), org.mockito.Mockito.mock(fu.coreservice.repository.ChatSessionRepository.class), org.mockito.Mockito.mock(fu.coreservice.repository.LearningPathPlanRepository.class), org.mockito.Mockito.mock(fu.coreservice.repository.ChatMessageRepository.class))).build();
     }
     @Test void forgotReturnsGenericSuccessWithoutOtp() throws Exception {
         mvc.perform(post("/api/auth/forgot-password").contentType(MediaType.APPLICATION_JSON)

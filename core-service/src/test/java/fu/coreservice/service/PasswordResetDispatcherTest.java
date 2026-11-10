@@ -29,7 +29,7 @@ class PasswordResetDispatcherTest {
         PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
         List<Runnable> tasks = new ArrayList<>();
         var dispatcher = new PasswordResetDispatcherImpl(users, new BCryptPasswordEncoder(4), mailer,
-                task -> tasks.add(task), transactions);
+                task -> tasks.add(task), transactions, mock(ActivityAlertService.class));
         dispatcher.dispatch("unknown@example.com");
         dispatcher.dispatch("existing@example.com");
         assertThat(tasks).hasSize(2);
@@ -42,7 +42,7 @@ class PasswordResetDispatcherTest {
         PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
         TaskExecutor full = task -> { throw new TaskRejectedException("full"); };
         var dispatcher = new PasswordResetDispatcherImpl(users, new BCryptPasswordEncoder(4), mailer,
-                full, transactions);
+                full, transactions, mock(ActivityAlertService.class));
         assertThatCode(() -> dispatcher.dispatch("existing@example.com")).doesNotThrowAnyException();
         verifyNoInteractions(users, mailer, transactions);
     }
@@ -57,7 +57,7 @@ class PasswordResetDispatcherTest {
                 User.builder().userId(1L).email("existing@example.com").build()));
         doThrow(new IllegalStateException("commit failed")).when(transactions).commit(status);
         var dispatcher = new PasswordResetDispatcherImpl(users, new BCryptPasswordEncoder(4), mailer,
-                Runnable::run, transactions);
+                Runnable::run, transactions, mock(ActivityAlertService.class));
         assertThatCode(() -> dispatcher.dispatch("existing@example.com")).doesNotThrowAnyException();
         verify(transactions).commit(status);
         verifyNoInteractions(mailer);

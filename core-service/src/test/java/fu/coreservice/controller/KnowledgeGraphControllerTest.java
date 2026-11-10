@@ -32,7 +32,7 @@ class KnowledgeGraphControllerTest {
     void setup() {
         service = mock(AiRagService.class);
         mvc = MockMvcBuilders.standaloneSetup(new KnowledgeGraphController(service))
-                .setControllerAdvice(new GlobalExceptionHandler()).build();
+                .setControllerAdvice(new GlobalExceptionHandler(org.mockito.Mockito.mock(fu.coreservice.service.ActivityAlertService.class), org.mockito.Mockito.mock(fu.coreservice.repository.ChatSessionRepository.class), org.mockito.Mockito.mock(fu.coreservice.repository.LearningPathPlanRepository.class), org.mockito.Mockito.mock(fu.coreservice.repository.ChatMessageRepository.class))).build();
     }
 
     @Test

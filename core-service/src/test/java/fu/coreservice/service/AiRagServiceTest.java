@@ -16,6 +16,9 @@ import fu.coreservice.repository.CourseRepository;
 import fu.coreservice.repository.DocumentRepository;
 import fu.coreservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import fu.coreservice.exception.AiCoreException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -40,6 +43,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AiRagServiceTest {
+    @Mock ActivityAlertService alerts;
 
     @Mock
     private AiCoreClient aiCoreClient;
@@ -56,6 +60,29 @@ class AiRagServiceTest {
 
     @InjectMocks
     private AiRagServiceImpl service;
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Invalid Internal Key", "Forbidden"})
+    void relayedInternalOrUnconfirmed403IsNotAttributedToUser(String detail) {
+        User owner = authenticate(15L);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
+        when(aiCoreClient.conceptLifecycle(7L, 15L, "concept-a", "archive", 8L))
+                .thenThrow(new AiCoreException(403, detail, Map.of()));
+        assertEquals(403, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
+        verify(alerts).repeatedSystemFailure("AI_CORE", "SYSTEM");
+        org.mockito.Mockito.verifyNoMoreInteractions(alerts);
+    }
+
+    @Test
+    void relayedOwnerDenialRemainsUserAccessAlert() {
+        User owner = authenticate(15L);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
+        when(aiCoreClient.conceptLifecycle(7L, 15L, "concept-a", "archive", 8L))
+                .thenThrow(new AiCoreException(403, "Permission denied: user is not course owner", Map.of()));
+        assertEquals(403, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
+        verify(alerts).accessDenied("KNOWLEDGE_GRAPH");
+        org.mockito.Mockito.verifyNoMoreInteractions(alerts);
+    }
 
 
     @Test
@@ -90,6 +117,7 @@ class AiRagServiceTest {
                 .thenReturn(Map.of("status", "ARCHIVED", "graph_version", 9));
         assertEquals(200, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
         verify(aiCoreClient).conceptLifecycle(7L, 15L, "concept-a", "archive", 8L);
+        verify(alerts).destructiveAfterCommit(15L, "CONCEPT_ARCHIVE", "CONCEPT");
     }
 
     @Test

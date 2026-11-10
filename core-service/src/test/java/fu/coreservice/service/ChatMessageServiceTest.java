@@ -46,7 +46,7 @@ class ChatMessageServiceTest {
             List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")));
     private final ChatRequest request = ChatRequest.builder().message("Kế thừa?")
             .conceptIds(List.of("concept1")).build();
-    private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper());
+    private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper(), org.mockito.Mockito.mock(ActivityAlertService.class));
 
     @BeforeEach
     void setup() {
