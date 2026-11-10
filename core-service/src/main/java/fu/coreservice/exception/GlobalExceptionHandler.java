@@ -190,8 +190,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AiCoreException.class)
     public ResponseEntity<ApiResponse<Map<String, Object>>> handleAiCoreException(AiCoreException ex) {
-        if (ex.getHttpStatus() == 403) alerts.accessDenied("KNOWLEDGE_GRAPH");
-        else if (ex.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
+        if (ex.isUserAuthorizationFailure()) alerts.accessDenied("KNOWLEDGE_GRAPH");
+        else if (ex.getHttpStatus() == 403 || ex.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
         log.warn("AI core call failed. status={}, detail={}", ex.getHttpStatus(), ex.getDetail());
 
         HttpStatus status = HttpStatus.resolve(ex.getHttpStatus());

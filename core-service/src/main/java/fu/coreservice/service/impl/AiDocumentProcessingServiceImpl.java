@@ -365,9 +365,7 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                     job.setErrorMessage(truncate(status.getError()));
                     documentProcessingJobRepository.save(job);
                 });
-                String error = status.getError() == null ? "" : status.getError().toLowerCase(java.util.Locale.ROOT);
-                boolean inputError = latestJob.map(job -> job.getErrorCategory() == ErrorCategory.USER_ERROR).orElse(false)
-                        || USER_ERROR_KEYWORDS.stream().anyMatch(error::contains);
+                boolean inputError = latestJob.map(job -> job.getErrorCategory() == ErrorCategory.USER_ERROR).orElse(false);
                 if (!inputError) alerts.repeatedSystemFailure("DOCUMENT_PROCESS", "DOCUMENT");
                 log.warn("Document processing failed. documentId={}", document.getDocumentId());
             }

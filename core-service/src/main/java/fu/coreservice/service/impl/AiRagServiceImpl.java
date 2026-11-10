@@ -285,8 +285,8 @@ public class AiRagServiceImpl implements AiRagService {
                 .build());
     }
     private void observeAiFailure(AiCoreException error) {
-        if (error.getHttpStatus() == 403) alerts.accessDenied("KNOWLEDGE_GRAPH");
-        else if (error.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
+        if (error.isUserAuthorizationFailure()) alerts.accessDenied("KNOWLEDGE_GRAPH");
+        else if (error.getHttpStatus() == 403 || error.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
     }
 
 }

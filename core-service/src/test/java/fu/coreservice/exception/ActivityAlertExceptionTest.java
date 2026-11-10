@@ -4,6 +4,8 @@ import fu.coreservice.repository.*;
 import fu.coreservice.service.ActivityAlertService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -41,6 +43,31 @@ class ActivityAlertExceptionTest {
         handler.handleAppException(new AppException(ErrorCode.COURSE_ACCESS_DENIED));
         handler.handleAiCoreException(new AiCoreException(422, "invalid input", Map.of()));
         verify(alerts).accessDenied("COURSE");
+        verifyNoMoreInteractions(alerts);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Invalid Internal Key", "Forbidden"})
+    void internalOrUnconfirmed403IsSystemFailureAndPreservesResponse(String detail) {
+        var error = new AiCoreException(403, detail, Map.of("detail", detail));
+        var response = handler.handleAiCoreException(error);
+        assertThat(response.getStatusCode().value()).isEqualTo(403);
+        assertThat(response.getBody().getMessage()).isEqualTo(detail);
+        assertThat(response.getBody().getData()).isEqualTo(error.getBody());
+        verify(alerts).repeatedSystemFailure("AI_CORE", "SYSTEM");
+        verifyNoMoreInteractions(alerts);
+    }
+
+    @Test void confirmedOwnerDenialRemainsUserAccessAlert() {
+        handler.handleAiCoreException(new AiCoreException(403,
+                "Permission denied: user is not course owner", Map.of()));
+        verify(alerts).accessDenied("KNOWLEDGE_GRAPH");
+        verifyNoMoreInteractions(alerts);
+    }
+
+    @Test void upstreamServerFailureRemainsSystemFailure() {
+        handler.handleAiCoreException(new AiCoreException(503, "Unavailable", Map.of()));
+        verify(alerts).repeatedSystemFailure("AI_CORE", "SYSTEM");
         verifyNoMoreInteractions(alerts);
     }
 

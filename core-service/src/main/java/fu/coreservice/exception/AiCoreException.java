@@ -23,4 +23,9 @@ public class AiCoreException extends RuntimeException {
         this.detail = detail;
         this.body = body == null ? Collections.emptyMap() : body;
     }
+
+    /** Only the explicit AI Core ownership-denial contract identifies a user authorization failure. */
+    public boolean isUserAuthorizationFailure() {
+        return httpStatus == 403 && "Permission denied: user is not course owner".equals(detail);
+    }
 }

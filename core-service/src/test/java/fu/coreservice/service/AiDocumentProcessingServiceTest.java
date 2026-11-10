@@ -8,6 +8,7 @@ import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.DocumentProcessingJob;
+import fu.coreservice.entity.ErrorCategory;
 import fu.coreservice.entity.JobStatus;
 import fu.coreservice.entity.UploadStatus;
 import fu.coreservice.exception.AppException;
@@ -17,6 +18,8 @@ import fu.coreservice.repository.DocumentProcessingJobRepository;
 import fu.coreservice.repository.DocumentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -130,16 +133,33 @@ class AiDocumentProcessingServiceTest {
         assertEquals(1000, job.getErrorMessage().length());
     }
 
-    @Test
-    void unsupportedInputFailureDoesNotBecomeSystemAlert() {
+    @ParameterizedTest
+    @ValueSource(strings = {"unsupported file", "FileNotFoundError: /tmp/password.pdf"})
+    void authoritativeUserErrorDoesNotBecomeSystemAlert(String error) {
+        job.setErrorCategory(ErrorCategory.USER_ERROR);
         when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
         when(aiCoreClient.getDocumentStatus(10L, 1L)).thenReturn(AiDocumentStatusResponse.builder()
-                .status("FAILED").error("unsupported file").build());
+                .status("FAILED").error(error).build());
         when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
                 .thenReturn(Optional.of(job));
         service.syncProcessingDocuments();
         assertEquals(UploadStatus.FAILED, document.getDocStatus());
         org.mockito.Mockito.verifyNoInteractions(alerts);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"SYSTEM_ERROR", "UNCATEGORIZED", "NO_JOB"})
+    void ambiguousErrorTextCannotSuppressRepeatedFailureAlert(String category) {
+        if (category.equals("SYSTEM_ERROR")) job.setErrorCategory(ErrorCategory.SYSTEM_ERROR);
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenReturn(AiDocumentStatusResponse.builder()
+                .status("FAILED").error("FileNotFoundError: /tmp/password.pdf").build());
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(category.equals("NO_JOB") ? Optional.empty() : Optional.of(job));
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        verify(alerts).repeatedSystemFailure("DOCUMENT_PROCESS", "DOCUMENT");
+        org.mockito.Mockito.verifyNoMoreInteractions(alerts);
     }
 
     @Test
