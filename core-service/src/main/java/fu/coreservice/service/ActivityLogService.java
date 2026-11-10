@@ -1,6 +1,9 @@
 package fu.coreservice.service;
 
 import fu.coreservice.dto.activitylog.ActivityLogRequest;
+import fu.coreservice.dto.activitylog.ActivityLogFilter;
+import fu.coreservice.dto.activitylog.ActivityLogResponse;
+import fu.coreservice.dto.PageResponse;
 
 public interface ActivityLogService {
     /**
@@ -9,4 +12,8 @@ public interface ActivityLogService {
      * actorId must identify an already committed user, or be null for anonymous/system actions.
      */
     boolean log(ActivityLogRequest request);
+
+    PageResponse<ActivityLogResponse> listLogs(ActivityLogFilter filter);
+
+    ActivityLogResponse getLog(Long logId);
 }

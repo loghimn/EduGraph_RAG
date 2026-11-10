@@ -76,6 +76,9 @@ public enum ErrorCode {
     CHAT_FEEDBACK_NOT_ALLOWED("CHAT_005", "Only completed BOT messages can receive feedback", HttpStatus.BAD_REQUEST),
 
 
+    // Activity logs
+    ACTIVITY_LOG_NOT_FOUND("ACTIVITY_LOG_001", "Activity log not found", HttpStatus.NOT_FOUND),
+
     // System
     INTERNAL_SERVER_ERROR("SYSTEM_001", "Internal server error", HttpStatus.INTERNAL_SERVER_ERROR),
     ;
