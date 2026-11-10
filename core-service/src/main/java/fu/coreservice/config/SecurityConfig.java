@@ -56,6 +56,7 @@ public class SecurityConfig {
                                 "/login/**",
                                 "/error"
                         ).permitAll()
+                        .requestMatchers("/api/admin/activity-logs", "/api/admin/activity-logs/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exceptions -> exceptions
