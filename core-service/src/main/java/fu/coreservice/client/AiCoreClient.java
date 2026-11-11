@@ -228,6 +228,39 @@ public class AiCoreClient {
         }
     }
 
+    public Map<String, Object> editGraph(Long courseId, Long actorId, String action,
+            String sourceId, String targetId, Long expectedVersion, Map<String, Object> body) {
+        String base = "/courses/{courseId}/knowledge-graph";
+        try {
+            var method = switch (action) {
+                case "snapshot" -> org.springframework.http.HttpMethod.GET;
+                case "concept-update", "edge-update" -> org.springframework.http.HttpMethod.PUT;
+                case "edge-delete" -> org.springframework.http.HttpMethod.DELETE;
+                case "concept-review", "edge-create", "edge-review" -> org.springframework.http.HttpMethod.POST;
+                default -> throw new IllegalArgumentException("Unknown graph editor action");
+            };
+            var call = restClient.method(method);
+            switch (action) {
+                case "snapshot" -> call.uri(base + "/review", courseId);
+                case "concept-update" -> call.uri(base + "/concepts/{source}?expected_version={v}", courseId, sourceId, expectedVersion);
+                case "concept-review" -> call.uri(base + "/concepts/{source}/review?expected_version={v}", courseId, sourceId, expectedVersion);
+                case "edge-create" -> call.uri(base + "/edges?expected_version={v}", courseId, expectedVersion);
+                case "edge-update", "edge-delete" -> call.uri(base + "/edges/{source}/{target}?expected_version={v}", courseId, sourceId, targetId, expectedVersion);
+                case "edge-review" -> call.uri(base + "/edges/{source}/{target}/review?expected_version={v}", courseId, sourceId, targetId, expectedVersion);
+                default -> throw new IllegalArgumentException("Unknown graph editor action");
+            }
+            call.header("X-Actor-Id", String.valueOf(actorId));
+            if (method != org.springframework.http.HttpMethod.GET && method != org.springframework.http.HttpMethod.DELETE) {
+                call.contentType(MediaType.APPLICATION_JSON).body(body);
+            }
+            return call.retrieve().body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(courseId), e);
+        }
+    }
+
     public Map<String, Object> getKnowledgeGraph(Long courseId) {
         try {
             return restClient.get()

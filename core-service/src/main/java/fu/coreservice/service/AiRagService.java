@@ -8,6 +8,9 @@ import java.util.Map;
 
 public interface AiRagService {
 
+    ResponseEntity<ApiResponse<Map<String, Object>>> editGraph(Long courseId, String action,
+            String sourceId, String targetId, Long expectedVersion, Map<String, Object> body);
+
     ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraph(Long courseId);
 
     ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraphConcept(Long courseId, String conceptId);

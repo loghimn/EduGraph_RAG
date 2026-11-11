@@ -48,6 +48,19 @@ class AiCoreClientTest {
         client = new AiCoreClient(properties, builder, new ObjectMapper(), false);
     }
 
+    @Test
+    void editorForwardsVersionActorAndTypedEdgeBody() {
+        server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph/edges/a/b?expected_version=8"))
+                .andExpect(method(HttpMethod.PUT)).andExpect(header("X-Actor-Id", "15"))
+                .andExpect(header("X-Internal-Key", "test-key"))
+                .andExpect(content().json("{\"source_id\":\"b\",\"target_id\":\"a\",\"note\":\"Correct direction\"}"))
+                .andRespond(withSuccess("{\"graph_version\":9}", MediaType.APPLICATION_JSON));
+        assertThat(client.editGraph(7L, 15L, "edge-update", "a", "b", 8L,
+                Map.of("source_id", "b", "target_id", "a", "note", "Correct direction")))
+                .containsEntry("graph_version", 9);
+        server.verify();
+    }
+
 
     @Test
     void pauseDocument_realTransportSupportsPatch() throws Exception {

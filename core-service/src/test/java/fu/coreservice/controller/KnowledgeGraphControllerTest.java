@@ -25,6 +25,23 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class KnowledgeGraphControllerTest {
+    @Test
+    void edgeRejectsInvalidReviewStatusBeforeService() throws Exception {
+        mvc.perform(post("/api/courses/23/knowledge-graph/edges/a/b/review?expected_version=8")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"AUTO\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void edgeCreateForwardsOnlyTypedFields() throws Exception {
+        mvc.perform(post("/api/courses/23/knowledge-graph/edges?expected_version=8")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"source_id\":\"a\",\"target_id\":\"b\"}"))
+                .andExpect(status().isOk());
+        verify(service).editGraph(23L, "edge-create", null, null, 8L,
+                Map.of("source_id", "a", "target_id", "b", "note", ""));
+    }
+
     private AiRagService service;
     private MockMvc mvc;
 

@@ -253,6 +253,23 @@ public class AiRagServiceImpl implements AiRagService {
         }
     }
 
+    @Override
+    public ResponseEntity<ApiResponse<Map<String, Object>>> editGraph(Long courseId, String action,
+            String sourceId, String targetId, Long expectedVersion, Map<String, Object> body) {
+        User owner = requireCourseOwner(courseId);
+        if (owner.getRole() != fu.coreservice.entity.UserRole.INSTRUCTOR) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+        try {
+            var result = aiCoreClient.editGraph(courseId, owner.getUserId(), action,
+                    sourceId, targetId, expectedVersion, body);
+            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
+                    .success(true).message("Graph operation completed").data(result).build());
+        } catch (AiCoreException e) {
+            return relayAiCoreError(e, courseId, "Graph operation failed");
+        }
+    }
+
     private User requireCourseAccess(Long courseId) {
         String email = SecurityUtils.getCurrentUserEmail();
         User user = userRepository.findByEmail(email)

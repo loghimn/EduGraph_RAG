@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,8 +24,18 @@ async def test_pipeline_embeds_new_concepts_before_cosine_merge():
         "embedding": [1.0, 0.0],
     }
     embed_batch = AsyncMock(side_effect=[[[0.0, 1.0]], [[1.0, 0.0]]])
+    # The pipeline also reads previous mentions and pending affected concepts.
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    rows = MagicMock()
+    rows.data = AsyncMock(return_value=[])
+    rows.single = AsyncMock(return_value=None)
+    session.run = AsyncMock(return_value=rows)
+    driver = MagicMock(session=MagicMock(return_value=session))
 
     with (
+        patch("app.concept_extraction.pipeline.neo4j_client.driver", driver),
         patch("app.concept_extraction.pipeline.update_heartbeat", new=AsyncMock()),
         patch("app.ingestion.loaders.load_document", return_value=[(1, "text")]),
         patch("app.ingestion.cleaner.clean_text", side_effect=lambda text: text),

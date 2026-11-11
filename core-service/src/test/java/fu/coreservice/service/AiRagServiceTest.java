@@ -43,6 +43,36 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AiRagServiceTest {
+    @Test
+    void editorForwardsAuthenticatedInstructorIdentity() {
+        User owner = authenticate(15L);
+        owner.setRole(fu.coreservice.entity.UserRole.INSTRUCTOR);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
+        when(aiCoreClient.editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of()))
+                .thenReturn(Map.of("graph_version", 9));
+        assertEquals(200, service.editGraph(7L, "edge-create", null, null, 8L, Map.of()).getStatusCode().value());
+        verify(aiCoreClient).editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of());
+    }
+
+    @Test
+    void enrolledInstructorCannotEditAnotherOwnersGraph() {
+        User instructor = authenticate(15L);
+        instructor.setRole(fu.coreservice.entity.UserRole.INSTRUCTOR);
+        User owner = new User(); owner.setUserId(16L);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
+        assertThrows(AppException.class, () -> service.editGraph(7L, "snapshot", null, null, null, Map.of()));
+        verifyNoInteractions(aiCoreClient);
+    }
+
+    @Test
+    void studentOwnerCannotUseInstructorEditor() {
+        User owner = authenticate(15L);
+        owner.setRole(fu.coreservice.entity.UserRole.STUDENT);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
+        assertThrows(AppException.class, () -> service.editGraph(7L, "concept-update", "a", null, 8L, Map.of()));
+        verifyNoInteractions(aiCoreClient);
+    }
+
     @Mock ActivityAlertService alerts;
 
     @Mock

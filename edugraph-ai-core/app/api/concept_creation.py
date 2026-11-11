@@ -92,7 +92,8 @@ async def publish_draft(course_id: str, draft_id: str,
     async def write(tx):
         # Serialize concurrent manual publications on the course before checking duplicates.
         await tx.run("""MERGE (c:Course {id: $course_id})
-            SET c.concept_write_lock = coalesce(c.concept_write_lock, 0) + 1""", course_id=course_id)
+            ON CREATE SET c.owner_id = $actor, c.version = 0
+            SET c.concept_write_lock = coalesce(c.concept_write_lock, 0) + 1""", course_id=course_id, actor=x_actor_id)
         result = await tx.run("""MATCH (d:ConceptDraft {id: $id, course_id: $course_id, created_by: $actor})
             RETURN properties(d) AS draft""", id=draft_id, course_id=course_id, actor=x_actor_id)
         record = await result.single()
@@ -114,7 +115,7 @@ async def publish_draft(course_id: str, draft_id: str,
             CREATE (n:Concept {id: $id, course_id: $course_id, course_key: $course_key,
                 key: $key, name: $name, aliases: $aliases, language: $language,
                 embedding: $embedding, embedding_model: $embedding_model, order: next_order,
-                origin: 'MANUAL', status: 'ACTIVE', created_by: $actor, created_at: timestamp()})
+                origin: 'MANUAL', status: 'ACTIVE', curated: true, review_status: 'CONFIRMED', created_by: $actor, created_at: timestamp()})
             SET course.version = coalesce(course.version, 0) + 1
             WITH n, course
             MATCH (d:ConceptDraft {id: $draft_id})

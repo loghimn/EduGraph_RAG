@@ -83,7 +83,7 @@ def should_merge_cosine(c1: Dict[str, Any], c2: Dict[str, Any]) -> bool:
 
 def check_alias_match(nc: Dict[str, Any], db_c: Dict[str, Any]) -> bool:
     nc_keys = {nc["key"]} | {normalize_concept_key(a) for a in nc.get("aliases", [])}
-    db_keys = {db_c["key"]} | {normalize_concept_key(a) for a in db_c.get("aliases", [])}
+    db_keys = {db_c["key"], normalize_concept_key(db_c.get("name") or db_c.get("canonical") or "")} | {normalize_concept_key(a) for a in db_c.get("aliases", [])}
     return len(nc_keys.intersection(db_keys)) > 0
 
 def merge_concepts(new_concepts: List[Dict[str, Any]], db_concepts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str, str]]]:

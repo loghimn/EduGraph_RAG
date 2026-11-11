@@ -18,7 +18,7 @@ async def get_course_concepts(course_id: str) -> List[Dict[str, Any]]:
         c.language AS language,
         c.embedding AS embedding,
         coalesce(c.status, 'ACTIVE') AS status,
-        (coalesce(c.status, 'ACTIVE') = 'ARCHIVED' OR size([s IN statuses WHERE s IN ['CONFIRMED', 'MANUAL', 'REJECTED']]) > 0) AS has_reviewed_edge
+        (coalesce(c.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(c.curated, false) OR c.origin = 'MANUAL' OR size([s IN statuses WHERE s IN ['CONFIRMED', 'MANUAL', 'REJECTED']]) > 0) AS has_reviewed_edge
     """
     async with neo4j_client.driver.session() as session:
         result = await session.run(query, course_id=course_id)
@@ -107,11 +107,11 @@ async def save_ingestion_transaction(
         n.status = 'ACTIVE',
         n.origin = 'AUTO',
         n.created_at = timestamp()
-    SET n.name = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.name ELSE co.name END,
-        n.aliases = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.aliases ELSE co.aliases END,
-        n.language = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.language ELSE co.language END,
-        n.embedding = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.embedding ELSE co.embedding END,
-        n.embedding_model = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.embedding_model ELSE co.embedding_model END
+    SET n.name = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.name ELSE co.name END,
+        n.aliases = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.aliases ELSE co.aliases END,
+        n.language = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.language ELSE co.language END,
+        n.embedding = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.embedding ELSE co.embedding END,
+        n.embedding_model = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.embedding_model ELSE co.embedding_model END
     WITH count(*) AS _dummy
     
     // 4. Ghi Mentions
@@ -127,9 +127,11 @@ async def save_ingestion_transaction(
     OPTIONAL MATCH (orphan:Concept {course_id: $course_id})
     WHERE coalesce(orphan.origin, 'AUTO') <> 'MANUAL'
     AND coalesce(orphan.status, 'ACTIVE') <> 'ARCHIVED'
+    AND NOT coalesce(orphan.curated, false)
     AND NOT (orphan)<-[:MENTIONS]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'CONFIRMED'}]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'MANUAL'}]-()
+    AND NOT (orphan)-[:PREREQUISITE_OF {status: 'REJECTED'}]-()
     // Xóa cả cạnh AUTO gắn với nó, rồi xóa nó
     DETACH DELETE orphan
     WITH count(*) AS _dummy
@@ -233,11 +235,11 @@ async def save_ingestion_transaction(
                 n.status = 'ACTIVE',
                 n.origin = 'AUTO',
                 n.created_at = timestamp()
-            SET n.name = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.name ELSE co.name END,
-                n.aliases = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.aliases ELSE co.aliases END,
-                n.language = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.language ELSE co.language END,
-                n.embedding = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.embedding ELSE co.embedding END,
-                n.embedding_model = CASE WHEN coalesce(n.status, 'ACTIVE') = 'ARCHIVED' THEN n.embedding_model ELSE co.embedding_model END
+            SET n.name = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.name ELSE co.name END,
+                n.aliases = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.aliases ELSE co.aliases END,
+                n.language = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.language ELSE co.language END,
+                n.embedding = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.embedding ELSE co.embedding END,
+                n.embedding_model = CASE WHEN (coalesce(n.status, 'ACTIVE') = 'ARCHIVED' OR coalesce(n.curated, false) OR n.origin = 'MANUAL') THEN n.embedding_model ELSE co.embedding_model END
             """, concepts=param_concepts[i:i+batch_size])
             
         # 4. Ghi Mentions
@@ -257,6 +259,7 @@ async def save_ingestion_transaction(
         OPTIONAL MATCH (orphan:Concept {course_id: $course_id})
         WHERE coalesce(orphan.origin, 'AUTO') <> 'MANUAL'
         AND coalesce(orphan.status, 'ACTIVE') <> 'ARCHIVED'
+        AND NOT coalesce(orphan.curated, false)
         AND NOT (orphan)<-[:MENTIONS]-()
         AND NOT (orphan)-[:PREREQUISITE_OF {status: 'CONFIRMED'}]-()
         AND NOT (orphan)-[:PREREQUISITE_OF {status: 'MANUAL'}]-()

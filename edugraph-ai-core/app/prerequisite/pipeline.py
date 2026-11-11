@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import time
+import networkx as nx
 from typing import Dict, Any, List
 from app.db.neo4j_client import neo4j_client
 from app.config import settings
@@ -196,5 +197,34 @@ async def save_prerequisite_edges(course_id: str, edges: List[Dict[str, Any]], r
     MATCH (c:Course {id: $course_id})
     SET c.version = coalesce(c.version, 0) + 1
     """
+    async def write(tx):
+        await tx.run(query, course_id=course_id, edges=edges, rescored_ids=rescored_ids, cut_edges=cut_edges)
+        # An instructor may have changed edges while the LLM was running.
+        # Recheck under the Course lock before committing; only AUTO edges may be cut.
+        rows = await (await tx.run("""
+            MATCH (s:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(t:Concept {course_id: $course_id})
+            WHERE coalesce(s.status, 'ACTIVE') = 'ACTIVE' AND coalesce(t.status, 'ACTIVE') = 'ACTIVE'
+              AND coalesce(r.status, 'AUTO') <> 'REJECTED'
+            RETURN s.id AS source, t.id AS target, coalesce(r.status, 'AUTO') AS status,
+                coalesce(r.score, 0) AS score
+        """, course_id=course_id)).data()
+        graph = nx.DiGraph()
+        for row in rows:
+            graph.add_edge(row['source'], row['target'], status=row['status'], score=row['score'])
+        while True:
+            try:
+                cycle = nx.find_cycle(graph)
+            except nx.NetworkXNoCycle:
+                break
+            automatic = [(s, t) for s, t in cycle if graph[s][t]['status'] == 'AUTO']
+            if not automatic:
+                # Retain pre-existing hard conflicts for instructor review.
+                graph.remove_edge(*cycle[0])
+                continue
+            source, target = min(automatic, key=lambda pair: (graph[pair[0]][pair[1]]['score'], *pair))
+            await tx.run("""MATCH (s:Concept {course_id: $course_id, id: $source})
+                -[r:PREREQUISITE_OF {status: 'AUTO'}]->(t:Concept {course_id: $course_id, id: $target})
+                DELETE r""", course_id=course_id, source=source, target=target)
+            graph.remove_edge(source, target)
     async with neo4j_client.driver.session() as session:
-        await session.run(query, course_id=course_id, edges=edges, rescored_ids=rescored_ids, cut_edges=cut_edges)
+        await session.execute_write(write)

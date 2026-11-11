@@ -24,6 +24,7 @@ async def delete_document(course_id: str, doc_id: str):
     OPTIONAL MATCH (orphan:Concept {course_id: $course_id})
     WHERE coalesce(orphan.origin, 'AUTO') <> 'MANUAL'
     AND coalesce(orphan.status, 'ACTIVE') <> 'ARCHIVED'
+    AND NOT coalesce(orphan.curated, false)
     AND NOT (orphan)<-[:MENTIONS]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'CONFIRMED'}]-()
     AND NOT (orphan)-[:PREREQUISITE_OF {status: 'MANUAL'}]-()
