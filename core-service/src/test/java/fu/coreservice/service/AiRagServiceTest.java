@@ -44,6 +44,53 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class AiRagServiceTest {
     @Test
+    void studentCanEditOwnedNotebookGraph() {
+        User owner = authenticate(15L);
+        owner.setRole(fu.coreservice.entity.UserRole.STUDENT);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(
+                Course.builder().courseId(7L).user(owner).notebook(true).build()));
+        when(aiCoreClient.editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of()))
+                .thenReturn(Map.of("graph_version", 9));
+        assertEquals(200, service.editGraph(7L, "edge-create", null, null, 8L, Map.of()).getStatusCode().value());
+        verify(aiCoreClient).editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of());
+    }
+
+    @Test
+    void studentCanArchiveAndRestoreOwnedNotebookConcept() {
+        User owner = authenticate(15L);
+        owner.setRole(fu.coreservice.entity.UserRole.STUDENT);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).notebook(true).build()));
+        when(aiCoreClient.conceptLifecycle(7L, 15L, "a", "archive", 8L)).thenReturn(Map.of("graph_version", 9));
+        when(aiCoreClient.conceptLifecycle(7L, 15L, "a", "restore", 9L)).thenReturn(Map.of("graph_version", 10));
+        assertEquals(200, service.archiveConcept(7L, "a", 8L).getStatusCode().value());
+        assertEquals(200, service.restoreConcept(7L, "a", 9L).getStatusCode().value());
+    }
+
+    @Test
+    void studentCanCreateOwnedNotebookConceptDraft() {
+        User owner = authenticate(15L);
+        owner.setRole(fu.coreservice.entity.UserRole.STUDENT);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).notebook(true).build()));
+        ConceptDraftRequest request = new ConceptDraftRequest(); request.setName("Object");
+        when(aiCoreClient.postConceptDraft(7L, 15L, null,
+                Map.of("name", "Object", "aliases", List.of(), "language", "mixed")))
+                .thenReturn(Map.of("draft_id", "draft"));
+        assertEquals(200, service.createConceptDraft(7L, request).getStatusCode().value());
+    }
+
+    @Test
+    void notebookNonOwnerCannotUseAnyGraphWriteEvenWithEnrollment() {
+        User other = authenticate(15L); other.setRole(fu.coreservice.entity.UserRole.STUDENT);
+        User owner = new User(); owner.setUserId(16L);
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).notebook(true).build()));
+        assertThrows(AppException.class, () -> service.editGraph(7L, "snapshot", null, null, null, Map.of()));
+        assertThrows(AppException.class, () -> service.archiveConcept(7L, "a", 8L));
+        assertThrows(AppException.class, () -> service.restoreConcept(7L, "a", 8L));
+        assertThrows(AppException.class, () -> service.publishConceptDraft(7L, "draft"));
+        verifyNoInteractions(aiCoreClient);
+    }
+
+    @Test
     void editorForwardsAuthenticatedInstructorIdentity() {
         User owner = authenticate(15L);
         owner.setRole(fu.coreservice.entity.UserRole.INSTRUCTOR);
@@ -237,7 +284,7 @@ class AiRagServiceTest {
         String email = "learner@example.com";
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(email, null, List.of()));
-        User user = User.builder().userId(userId).build();
+        User user = User.builder().userId(userId).role(fu.coreservice.entity.UserRole.INSTRUCTOR).build();
         when(userRepository.findByEmail(email)).thenReturn(Optional.of(user));
         return user;
     }

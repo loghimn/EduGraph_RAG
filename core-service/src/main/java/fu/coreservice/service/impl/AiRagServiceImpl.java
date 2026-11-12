@@ -216,6 +216,9 @@ public class AiRagServiceImpl implements AiRagService {
         if (!course.getUser().getUserId().equals(user.getUserId())) {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
+        if (!course.isNotebook() && user.getRole() != fu.coreservice.entity.UserRole.INSTRUCTOR) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
         return user;
     }
 
@@ -257,9 +260,6 @@ public class AiRagServiceImpl implements AiRagService {
     public ResponseEntity<ApiResponse<Map<String, Object>>> editGraph(Long courseId, String action,
             String sourceId, String targetId, Long expectedVersion, Map<String, Object> body) {
         User owner = requireCourseOwner(courseId);
-        if (owner.getRole() != fu.coreservice.entity.UserRole.INSTRUCTOR) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
         try {
             var result = aiCoreClient.editGraph(courseId, owner.getUserId(), action,
                     sourceId, targetId, expectedVersion, body);

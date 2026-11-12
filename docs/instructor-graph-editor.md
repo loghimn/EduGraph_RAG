@@ -1,8 +1,10 @@
 # Instructor graph review and editing
 
-Open **Concept Graph**, select an owned course, and use **Graph review and editing**.
-The same editor appears in the instructor course detail graph tab. Students retain
-the read-only graph. The editor defaults to pending relationships and supports
+Open **Concept Graph**, select an owned course, and select a node/relationship to
+edit in the detail panel below. Bulk review remains available under **Review all
+concepts and relationships**. The same editor appears in the instructor course detail
+graph tab. Students retain read-only course graphs, but can edit their own private
+notebook graphs through the contextual detail panel. The bulk editor defaults to pending relationships and supports
 search, status filters, source passages and progressive list loading.
 
 ## Workflow
@@ -41,7 +43,8 @@ Prefix: `/api/courses/{courseId}/knowledge-graph`.
 | DELETE | `/edges/{source}/{target}?expected_version=N` | — |
 
 Existing concept draft/publication and archive/restore routes are reused. New editor
-routes require an authenticated instructor who owns the course. Java supplies actor
+routes require an authenticated instructor who owns the course, or the authenticated
+owner of a personal notebook regardless of role. Java supplies actor
 identity to Python; public request bodies cannot select another actor.
 
 Mutations acquire the existing Neo4j Course write lock, check the graph version,

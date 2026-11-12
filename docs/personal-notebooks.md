@@ -1,5 +1,27 @@
 # Personal notebooks
 
+## Edit the private graph
+
+Notebook owners can edit their own graph regardless of the STUDENT/INSTRUCTOR role.
+Course enrollment never grants graph write access. For ordinary courses, writes
+still require the owning instructor. The same authorization policy covers concept
+drafts/publication, review, edits, archive/restore and relationship operations.
+
+In the notebook graph, click a concept or directed relationship in either 2D or 3D
+to open its detail panel below the canvas. Concept details show incoming/outgoing
+prerequisites and source passages, with edit, add-relationship and archive actions.
+Relationship details show direction, evidence and note, with edit, reverse (confirmed
+preview) and remove actions. The graph toolbar creates concepts/relationships and
+opens removed items for restoration. Changes take effect immediately; no instructor
+approval is needed for private notebooks.
+
+The selected concept/relationship stays selected after save; changing endpoints
+selects the new relationship. Cycles leave the edit form intact. An open edit retains
+its original expected graph version even if ingestion refreshes the graph; version
+conflicts require an explicit reload. The UI locks graph selection during a write.
+
+Frontend regression checks: `npm run test:graph`, `npm run test:i18n`, `npm run build`.
+
 Authenticated users can open `/notebooks`, create a notebook, upload learning materials,
 and view the private concept graph after document processing completes.
 
@@ -32,11 +54,12 @@ as course materials. No additional AI service or graph namespace is needed.
 
 ## Chat with uploaded materials
 
-Open **Personal Notebook** and select **Chat with documents** in its sidebar, then
-choose a notebook. The URL `/notebooks/{id}?view=chat` opens that private workspace.
-The notebook navbar remains active and its sidebar contains documents, graph and chat
-navigation above the conversation history. Legacy `/ask-ai?notebookId={id}` links
-redirect to the notebook workspace; general Ask AI lists public knowledge and courses.
+Open **Ask AI** and select a notebook from **My notebooks** in the source dropdown.
+The canonical URL is `/ask-ai?notebookId={id}`. Notebook management now contains
+documents and graph only; it has no separate chat tab or chat button. Legacy
+`/notebooks/{id}?view=chat` links redirect to Ask AI while preserving the private
+notebook scope. The same source dropdown switches between public knowledge,
+courses and owned notebooks, with chat history in the Ask AI sidebar.
 Only processed (`COMPLETED`) documents are available. The UI polls while processing
 is pending, displays a document-management link, and enables chat when a document
 becomes ready. Pending files are not promised as answer sources.
