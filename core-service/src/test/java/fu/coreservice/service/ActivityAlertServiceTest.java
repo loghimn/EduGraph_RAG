@@ -1,5 +1,7 @@
 package fu.coreservice.service;
 
+import fu.coreservice.service.impl.ActivityAlertServiceImpl;
+
 import fu.coreservice.config.ActivityAlertProperties;
 import fu.coreservice.dto.activitylog.ActivityLogRequest;
 import fu.coreservice.entity.ActivityLogStatus;
@@ -23,7 +25,7 @@ class ActivityAlertServiceTest {
         @Override public Clock withZone(ZoneId zone) { return this; }
         @Override public Instant instant() { return Instant.ofEpochMilli(now.get()); }
     };
-    private final ActivityAlertService alerts = new ActivityAlertService(sink, mock(UserRepository.class),
+    private final ActivityAlertService alerts = new ActivityAlertServiceImpl(sink, mock(UserRepository.class),
             new ActivityAlertProperties(), clock);
 
     @Test

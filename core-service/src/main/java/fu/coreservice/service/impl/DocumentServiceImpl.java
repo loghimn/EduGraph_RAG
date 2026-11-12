@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.security.CourseAccessPolicy;
+
 import fu.coreservice.service.ActivityAlertService;
 
 import fu.coreservice.client.AiCoreClient;
@@ -64,9 +66,7 @@ public class DocumentServiceImpl implements DocumentService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
-        if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireOwner(course, currentUser);
 
         if (file == null || file.isEmpty()) {
             throw new AppException(ErrorCode.FILE_EMPTY);
@@ -236,9 +236,7 @@ public class DocumentServiceImpl implements DocumentService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
-        if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireOwner(course, currentUser);
 
     }
 

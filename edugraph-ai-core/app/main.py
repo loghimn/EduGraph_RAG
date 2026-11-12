@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     embed_model = EmbeddingModel()
     embed_model.load() # model warmup
     
-    from app.api.ingest import recover_processing_documents
+    from app.services.ingest import recover_processing_documents
     await recover_processing_documents()
     
     try:

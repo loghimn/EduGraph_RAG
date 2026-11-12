@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.security.CourseAccessPolicy;
+
 import fu.coreservice.dto.chat.MessageFeedbackRequest;
 import fu.coreservice.dto.chat.MessageFeedbackResponse;
 import fu.coreservice.entity.*;
@@ -71,11 +73,8 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
         }
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-        if (!course.getUser().getUserId().equals(user.getUserId())
-                && (course.isNotebook()
-                    || !courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user))) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireReadAccess(course, user,
+                () -> courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user));
         ChatSession session = chatSessionRepository.findBySessionIdAndCourseAndLearner(sessionId, course, user)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         return new OwnedSession(user, session);

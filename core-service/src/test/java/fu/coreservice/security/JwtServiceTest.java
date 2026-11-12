@@ -1,4 +1,6 @@
-package fu.coreservice.config;
+package fu.coreservice.security;
+
+import fu.coreservice.security.JwtService;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;

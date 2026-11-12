@@ -1,4 +1,8 @@
-package fu.coreservice.config;
+package fu.coreservice.security;
+
+import fu.coreservice.security.JwtAuthenticationFilter;
+
+import fu.coreservice.security.JwtService;
 
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.AfterEach;

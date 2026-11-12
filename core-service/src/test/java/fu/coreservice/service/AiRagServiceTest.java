@@ -1,6 +1,11 @@
 package fu.coreservice.service;
 
 import fu.coreservice.service.impl.AiRagServiceImpl;
+import fu.coreservice.service.impl.GraphEditorServiceImpl;
+import fu.coreservice.dto.knowledgegraph.GraphEdgeRequest;
+import fu.coreservice.client.GraphEditorAction;
+import fu.coreservice.dto.knowledgegraph.GraphMutationResponse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
@@ -49,10 +54,10 @@ class AiRagServiceTest {
         owner.setRole(fu.coreservice.entity.UserRole.STUDENT);
         when(courseRepository.findById(7L)).thenReturn(Optional.of(
                 Course.builder().courseId(7L).user(owner).notebook(true).build()));
-        when(aiCoreClient.editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of()))
-                .thenReturn(Map.of("graph_version", 9));
-        assertEquals(200, service.editGraph(7L, "edge-create", null, null, 8L, Map.of()).getStatusCode().value());
-        verify(aiCoreClient).editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of());
+        when(aiCoreClient.mutateGraph(7L, 15L, GraphEditorAction.EDGE_CREATE, null, null, 8L, Map.of("source_id", "a", "target_id", "b", "note", "")))
+                .thenReturn(new GraphMutationResponse(9L, null, "a", "b", "MANUAL"));
+        assertNotNull(editor.createEdge(7L, 8L, new GraphEdgeRequest("a", "b", "")));
+        verify(aiCoreClient).mutateGraph(7L, 15L, GraphEditorAction.EDGE_CREATE, null, null, 8L, Map.of("source_id", "a", "target_id", "b", "note", ""));
     }
 
     @Test
@@ -62,8 +67,8 @@ class AiRagServiceTest {
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).notebook(true).build()));
         when(aiCoreClient.conceptLifecycle(7L, 15L, "a", "archive", 8L)).thenReturn(Map.of("graph_version", 9));
         when(aiCoreClient.conceptLifecycle(7L, 15L, "a", "restore", 9L)).thenReturn(Map.of("graph_version", 10));
-        assertEquals(200, service.archiveConcept(7L, "a", 8L).getStatusCode().value());
-        assertEquals(200, service.restoreConcept(7L, "a", 9L).getStatusCode().value());
+        assertNotNull(service.archiveConcept(7L, "a", 8L));
+        assertNotNull(service.restoreConcept(7L, "a", 9L));
     }
 
     @Test
@@ -75,7 +80,7 @@ class AiRagServiceTest {
         when(aiCoreClient.postConceptDraft(7L, 15L, null,
                 Map.of("name", "Object", "aliases", List.of(), "language", "mixed")))
                 .thenReturn(Map.of("draft_id", "draft"));
-        assertEquals(200, service.createConceptDraft(7L, request).getStatusCode().value());
+        assertNotNull(service.createConceptDraft(7L, request));
     }
 
     @Test
@@ -83,7 +88,7 @@ class AiRagServiceTest {
         User other = authenticate(15L); other.setRole(fu.coreservice.entity.UserRole.STUDENT);
         User owner = new User(); owner.setUserId(16L);
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).notebook(true).build()));
-        assertThrows(AppException.class, () -> service.editGraph(7L, "snapshot", null, null, null, Map.of()));
+        assertThrows(AppException.class, () -> editor.snapshot(7L));
         assertThrows(AppException.class, () -> service.archiveConcept(7L, "a", 8L));
         assertThrows(AppException.class, () -> service.restoreConcept(7L, "a", 8L));
         assertThrows(AppException.class, () -> service.publishConceptDraft(7L, "draft"));
@@ -95,10 +100,10 @@ class AiRagServiceTest {
         User owner = authenticate(15L);
         owner.setRole(fu.coreservice.entity.UserRole.INSTRUCTOR);
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
-        when(aiCoreClient.editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of()))
-                .thenReturn(Map.of("graph_version", 9));
-        assertEquals(200, service.editGraph(7L, "edge-create", null, null, 8L, Map.of()).getStatusCode().value());
-        verify(aiCoreClient).editGraph(7L, 15L, "edge-create", null, null, 8L, Map.of());
+        when(aiCoreClient.mutateGraph(7L, 15L, GraphEditorAction.EDGE_CREATE, null, null, 8L, Map.of("source_id", "a", "target_id", "b", "note", "")))
+                .thenReturn(new GraphMutationResponse(9L, null, "a", "b", "MANUAL"));
+        assertNotNull(editor.createEdge(7L, 8L, new GraphEdgeRequest("a", "b", "")));
+        verify(aiCoreClient).mutateGraph(7L, 15L, GraphEditorAction.EDGE_CREATE, null, null, 8L, Map.of("source_id", "a", "target_id", "b", "note", ""));
     }
 
     @Test
@@ -107,7 +112,7 @@ class AiRagServiceTest {
         instructor.setRole(fu.coreservice.entity.UserRole.INSTRUCTOR);
         User owner = new User(); owner.setUserId(16L);
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
-        assertThrows(AppException.class, () -> service.editGraph(7L, "snapshot", null, null, null, Map.of()));
+        assertThrows(AppException.class, () -> editor.snapshot(7L));
         verifyNoInteractions(aiCoreClient);
     }
 
@@ -116,7 +121,8 @@ class AiRagServiceTest {
         User owner = authenticate(15L);
         owner.setRole(fu.coreservice.entity.UserRole.STUDENT);
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
-        assertThrows(AppException.class, () -> service.editGraph(7L, "concept-update", "a", null, 8L, Map.of()));
+        ConceptDraftRequest request = new ConceptDraftRequest(); request.setName("Object");
+        assertThrows(AppException.class, () -> editor.updateConcept(7L, "a", 8L, request));
         verifyNoInteractions(aiCoreClient);
     }
 
@@ -137,6 +143,7 @@ class AiRagServiceTest {
 
     @InjectMocks
     private AiRagServiceImpl service;
+    @InjectMocks private GraphEditorServiceImpl editor;
 
     @ParameterizedTest
     @ValueSource(strings = {"Invalid Internal Key", "Forbidden"})
@@ -145,8 +152,8 @@ class AiRagServiceTest {
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
         when(aiCoreClient.conceptLifecycle(7L, 15L, "concept-a", "archive", 8L))
                 .thenThrow(new AiCoreException(403, detail, Map.of()));
-        assertEquals(403, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
-        verify(alerts).repeatedSystemFailure("AI_CORE", "SYSTEM");
+        assertThrows(AiCoreException.class, () -> service.archiveConcept(7L, "concept-a", 8L));
+        verifyNoInteractions(alerts);
         org.mockito.Mockito.verifyNoMoreInteractions(alerts);
     }
 
@@ -156,8 +163,8 @@ class AiRagServiceTest {
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
         when(aiCoreClient.conceptLifecycle(7L, 15L, "concept-a", "archive", 8L))
                 .thenThrow(new AiCoreException(403, "Permission denied: user is not course owner", Map.of()));
-        assertEquals(403, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
-        verify(alerts).accessDenied("KNOWLEDGE_GRAPH");
+        assertThrows(AiCoreException.class, () -> service.archiveConcept(7L, "concept-a", 8L));
+        verifyNoInteractions(alerts);
         org.mockito.Mockito.verifyNoMoreInteractions(alerts);
     }
 
@@ -170,7 +177,7 @@ class AiRagServiceTest {
         dto.setName("HTTP Requests");
         Map<String, Object> request = Map.of("name", "HTTP Requests", "aliases", List.of(), "language", "mixed");
         when(aiCoreClient.postConceptDraft(7L, 15L, null, request)).thenReturn(Map.of("draft_id", "draft-1"));
-        assertEquals(200, service.createConceptDraft(7L, dto).getStatusCode().value());
+        assertNotNull(service.createConceptDraft(7L, dto));
         verify(aiCoreClient).postConceptDraft(7L, 15L, null, request);
     }
 
@@ -192,7 +199,7 @@ class AiRagServiceTest {
         when(courseRepository.findById(7L)).thenReturn(Optional.of(Course.builder().user(owner).build()));
         when(aiCoreClient.conceptLifecycle(7L, 15L, "concept-a", "archive", 8L))
                 .thenReturn(Map.of("status", "ARCHIVED", "graph_version", 9));
-        assertEquals(200, service.archiveConcept(7L, "concept-a", 8L).getStatusCode().value());
+        assertNotNull(service.archiveConcept(7L, "concept-a", 8L));
         verify(aiCoreClient).conceptLifecycle(7L, 15L, "concept-a", "archive", 8L);
         verify(alerts).destructiveAfterCommit(15L, "CONCEPT_ARCHIVE", "CONCEPT");
     }
@@ -238,7 +245,7 @@ class AiRagServiceTest {
 
         var response = service.planLearningPath(7L, new LearningPathPlanRequest());
 
-        assertEquals(200, response.getStatusCode().value());
+        assertEquals("course", response.get("mode"));
         assertForwardedLearner("15");
     }
 
@@ -252,7 +259,7 @@ class AiRagServiceTest {
 
         var response = service.planLearningPath(7L, new LearningPathPlanRequest());
 
-        assertEquals(200, response.getStatusCode().value());
+        assertEquals("course", response.get("mode"));
         assertForwardedLearner("22");
     }
 

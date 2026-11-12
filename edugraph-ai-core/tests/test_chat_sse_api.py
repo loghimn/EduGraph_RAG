@@ -1,3 +1,4 @@
+from app.db import graph_repository
 import pytest
 import json
 import asyncio
@@ -12,11 +13,11 @@ client = TestClient(app)
 @pytest.mark.parametrize("failure", [ValueError("invalid shape"), LLMUnavailableError("provider unavailable"),
                                       TimeoutError()])
 @pytest.mark.parametrize("context_field", ["history", "reply_context"])
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.resolve_question", new_callable=AsyncMock)
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.resolve_question", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_context_failure_keeps_original_question_and_streams_answer(
     mock_llm, mock_retrieve, mock_link, mock_resolve, context_field, failure
 ):
@@ -43,12 +44,12 @@ def test_context_failure_keeps_original_question_and_streams_answer(
     assert resp.text.endswith("event: done\ndata: {}\n\n")
 
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.resolve_question", new_callable=AsyncMock)
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.resolve_question", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_context_failure_without_matching_concept_still_returns_no_data(mock_llm, mock_link, mock_resolve):
-    from app.api.chat import NO_DATA_MESSAGE
+    from app.services.chat import NO_DATA_MESSAGE
     mock_resolve.side_effect = TimeoutError()
     mock_link.return_value = {"concept_ids": [], "clarify": None}
     resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
@@ -63,7 +64,7 @@ def test_context_failure_without_matching_concept_still_returns_no_data(mock_llm
 
 @pytest.mark.asyncio
 async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
-    from app.api.chat import chat_explain_stream_generator, NO_DATA_MESSAGE
+    from app.services.chat import chat_explain_stream_generator, NO_DATA_MESSAGE
     real_wait_for = asyncio.wait_for
     cancelled = False
 
@@ -78,9 +79,9 @@ async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
         assert timeout == 20
         return await real_wait_for(awaitable, timeout=0.01)
 
-    with patch("app.api.chat.resolve_question", side_effect=slow_resolution), \
-         patch("app.api.chat.asyncio.wait_for", side_effect=short_timeout), \
-         patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker:
+    with patch("app.services.chat.resolve_question", side_effect=slow_resolution), \
+         patch("app.services.chat.asyncio.wait_for", side_effect=short_timeout), \
+         patch("app.services.chat.link_concepts", new_callable=AsyncMock) as linker:
         linker.return_value = {"concept_ids": [], "clarify": None}
         frames = [frame async for frame in chat_explain_stream_generator(
             "c1", "Java Servlet?", history=[{"role": "assistant", "content": "Previous answer"}])]
@@ -92,9 +93,9 @@ async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
 
 @pytest.mark.asyncio
 async def test_request_cancellation_is_not_swallowed_by_context_fallback():
-    from app.api.chat import chat_explain_stream_generator
-    with patch("app.api.chat.resolve_question", new_callable=AsyncMock) as resolver, \
-         patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker:
+    from app.services.chat import chat_explain_stream_generator
+    with patch("app.services.chat.resolve_question", new_callable=AsyncMock) as resolver, \
+         patch("app.services.chat.link_concepts", new_callable=AsyncMock) as linker:
         resolver.side_effect = asyncio.CancelledError()
         with pytest.raises(asyncio.CancelledError):
             _ = [frame async for frame in chat_explain_stream_generator(
@@ -102,11 +103,11 @@ async def test_request_cancellation_is_not_swallowed_by_context_fallback():
         linker.assert_not_awaited()
 
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.resolve_question", new_callable=AsyncMock)
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.resolve_question", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_reply_uses_selected_message_without_recent_history(mock_llm, mock_retrieve, mock_link, mock_resolve):
     mock_resolve.return_value = "Java Servlet HTTP example"
     mock_link.return_value = {"concept_ids": ["servlet"], "clarify": None}
@@ -128,11 +129,11 @@ def test_reply_uses_selected_message_without_recent_history(mock_llm, mock_retri
     assert "Example [1]" in resp.text
 
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.resolve_question", new_callable=AsyncMock)
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.resolve_question", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_followup_links_and_retrieves_using_contextual_question(mock_llm, mock_retrieve, mock_link, mock_resolve):
     resolved = "Thứ tự học Java và HTTP để học Java Servlet?"
     mock_resolve.return_value = resolved
@@ -158,12 +159,12 @@ def test_followup_links_and_retrieves_using_contextual_question(mock_llm, mock_r
     assert "event: done" in resp.text
 
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.resolve_question", new_callable=AsyncMock)
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.resolve_question", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_changed_topic_still_returns_no_data(mock_llm, mock_link, mock_resolve):
-    from app.api.chat import NO_DATA_MESSAGE
+    from app.services.chat import NO_DATA_MESSAGE
     mock_resolve.return_value = "weather tomorrow"
     mock_link.return_value = {"concept_ids": [], "clarify": None}
     resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
@@ -176,14 +177,14 @@ def test_changed_topic_still_returns_no_data(mock_llm, mock_link, mock_resolve):
 
 
 @pytest.mark.parametrize("concept_ids", [None, []])
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_chat_no_concepts_returns_message_without_retrieval_or_llm(
     mock_llm, mock_retrieve, mock_link, concept_ids
 ):
-    from app.api.chat import NO_DATA_MESSAGE
+    from app.services.chat import NO_DATA_MESSAGE
     mock_link.return_value = {"concept_ids": [], "clarify": None}
     resp = client.post(
         "/chat", headers={"X-Internal-Key": "test-internal-api-key"},
@@ -203,12 +204,12 @@ def test_chat_no_concepts_returns_message_without_retrieval_or_llm(
         mock_link.assert_not_awaited()
 
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
-@patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock)
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.services.chat.llm_client")
 def test_chat_concept_without_evidence_returns_no_data(mock_llm, mock_retrieve, mock_link):
-    from app.api.chat import NO_DATA_MESSAGE
+    from app.services.chat import NO_DATA_MESSAGE
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = []
     resp = client.post(
@@ -220,7 +221,7 @@ def test_chat_concept_without_evidence_returns_no_data(mock_llm, mock_retrieve, 
     assert "event: sources\ndata: []" in resp.text
     mock_llm.generate_stream.assert_not_called()
 
-@patch("app.api.chat.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_chat_auth_403(mock_neo4j):
     # Sai header X-Internal-Key
     resp = client.post(
@@ -231,7 +232,7 @@ def test_chat_auth_403(mock_neo4j):
     assert resp.status_code == 403
     mock_neo4j.driver.session.assert_not_called()
 
-@patch("app.api.chat.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_chat_missing_internal_key_is_rejected(mock_neo4j):
     resp = client.post(
         "/chat",
@@ -240,7 +241,7 @@ def test_chat_missing_internal_key_is_rejected(mock_neo4j):
     assert resp.status_code == 422
     mock_neo4j.driver.session.assert_not_called()
 
-@patch("app.api.chat.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_chat_course_404_not_found(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -255,8 +256,8 @@ def test_chat_course_404_not_found(mock_neo4j):
     )
     assert resp.status_code == 404
 
-@patch("app.api.chat.neo4j_client")
-@patch("app.api.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.db.graph_repository.neo4j_client")
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
 def test_chat_enrolled_user_authorized_by_java(mock_link, mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -274,8 +275,8 @@ def test_chat_enrolled_user_authorized_by_java(mock_link, mock_neo4j):
     assert "event: clarify" in resp.text
     mock_link.assert_awaited_once_with(["c1"], "hello")
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.link_concepts")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.link_concepts")
 def test_chat_clarify_sse(mock_link):
     # Giả lập linker trả về clarify
     mock_link.return_value = {
@@ -299,10 +300,10 @@ def test_chat_clarify_sse(mock_link):
     assert "event: done" in content
     assert "Bàn dữ liá»‡u" in content
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.link_concepts")
-@patch("app.api.chat.retrieve_chunks")
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.link_concepts")
+@patch("app.services.chat.retrieve_chunks")
+@patch("app.services.chat.llm_client")
 def test_chat_explain_normal_sse_stream(mock_llm, mock_retrieve, mock_link):
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = [
@@ -330,10 +331,10 @@ def test_chat_explain_normal_sse_stream(mock_llm, mock_retrieve, mock_link):
     # Kiểm tra sources chứa chunk ch1
     assert "ch1" in content
 
-@patch("app.api.chat.verify_course_exists", new=AsyncMock())
-@patch("app.api.chat.link_concepts")
-@patch("app.api.chat.retrieve_chunks")
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new=AsyncMock())
+@patch("app.services.chat.link_concepts")
+@patch("app.services.chat.retrieve_chunks")
+@patch("app.services.chat.llm_client")
 def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
     # Khi truyền concept_ids tường minh
     mock_retrieve.return_value = [{"id": "ch1", "text": "Reference"}]
@@ -352,10 +353,10 @@ def test_chat_concept_ids_bypasses_linker(mock_llm, mock_retrieve, mock_link):
     mock_retrieve.assert_called_once()
     assert mock_retrieve.call_args[1]["concept_ids"] == ["c1", "c2"]
 
-@patch("app.api.chat.verify_course_exists", new_callable=AsyncMock)
-@patch("app.api.chat.link_concepts")
-@patch("app.api.chat.retrieve_chunks")
-@patch("app.api.chat.llm_client")
+@patch("app.services.chat.verify_course_exists", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts")
+@patch("app.services.chat.retrieve_chunks")
+@patch("app.services.chat.llm_client")
 def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_verify):
     mock_link.return_value = {"concept_ids": ["c1"], "clarify": None}
     mock_retrieve.return_value = [
@@ -383,9 +384,9 @@ def test_chat_global_course_id_null(mock_llm, mock_retrieve, mock_link, mock_ver
 
 @pytest.mark.parametrize("scope", [None, []])
 def test_global_chat_without_authorized_courses_does_not_search(scope):
-    from app.api.chat import NO_DATA_MESSAGE
-    with patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker, \
-         patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
+    from app.services.chat import NO_DATA_MESSAGE
+    with patch("app.services.chat.link_concepts", new_callable=AsyncMock) as linker, \
+         patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
         resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
             "user_id": "u1", "message": "Servlet?", "authorized_course_ids": scope,
             "concept_ids": ["servlet"],
@@ -395,9 +396,9 @@ def test_global_chat_without_authorized_courses_does_not_search(scope):
     retriever.assert_not_awaited()
 
 
-@patch("app.api.chat.verify_course_exists", new_callable=AsyncMock)
+@patch("app.services.chat.verify_course_exists", new_callable=AsyncMock)
 def test_course_chat_does_not_search_other_authorized_courses(mock_verify):
-    with patch("app.api.chat.link_concepts", new_callable=AsyncMock) as linker:
+    with patch("app.services.chat.link_concepts", new_callable=AsyncMock) as linker:
         linker.return_value = {"concept_ids": [], "clarify": None}
         client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
             "course_id": "26", "user_id": "u1", "message": "Servlet?",
@@ -420,7 +421,7 @@ def test_global_clarification_uses_current_java_names_for_existing_graph_concept
     driver = MagicMock()
     driver.session.return_value.__aenter__.return_value = session
     with patch("app.retrieval.concept_linker.neo4j_client.driver", driver), \
-         patch("app.api.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
+         patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock) as retriever:
         for title in ["Existing course", "Renamed course"]:
             resp = client.post("/chat", headers={"X-Internal-Key": "test-internal-api-key"}, json={
                 "user_id": "u1", "message": "ban", "authorized_course_ids": ["26", "28"],

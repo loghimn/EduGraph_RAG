@@ -2,7 +2,7 @@ package fu.coreservice.service.impl;
 
 import fu.coreservice.service.ActivityAlertService;
 
-import fu.coreservice.config.JwtService;
+import fu.coreservice.security.JwtService;
 import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.dto.auth.RefreshTokenRequest;

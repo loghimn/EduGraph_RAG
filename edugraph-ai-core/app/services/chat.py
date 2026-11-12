@@ -1,0 +1,190 @@
+from app.db.queries import chat as queries
+from app.schemas.chat import ChatRequest
+import json
+import asyncio
+import logging
+from typing import Optional, List, Dict, Any, AsyncGenerator
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
+
+from app.config import settings
+from app.db import graph_repository
+from app.retrieval.concept_linker import link_concepts
+from app.retrieval.chunk_retriever import retrieve_chunks
+from app.chat.answer import build_explain_prompt, filter_citations, build_sources_payload
+from app.core.llm import llm_client
+from app.core.errors import LLMUnavailableError
+from app.chat.context import prepare_history, resolve_question
+from app.chat.streaming import with_sse_heartbeats
+
+logger = logging.getLogger(__name__)
+
+NO_DATA_MESSAGE = (
+    "Không tìm thấy dữ liệu phù hợp với câu hỏi trong tài liệu của khóa học. "
+    "Bạn thử hỏi cụ thể hơn nhé."
+)
+
+
+def no_data_events() -> List[str]:
+    # Keep the existing protocol so Java persists this as a normal BOT answer.
+    return [
+        format_sse("token", {"token": NO_DATA_MESSAGE}),
+        format_sse("sources", []),
+        format_sse("done", {}),
+    ]
+
+
+async def verify_course_exists(course_id: str):
+    # Java authorizes owners/enrolled learners against its relational database.
+    # This internal endpoint trusts that decision only after verifying the key.
+    query = queries.VERIFY_COURSE_EXISTS_QUERY_1
+    async with graph_repository.session() as session:
+        res = await graph_repository.run(session, query, course_id=course_id)
+        single = await res.single()
+        if not single:
+            raise HTTPException(status_code=404, detail="Course not found")
+
+def format_sse(event: str, data: Any) -> str:
+    payload = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data
+    return f"event: {event}\ndata: {payload}\n\n"
+
+async def chat_explain_stream_generator(
+    course_id: Optional[str],
+    message: str,
+    concept_ids: Optional[List[str]] = None,
+    authorized_course_ids: Optional[List[str]] = None,
+    history: Optional[List[Dict[str, str]]] = None,
+    reply_context: Optional[List[Dict[str, str]]] = None,
+    course_names: Optional[Dict[str, str]] = None,
+) -> AsyncGenerator[str, None]:
+    events = _chat_explain_events(course_id, message, concept_ids, authorized_course_ids, history, reply_context,
+                                  course_names)
+    stream = with_sse_heartbeats(events, settings.CHAT_HEARTBEAT_INTERVAL_SECONDS)
+    try:
+        async for frame in stream:
+            yield frame
+    finally:
+        await stream.aclose()
+
+
+async def _chat_explain_events(
+    course_id: Optional[str],
+    message: str,
+    concept_ids: Optional[List[str]] = None,
+    authorized_course_ids: Optional[List[str]] = None,
+    history: Optional[List[Dict[str, str]]] = None,
+    reply_context: Optional[List[Dict[str, str]]] = None,
+    course_names: Optional[Dict[str, str]] = None,
+) -> AsyncGenerator[str, None]:
+    try:
+        # Java supplies global access. Per-course chat must remain scoped to
+        # its selected course even if the caller supplies a broader list.
+        if course_id is not None:
+            authorized_course_ids = (
+                [course_id] if authorized_course_ids is None or course_id in authorized_course_ids else []
+            )
+        elif authorized_course_ids is None:
+            authorized_course_ids = []
+        if not authorized_course_ids:
+            logger.info("Chat retrieval stopped: no authorized courses")
+            for event in no_data_events():
+                yield event
+            return
+        history = prepare_history(history)
+        reply_context = prepare_history(reply_context)
+        search_query = message
+        if history or reply_context:
+            yield ": resolving conversation context\n\n"
+            try:
+                resolution = (resolve_question(message, history, reply_context) if reply_context
+                              else resolve_question(message, history))
+                search_query = await asyncio.wait_for(resolution, timeout=20)
+            except (ValueError, LLMUnavailableError, asyncio.TimeoutError) as error:
+                # Context rewriting is optional; never invent a replacement query.
+                search_query = message
+                logger.warning("Context resolution failed; using original question. error_type=%s",
+                               type(error).__name__)
+                yield ": using original question\n\n"
+            else:
+                yield ": conversation context resolved\n\n"
+        # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
+        linked_concept_ids = concept_ids
+        if linked_concept_ids is None:
+            if course_names:
+                scoped_names = {cid: course_names[cid] for cid in authorized_course_ids if cid in course_names}
+                link_res = await link_concepts(authorized_course_ids, search_query, course_names=scoped_names)
+            else:
+                link_res = await link_concepts(authorized_course_ids, search_query)
+            if link_res.get("clarify"):
+                # Gửi clarify event và kết thúc bằng done
+                yield format_sse("clarify", {"candidates": link_res["clarify"]})
+                yield format_sse("done", {})
+                return
+            linked_concept_ids = link_res.get("concept_ids", [])
+
+        if not linked_concept_ids:
+            logger.info("Chat retrieval stopped: no linked concepts")
+            for event in no_data_events():
+                yield event
+            return
+
+        # 2. Truy xuất chunks (Graph + Vector + Fulltext + RRF)
+        chunks = await retrieve_chunks(
+            course_id=course_id,
+            query=search_query,
+            concept_ids=linked_concept_ids,
+            authorized_course_ids=authorized_course_ids,
+            max_chunks=settings.CHAT_MAX_CHUNKS
+        )
+
+        if not chunks:
+            logger.info(
+                "Chat retrieval stopped: no chunks linked_concepts=%d",
+                len(linked_concept_ids),
+            )
+            for event in no_data_events():
+                yield event
+            return
+
+        # 3. Dựng prompt cho nhánh explain
+        prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query,
+                                      reply_context=reply_context)
+
+        # 4. Stream token từ LLM (với priority=True)
+        accumulated_tokens = []
+        has_error = False
+
+        async for token in llm_client.generate_stream(prompt, priority=True):
+            if token.startswith("\n\n[ERROR:"):
+                # Lỗi giữa chừng
+                has_error = True
+                yield format_sse("error", {"error": token.strip()})
+                break
+            accumulated_tokens.append(token)
+            yield format_sse("token", {"token": token})
+
+        # 5. Lọc trích dẫn [n] và gửi sources
+        if not has_error:
+            full_text = "".join(accumulated_tokens)
+            _, cited_indices = filter_citations(full_text, len(chunks))
+            sources = build_sources_payload(cited_indices, chunks)
+            yield format_sse("sources", sources)
+
+        # 6. Kết thúc luồng
+        yield format_sse("done", {})
+
+    except Exception as e:
+        yield format_sse("error", {"error": str(e)})
+        yield format_sse("done", {})
+
+async def chat_endpoint(req: ChatRequest):
+    if req.course_id is not None:
+        await verify_course_exists(req.course_id)
+
+    return StreamingResponse(
+        chat_explain_stream_generator(req.course_id, req.message, req.concept_ids, req.authorized_course_ids,
+                                      [item.model_dump() for item in req.history],
+                                      [item.model_dump() for item in req.reply_context], req.course_names),
+        media_type="text/event-stream"
+    )
+

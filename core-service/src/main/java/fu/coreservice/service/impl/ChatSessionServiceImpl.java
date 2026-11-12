@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.security.CourseAccessPolicy;
+
 import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.chat.*;
 import fu.coreservice.entity.*;
@@ -270,11 +272,8 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-        if (!course.getUser().getUserId().equals(user.getUserId())
-                && (course.isNotebook()
-                    || !courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user))) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireReadAccess(course, user,
+                () -> courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user));
         return new CourseAccess(user, course);
     }
 

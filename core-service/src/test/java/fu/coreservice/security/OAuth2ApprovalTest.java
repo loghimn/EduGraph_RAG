@@ -1,4 +1,12 @@
-package fu.coreservice.config;
+package fu.coreservice.security;
+
+import fu.coreservice.security.OAuth2LoginFailureHandler;
+
+import fu.coreservice.security.OAuth2LoginSuccessHandler;
+
+import fu.coreservice.security.CustomUserDetailsService;
+
+import fu.coreservice.security.JwtService;
 
 import fu.coreservice.entity.*;
 import fu.coreservice.repository.*;

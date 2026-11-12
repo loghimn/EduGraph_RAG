@@ -1,15 +1,17 @@
-package fu.coreservice.entity;
+package fu.coreservice.listener;
 
+import fu.coreservice.entity.SystemSettings;
+import fu.coreservice.entity.User;
+import fu.coreservice.entity.UserRole;
 import fu.coreservice.service.ActivityAlertService;
 import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.PostUpdate;
+import java.util.Objects;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.Objects;
 
 /** Defers database writes until commit; never records secrets or configuration values. */
 @Component

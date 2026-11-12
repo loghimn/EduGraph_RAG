@@ -1,16 +1,18 @@
+from app.db import graph_repository
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import concept_lifecycle as api
+from app.api import concept_lifecycle as routes
+from app.services import concept_lifecycle as api
 from app.concept_extraction.merger import merge_concepts
 from app.retrieval import graph_cache
 import networkx as nx
 
 app = FastAPI()
-app.include_router(api.router)
+app.include_router(routes.router)
 client = TestClient(app)
 BASE = "/courses/22/knowledge-graph"
 HEADERS = {"X-Internal-Key": "test-internal-api-key", "X-Actor-Id": "15"}
@@ -38,7 +40,7 @@ def database(monkeypatch, results):
         return await fn(session)
 
     session.execute_write = execute_write
-    monkeypatch.setattr(api.neo4j_client, "driver", MagicMock(session=MagicMock(return_value=session)))
+    monkeypatch.setattr(graph_repository.neo4j_client, "driver", MagicMock(session=MagicMock(return_value=session)))
     clear = MagicMock()
     monkeypatch.setattr(api, "clear_course_graph_cache", clear)
     return session, clear

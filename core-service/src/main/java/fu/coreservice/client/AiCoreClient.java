@@ -9,28 +9,29 @@ import fu.coreservice.dto.ai.AiDocumentStatusResponse;
 import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.dto.ai.AiIngestResponse;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
+import fu.coreservice.dto.knowledgegraph.GraphMutationResponse;
+import fu.coreservice.dto.knowledgegraph.GraphSnapshotResponse;
 import fu.coreservice.exception.AiCoreException;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.core.io.Resource;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.ClientHttpResponse;
-import org.springframework.http.client.MultipartBodyBuilder;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
-import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestClientResponseException;
-
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Map;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.core.io.Resource;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.client.MultipartBodyBuilder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 /**
  * Gói RestClient gọi tới AI core-service (Python FastAPI, edugraph-ai-core).
@@ -228,25 +229,36 @@ public class AiCoreClient {
         }
     }
 
-    public Map<String, Object> editGraph(Long courseId, Long actorId, String action,
+    public GraphSnapshotResponse getGraphReview(Long courseId, Long actorId) {
+        return objectMapper.convertValue(editGraph(courseId, actorId, GraphEditorAction.SNAPSHOT,
+                null, null, null, Map.of()), GraphSnapshotResponse.class);
+    }
+
+    public GraphMutationResponse mutateGraph(Long courseId, Long actorId,
+            GraphEditorAction action, String sourceId, String targetId, Long version, Map<String, Object> body) {
+        return objectMapper.convertValue(editGraph(courseId, actorId, action, sourceId, targetId, version, body),
+                GraphMutationResponse.class);
+    }
+
+    public Map<String, Object> editGraph(Long courseId, Long actorId, GraphEditorAction action,
             String sourceId, String targetId, Long expectedVersion, Map<String, Object> body) {
         String base = "/courses/{courseId}/knowledge-graph";
         try {
             var method = switch (action) {
-                case "snapshot" -> org.springframework.http.HttpMethod.GET;
-                case "concept-update", "edge-update" -> org.springframework.http.HttpMethod.PUT;
-                case "edge-delete" -> org.springframework.http.HttpMethod.DELETE;
-                case "concept-review", "edge-create", "edge-review" -> org.springframework.http.HttpMethod.POST;
+                case SNAPSHOT -> org.springframework.http.HttpMethod.GET;
+                case CONCEPT_UPDATE, EDGE_UPDATE -> org.springframework.http.HttpMethod.PUT;
+                case EDGE_DELETE -> org.springframework.http.HttpMethod.DELETE;
+                case CONCEPT_REVIEW, EDGE_CREATE, EDGE_REVIEW -> org.springframework.http.HttpMethod.POST;
                 default -> throw new IllegalArgumentException("Unknown graph editor action");
             };
             var call = restClient.method(method);
             switch (action) {
-                case "snapshot" -> call.uri(base + "/review", courseId);
-                case "concept-update" -> call.uri(base + "/concepts/{source}?expected_version={v}", courseId, sourceId, expectedVersion);
-                case "concept-review" -> call.uri(base + "/concepts/{source}/review?expected_version={v}", courseId, sourceId, expectedVersion);
-                case "edge-create" -> call.uri(base + "/edges?expected_version={v}", courseId, expectedVersion);
-                case "edge-update", "edge-delete" -> call.uri(base + "/edges/{source}/{target}?expected_version={v}", courseId, sourceId, targetId, expectedVersion);
-                case "edge-review" -> call.uri(base + "/edges/{source}/{target}/review?expected_version={v}", courseId, sourceId, targetId, expectedVersion);
+                case SNAPSHOT -> call.uri(base + "/review", courseId);
+                case CONCEPT_UPDATE -> call.uri(base + "/concepts/{source}?expected_version={v}", courseId, sourceId, expectedVersion);
+                case CONCEPT_REVIEW -> call.uri(base + "/concepts/{source}/review?expected_version={v}", courseId, sourceId, expectedVersion);
+                case EDGE_CREATE -> call.uri(base + "/edges?expected_version={v}", courseId, expectedVersion);
+                case EDGE_UPDATE, EDGE_DELETE -> call.uri(base + "/edges/{source}/{target}?expected_version={v}", courseId, sourceId, targetId, expectedVersion);
+                case EDGE_REVIEW -> call.uri(base + "/edges/{source}/{target}/review?expected_version={v}", courseId, sourceId, targetId, expectedVersion);
                 default -> throw new IllegalArgumentException("Unknown graph editor action");
             }
             call.header("X-Actor-Id", String.valueOf(actorId));

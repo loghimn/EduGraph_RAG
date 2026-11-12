@@ -1,3 +1,4 @@
+from app.db import graph_repository
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -7,8 +8,8 @@ client = TestClient(app)
 
 
 @pytest.mark.parametrize("document_id", ["abc", "0", "-1", "01", "1.5", "9223372036854775808", "9" * 101])
-@patch("app.api.ingest._background_ingest", new_callable=AsyncMock)
-@patch("app.api.ingest.neo4j_client")
+@patch("app.services.ingest._background_ingest", new_callable=AsyncMock)
+@patch("app.db.graph_repository.neo4j_client")
 def test_invalid_document_id_is_rejected_before_graph_or_background_work(mock_neo4j, mock_background, document_id):
     response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={
         "document_id": document_id, "course_id": "c1", "user_id": "u1"
@@ -32,8 +33,8 @@ def test_ingest_auth_403():
     response = client.post("/ingest", headers={"X-Internal-Key": "wrong"}, json={"document_id": "1", "course_id": "2", "user_id": "3"})
     assert response.status_code == 403
 
-@patch("app.api.ingest._background_ingest", new=AsyncMock())
-@patch("app.api.ingest.neo4j_client")
+@patch("app.services.ingest._background_ingest", new=AsyncMock())
+@patch("app.db.graph_repository.neo4j_client")
 def test_ingest_merges_nodes_200(mock_neo4j):
     # /ingest giờ MERGE (upsert) Course + Document thay vì 404 khi node chưa tồn tại
     mock_session = AsyncMock()
@@ -58,8 +59,8 @@ def test_ingest_merges_nodes_200(mock_neo4j):
     assert "MERGE (d:Document" in doc_query
 
 
-@patch("app.api.ingest._background_ingest", new=AsyncMock())
-@patch("app.api.ingest.neo4j_client")
+@patch("app.services.ingest._background_ingest", new=AsyncMock())
+@patch("app.db.graph_repository.neo4j_client")
 def test_ingest_owner_mismatch_403(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -140,7 +141,7 @@ def test_document_status_auth_403():
     assert response.status_code == 403
 
 
-@patch("app.api.ingest.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_document_status_200(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -157,7 +158,7 @@ def test_document_status_200(mock_neo4j):
     assert body["course_id"] == "c1"
 
 
-@patch("app.api.ingest.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_document_status_404(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -169,8 +170,8 @@ def test_document_status_404(mock_neo4j):
     response = client.get("/documents/missing/status?course_id=c1", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 404
 
-@patch("app.api.ingest.neo4j_client")
-@patch("app.api.ingest.delete_document", new_callable=AsyncMock)
+@patch("app.db.graph_repository.neo4j_client")
+@patch("app.services.ingest.delete_document", new_callable=AsyncMock)
 def test_delete_processing_stops_and_cleans_graph(mock_delete, mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -188,9 +189,9 @@ def test_delete_processing_stops_and_cleans_graph(mock_delete, mock_neo4j):
     mock_delete.assert_awaited_once_with("c1", "doc-processing")
 
 @pytest.mark.asyncio
-@patch("app.api.ingest.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 async def test_recover_processing_on_startup(mock_neo4j):
-    from app.api.ingest import recover_processing_documents
+    from app.services.ingest import recover_processing_documents
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
     
@@ -208,7 +209,7 @@ def test_prerequisites_auth_403():
     response = client.post("/courses/c1/prerequisites?user_id=u1", headers={"X-Internal-Key": "wrong"})
     assert response.status_code == 403
 
-@patch("app.api.ingest.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_prerequisites_course_404(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -219,7 +220,7 @@ def test_prerequisites_course_404(mock_neo4j):
     response = client.post("/courses/c_none/prerequisites?user_id=u1", headers={"X-Internal-Key": "test-internal-api-key"})
     assert response.status_code == 404
 
-@patch("app.api.ingest.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_prerequisites_owner_403(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -231,8 +232,8 @@ def test_prerequisites_owner_403(mock_neo4j):
     assert response.status_code == 403
     assert "Permission denied" in response.json()["detail"]
 
-@patch("app.api.ingest.run_prerequisite_pipeline")
-@patch("app.api.ingest.neo4j_client")
+@patch("app.services.ingest.run_prerequisite_pipeline")
+@patch("app.db.graph_repository.neo4j_client")
 def test_prerequisites_success_200(mock_neo4j, mock_run_prereq):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session

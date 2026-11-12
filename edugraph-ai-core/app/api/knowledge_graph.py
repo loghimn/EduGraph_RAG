@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException
 
-from app.api.internal_auth import verify_internal_key
+from app.core.internal_auth import verify_internal_key
 from app.db.repo import get_knowledge_graph_concept
 from app.retrieval.graph_cache import get_course_graph
 

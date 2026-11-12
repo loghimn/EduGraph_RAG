@@ -93,7 +93,7 @@ async def test_upstream_exception_is_not_hidden_by_heartbeat_wrapper():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["context", "linking", "retrieval", "first_token"])
 async def test_chat_emits_heartbeats_during_each_pre_token_wait(stage, monkeypatch):
-    from app.api.chat import chat_explain_stream_generator
+    from app.services.chat import chat_explain_stream_generator
     from app.config import settings
 
     monkeypatch.setattr(settings, "CHAT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
@@ -121,10 +121,10 @@ async def test_chat_emits_heartbeats_during_each_pre_token_wait(stage, monkeypat
         await wait_at("first_token")
         yield "Answer [1]"
 
-    with patch("app.api.chat.resolve_question", new=AsyncMock(side_effect=resolve)), \
-         patch("app.api.chat.link_concepts", new=AsyncMock(side_effect=link)), \
-         patch("app.api.chat.retrieve_chunks", new=AsyncMock(side_effect=retrieve)), \
-         patch("app.api.chat.llm_client") as llm:
+    with patch("app.services.chat.resolve_question", new=AsyncMock(side_effect=resolve)), \
+         patch("app.services.chat.link_concepts", new=AsyncMock(side_effect=link)), \
+         patch("app.services.chat.retrieve_chunks", new=AsyncMock(side_effect=retrieve)), \
+         patch("app.services.chat.llm_client") as llm:
         llm.generate_stream = generate
         history = [{"role": "assistant", "content": "Java Servlet"}] if stage == "context" else []
         stream = chat_explain_stream_generator("c1", "Java Servlet?", history=history)

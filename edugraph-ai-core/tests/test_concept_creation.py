@@ -1,13 +1,15 @@
+from app.db import graph_repository
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import concept_creation as api
+from app.api import concept_creation as routes
+from app.services import concept_creation as api
 
 app = FastAPI()
-app.include_router(api.router)
+app.include_router(routes.router)
 client = TestClient(app)
 HEADERS = {"X-Internal-Key": "test-internal-api-key", "X-Actor-Id": "15"}
 BASE = "/courses/22/knowledge-graph/concept-drafts"
@@ -45,7 +47,7 @@ class Session:
 
 def setup_session(monkeypatch, results):
     session = Session(results)
-    monkeypatch.setattr(api.neo4j_client, "driver", type("Driver", (), {"session": lambda self: session})())
+    monkeypatch.setattr(graph_repository.neo4j_client, "driver", type("Driver", (), {"session": lambda self: session})())
     return session
 
 

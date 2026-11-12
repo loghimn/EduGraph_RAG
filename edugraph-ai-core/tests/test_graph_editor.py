@@ -1,13 +1,15 @@
+from app.db import graph_repository
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import graph_editor as api
+from app.api import graph_editor as routes
+from app.services import graph_editor as api
 
 app = FastAPI()
-app.include_router(api.router)
+app.include_router(routes.router)
 client = TestClient(app)
 BASE = '/courses/22/knowledge-graph'
 HEADERS = {'X-Internal-Key': 'test-internal-api-key', 'X-Actor-Id': '15'}
@@ -34,7 +36,7 @@ def database(monkeypatch, results):
         return await fn(session)
     session.execute_write = execute
     session.execute_read = execute
-    monkeypatch.setattr(api.neo4j_client, 'driver', MagicMock(session=MagicMock(return_value=session)))
+    monkeypatch.setattr(graph_repository.neo4j_client, 'driver', MagicMock(session=MagicMock(return_value=session)))
     clear = MagicMock()
     monkeypatch.setattr(api, 'clear_course_graph_cache', clear)
     return session, clear

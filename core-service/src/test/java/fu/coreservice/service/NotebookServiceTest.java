@@ -1,4 +1,6 @@
 package fu.coreservice.service;
+
+import fu.coreservice.service.impl.NotebookServiceImpl;
 import fu.coreservice.dto.notebook.NotebookRequest;
 import fu.coreservice.entity.*;
 import fu.coreservice.exception.AppException;
@@ -18,7 +20,7 @@ import static org.mockito.ArgumentMatchers.any;
 class NotebookServiceTest {
  @Mock CourseRepository courses;
  @Mock UserRepository users;
- @InjectMocks NotebookService service;
+ @InjectMocks NotebookServiceImpl service;
  User user;
  @BeforeEach void setup() {
   user = new User(); user.setUserId(1L);
