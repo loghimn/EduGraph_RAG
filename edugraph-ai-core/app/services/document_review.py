@@ -3,7 +3,7 @@ import asyncio
 import uuid
 import networkx as nx
 from fastapi import HTTPException
-from app.core.document_tasks import document_tasks, gather_owned
+from app.core.document_tasks import document_tasks, gather_owned, to_thread_owned
 from app.db import draft_store, graph_repository
 from app.db.queries import publication as queries
 from app.retrieval.graph_cache import clear_course_graph_cache
@@ -52,10 +52,10 @@ async def start(req):
         snapshot = await course_snapshot(req.course_id)
         if snapshot["owner_id"] not in (None, req.user_id):
             raise HTTPException(403, "Permission denied: user is not course owner")
-        draft = dict(document_id=req.document_id, course_id=req.course_id, user_id=req.user_id,
-                     filename=req.filename, run_id=req.run_id, review_id=str(uuid.uuid4()),
-                     status="PROCESSING", error=None, progress=None, current_step=None,
-                     version=snapshot["version"])
+        draft = {"document_id": req.document_id, "course_id": req.course_id, "user_id": req.user_id,
+                 "filename": req.filename, "run_id": req.run_id, "review_id": str(uuid.uuid4()),
+                 "status": "PROCESSING", "error": None, "progress": None, "current_step": None,
+                 "version": snapshot["version"]}
         draft_store.save(draft)
         document_tasks.start(req.document_id, lambda: extract(draft))
     return {"status": "processing"}
@@ -131,6 +131,11 @@ async def infer_edges(course_id, payload):
 
 
 async def preview(doc_id, course_id, user_id):
+    async with document_tasks.lock(doc_id):
+        return await to_thread_owned(_build_preview, doc_id, course_id, user_id)
+
+
+def _build_preview(doc_id, course_id, user_id):
     draft = owned(doc_id, course_id, user_id)
     if draft["status"] != "AWAITING_REVIEW":
         raise HTTPException(409, "Document is not awaiting review")

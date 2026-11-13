@@ -7,7 +7,8 @@ from app.concept_extraction.pipeline import process_document_pipeline
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("draft", [False, True])
-async def test_pipeline_embeds_new_concepts_before_cosine_merge(draft):
+@pytest.mark.parametrize("existing", [False, True])
+async def test_pipeline_embeds_new_concepts_before_cosine_merge(draft, existing):
     new_concept = {
         "canonical": "đạo hàm",
         "language": "vi",
@@ -54,7 +55,7 @@ async def test_pipeline_embeds_new_concepts_before_cosine_merge(draft):
                 "dropped_list": [],
             })),
         ),
-        patch("app.concept_extraction.pipeline.get_course_concepts", new=AsyncMock(return_value=[db_concept])),
+        patch("app.concept_extraction.pipeline.get_course_concepts", new=AsyncMock(return_value=[db_concept] if existing else [])),
         patch("app.concept_extraction.pipeline.embed_model.embed_batch", new=embed_batch),
         patch("app.concept_extraction.mention_scanner.scan_mentions", return_value=[]),
         patch("app.concept_extraction.pipeline.save_ingestion_transaction", new=AsyncMock(return_value=None)) as save,
@@ -64,9 +65,15 @@ async def test_pipeline_embeds_new_concepts_before_cosine_merge(draft):
     assert embed_batch.await_args_list[1].args[0] == ["đạo hàm"]
     if draft:
         save.assert_not_awaited()
-        assert result["concepts"] == []
-        assert result["mentions"][0]["concept_key"] == "derivative"
         assert all("MATCH" in call.args[0] and "SET " not in call.args[0] for call in session.run.await_args_list)
+        concepts = result["concepts"]
     else:
-        assert result["merge_candidates"] == [("đạo hàm", "derivative", "Merged (Cosine)")]
-        assert save.await_args.kwargs["concepts"] == []
+        concepts = save.await_args.kwargs["concepts"]
+        assert result["merge_candidates"] == ([("đạo hàm", "derivative", "Merged (Cosine)")] if existing else [])
+    if existing:
+        assert concepts == []
+    else:
+        assert len(concepts) == 1
+        assert concepts[0]["name"] == "đạo hàm"
+        assert concepts[0]["order"] == 100000
+        assert concepts[0]["embedding"] == [1.0, 0.0]

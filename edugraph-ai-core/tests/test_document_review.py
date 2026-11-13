@@ -62,7 +62,8 @@ async def test_default_ingest_stages_without_writing_any_neo4j_nodes(workspace, 
     session.run.assert_not_awaited()
     preview = await review.preview("101", "26", "4")
     assert len(preview["concepts"]) == 2
-    assert "chunks" not in preview and "embedding" not in str(preview)
+    assert "chunks" not in preview
+    assert "embedding" not in str(preview)
 
 
 @pytest.mark.asyncio
