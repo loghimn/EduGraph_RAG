@@ -18,7 +18,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-@Service
+@Service("notebookService")
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class NotebookServiceImpl implements NotebookService {

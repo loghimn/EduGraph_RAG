@@ -218,6 +218,32 @@ class RefactorHttpRegressionTest {
         verifyNoInteractions(storage);
     }
 
+    @Test
+    void notebookDocumentAuthorizationResolvesServiceBeanAndKeepsOtherUsersOut() throws Exception {
+        String email = address();
+        String owner = register(email, "STUDENT").path("data").path("accessToken").asText();
+        String other = register(address(), "STUDENT").path("data").path("accessToken").asText();
+        long notebookId = send(post("/api/notebooks"), owner,
+                Map.of("title", "Private documents", "domain", "CS", "language", "vi"), 201).path("data").path("id").asLong();
+        Course notebook = courses.findById(notebookId).orElseThrow();
+        Document document = documents.saveAndFlush(Document.builder().course(notebook)
+                .user(users.findByEmail(email).orElseThrow()).fileName("private.pdf").docStatus(UploadStatus.COMPLETED).build());
+        String base = "/api/document/course/" + notebookId + "/documents";
+        assertThat(send(get(base), owner, null, 200).path("data").path("content").get(0).path("documentId").asLong())
+                .isEqualTo(document.getDocumentId());
+        send(get(base + "/" + document.getDocumentId()), owner, null, 200);
+        send(get(base), other, null, 403);
+        send(get(base + "/" + document.getDocumentId()), other, null, 403);
+        User teacher = users.saveAndFlush(User.builder().email(address()).username("Teacher " + UUID.randomUUID())
+                .role(UserRole.INSTRUCTOR).approvalStatus(ApprovalStatus.APPROVED).passwordHash(encoder.encode(PASSWORD)).build());
+        String instructor = login(teacher.getEmail(), PASSWORD);
+        send(get(base), instructor, null, 403);
+        send(get(base + "/" + document.getDocumentId()), instructor, null, 403);
+        Course course = courses.saveAndFlush(Course.builder().user(teacher).courseName("Owned course")
+                .description("Test").domain("CS").language("vi").notebook(false).build());
+        send(get("/api/document/course/" + course.getCourseId() + "/documents"), instructor, null, 200);
+    }
+
     private JsonNode register(String email, String role) throws Exception {
         return send(post("/api/auth/register"), null,
                 Map.of("email", email, "username", "Learner " + UUID.randomUUID(), "password", PASSWORD, "role", role), 201);
