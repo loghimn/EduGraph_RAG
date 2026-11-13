@@ -46,7 +46,8 @@ class ChatMessageServiceTest {
             List.of(new AiChatHistoryMessage("assistant", "An older selected answer about HTTP")));
     private final ChatRequest request = ChatRequest.builder().message("Kế thừa?")
             .conceptIds(List.of("concept1")).build();
-    private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper(), org.mockito.Mockito.mock(ActivityAlertService.class));
+    private final LearnerMasteryService mastery = mock(LearnerMasteryService.class);
+    private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper(), org.mockito.Mockito.mock(ActivityAlertService.class), mastery);
 
     @BeforeEach
     void setup() {
@@ -78,11 +79,13 @@ class ChatMessageServiceTest {
 
     @Test
     void courseChatSendsOnlySelectedCourseToPython() throws Exception {
+        when(mastery.knownConcepts(7L)).thenReturn(List.of("java"));
         run("event: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
         ArgumentCaptor<AiChatRequest> payload = ArgumentCaptor.forClass(AiChatRequest.class);
         verify(client).openChatStream(payload.capture());
         assertEquals("7", payload.getValue().getCourseId());
         assertEquals(List.of("7"), payload.getValue().getAuthorizedCourseIds());
+        assertEquals(Map.of("7", List.of("java")), payload.getValue().getKnownConceptsByCourse());
         verify(storage).getChatCourseNames(List.of("7"));
         verify(storage, never()).getGlobalChatCourseIds();
     }
@@ -91,6 +94,33 @@ class ChatMessageServiceTest {
         MockHttpServletRequest servletRequest = new MockHttpServletRequest();
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
         return servletRequest;
+    }
+
+    @Test
+    void finalCanonicalAnswerReplacesDraftBeforePersistenceAndGraphIdentityIsForwarded() throws Exception {
+        request.setGraphRelationship(new fu.coreservice.dto.chat.ChatGraphRelationship("method", "object"));
+        run("event: token\ndata: {\"token\":\"Answer [1] [999]\"}\n\n"
+                + "event: answer\ndata: {\"content\":\"Answer [1]\"}\n\n"
+                + "event: sources\ndata: [{\"citation\":1,\"chunk_id\":\"edge-proof\",\"doc_id\":\"8\",\"citation_type\":\"PREREQUISITE_SURFACED\"}]\n\n"
+                + "event: done\ndata: {}\n\n");
+        ArgumentCaptor<AiChatRequest> payload = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(payload.capture());
+        assertEquals(Map.of("source_id", "method", "target_id", "object"), payload.getValue().getGraphRelationship());
+        verify(storage).finishTurn(eq(turn), eq("Answer [1]"), eq(ChatMessageStatus.COMPLETED), isNull(), anyInt(),
+                argThat(sources -> sources.size() == 1 && sources.get(0).citationType() == fu.coreservice.entity.CitationType.PREREQUISITE_SURFACED), eq(false));
+    }
+
+    @Test
+    void generatedPathUsesTheNormalDurableAnswerProtocol() throws Exception {
+        String answer = "## Learning path: Servlet\n\n### Stage 1\n- Java [1]\n\n### Stage 2\n- Servlet";
+        String answerJson = new ObjectMapper().writeValueAsString(Map.of("content", answer));
+        var output = run("event: token\ndata: {\"token\":\"Computing\"}\n\n"
+                + "event: answer\ndata: " + answerJson + "\n\n"
+                + "event: sources\ndata: [{\"citation\":1,\"chunk_id\":\"java-proof\",\"doc_id\":\"8\",\"page\":3}]\n\n"
+                + "event: done\ndata: {}\n\n");
+        assertTrue(output.toString(StandardCharsets.UTF_8).contains("event: answer"));
+        verify(storage).finishTurn(eq(turn), eq(answer), eq(ChatMessageStatus.COMPLETED), isNull(), anyInt(),
+                argThat(sources -> sources.size() == 1 && sources.get(0).documentId().equals(8L)), eq(false));
     }
 
     private CallableProcessingInterceptor lifecycle(MockHttpServletRequest servletRequest) {
@@ -318,7 +348,7 @@ class ChatMessageServiceTest {
         var output = run("event: clarify\ndata: {\"candidates\":[{\"id\":\"a\",\"name\":\"A\"}]}\n\n"
                 + "event: done\ndata: {}\n\n");
         assertTrue(output.toString(StandardCharsets.UTF_8).contains("event: clarify"));
-        verify(storage).finishTurn(eq(turn), eq(""), any(), isNull(), anyInt(), eq(List.of()), eq(true));
+        verify(storage).finishClarification(eq(turn), argThat(candidates -> candidates.size() == 1 && candidates.getFirst().id().equals("a")), anyInt());
         verify(response).close();
     }
 

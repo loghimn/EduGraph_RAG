@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     VECTOR_OVERFETCH_STEP: int = 4
     VECTOR_OVERFETCH_MAX: int = 2000
     CHAT_MAX_CHUNKS: int = 6
+    CHAT_MIN_VECTOR_SCORE: float = Field(default=0.35, ge=0, le=1)
     MIN_CHARS_PER_PAGE: int = 100
     ALIAS_FUZZY_MIN_LEN: int = 4
 

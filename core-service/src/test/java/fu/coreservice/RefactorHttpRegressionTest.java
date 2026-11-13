@@ -8,6 +8,9 @@ import fu.coreservice.dto.knowledgegraph.GraphMutationResponse;
 import fu.coreservice.dto.knowledgegraph.GraphSnapshotResponse;
 import fu.coreservice.entity.User;
 import fu.coreservice.entity.UserRole;
+import fu.coreservice.entity.*;
+import fu.coreservice.repository.*;
+import fu.coreservice.service.SupabaseStorageService;
 import fu.coreservice.repository.UserRepository;
 import jakarta.servlet.Filter;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +45,13 @@ class RefactorHttpRegressionTest {
     @Autowired UserRepository users;
     @Autowired PasswordEncoder encoder;
     @MockitoBean AiCoreClient ai;
+    @MockitoBean SupabaseStorageService storage;
+    @Autowired ChatSessionRepository sessions;
+    @Autowired ChatMessageRepository messages;
+    @Autowired MessageCitationRepository citations;
+    @Autowired MessageFeedbackRepository feedback;
+    @Autowired DocumentRepository documents;
+    @Autowired CourseRepository courses;
     private MockMvc mvc;
     private final ObjectMapper json = new ObjectMapper();
     private static final String PASSWORD = "test-password-123";
@@ -120,6 +130,92 @@ class RefactorHttpRegressionTest {
         send(get(base + "/review"), other, null, 404);
         send(post(base + "/edges?expected_version=9"), other, Map.of("source_id", "b", "target_id", "a"), 404);
         verifyNoInteractions(ai);
+    }
+
+    @Test
+    void chatHistorySearchRenameAndDeleteRespectOwnerAndExactScope() throws Exception {
+        String email = address();
+        String token = register(email, "STUDENT").path("data").path("accessToken").asText();
+        User owner = users.findByEmail(email).orElseThrow();
+        long courseId = send(post("/api/notebooks"), token, Map.of("title", "Private", "domain", "OOP", "language", "vi"), 201).path("data").path("id").asLong();
+        long id = send(post("/api/chat/sessions"), token, Map.of("title", "100% Java"), 201).path("data").path("sessionId").asLong();
+        send(post("/api/chat/sessions"), token, Map.of("title", "1000 Java"), 201);
+        send(post("/api/courses/" + courseId + "/chat/sessions"), token, Map.of("title", "100% private"), 201);
+        JsonNode found = send(get("/api/chat/sessions/search").param("q", "100%"), token, null, 200).path("data");
+        assertThat(found.path("totalElements").asInt()).isEqualTo(1);
+        assertThat(found.path("content").get(0).path("sessionId").asLong()).isEqualTo(id);
+        String other = register(address(), "STUDENT").path("data").path("accessToken").asText();
+        String base = "/api/chat/sessions/" + id;
+        send(get(base), other, null, 404);
+        send(patch(base), other, Map.of("title", "Stolen"), 404);
+        send(delete(base), other, null, 404);
+        send(get("/api/courses/" + courseId + "/chat/sessions/" + id), token, null, 404);
+        assertThat(send(patch(base), token, Map.of("title", " Updated "), 200).path("data").path("title").asText()).isEqualTo("Updated");
+        ChatSession session = sessions.findById(id).orElseThrow();
+        ChatMessage question = messages.saveAndFlush(ChatMessage.builder().session(session).senderType(SenderType.USER).content("Why?").build());
+        assertThat(send(get("/api/chat/sessions/search").param("q", "Why?"), token, null, 200).path("data").path("content").get(0).path("sessionId").asLong()).isEqualTo(id);
+        ChatMessage answer = messages.saveAndFlush(ChatMessage.builder().session(session).senderType(SenderType.BOT).content("Because [1]").replyToMessage(question).build());
+        long citation = citations.saveAndFlush(MessageCitation.builder().message(answer).citationNumber(1).citationType(CitationType.ANSWER_CONCEPT).build()).getCitationId();
+        long rating = feedback.saveAndFlush(MessageFeedback.builder().message(answer).user(owner).rating((short) 1).build()).getFeedbackId();
+        send(delete(base), token, null, 200);
+        assertThat(sessions.existsById(id)).isFalse();
+        assertThat(messages.existsById(answer.getMessageId())).isFalse();
+        assertThat(citations.existsById(citation)).isFalse();
+        assertThat(feedback.existsById(rating)).isFalse();
+    }
+
+    @Test
+    void recentHistoryUsesStableCursorAndReloadsClarificationChoices() throws Exception {
+        String token = register(address(), "STUDENT").path("data").path("accessToken").asText();
+        long id = send(post("/api/chat/sessions"), token, Map.of("title", "Pages"), 201).path("data").path("sessionId").asLong();
+        ChatSession session = sessions.findById(id).orElseThrow();
+        List<Long> ids = new java.util.ArrayList<>();
+        for (int i = 0; i < 35; i++) ids.add(messages.saveAndFlush(ChatMessage.builder().session(session).senderType(SenderType.USER)
+                .content("Question " + i).clarificationOptions(i == 34 ? "[{\"id\":\"class-1\",\"name\":\"Class\"}]" : null).build()).getMessageId());
+        String base = "/api/chat/sessions/" + id + "/messages/recent";
+        JsonNode recent = send(get(base), token, null, 200).path("data");
+        assertThat(recent.path("messages").size()).isEqualTo(30);
+        assertThat(recent.path("hasOlder").asBoolean()).isTrue();
+        assertThat(recent.path("oldestId").asLong()).isEqualTo(ids.get(5));
+        assertThat(recent.path("messages").get(29).path("clarificationCandidates").get(0).path("id").asText()).isEqualTo("class-1");
+        JsonNode older = send(get(base).param("beforeId", ids.get(5).toString()), token, null, 200).path("data");
+        assertThat(older.path("messages").size()).isEqualTo(5);
+        assertThat(older.path("hasOlder").asBoolean()).isFalse();
+        assertThat(older.path("messages").get(4).path("messageId").asLong()).isEqualTo(ids.get(4));
+        send(get(base).param("size", "101"), token, null, 400);
+        ChatMessage streaming = messages.saveAndFlush(ChatMessage.builder().session(session).senderType(SenderType.BOT).content("").status(ChatMessageStatus.STREAMING).build());
+        send(delete("/api/chat/sessions/" + id), token, null, 409);
+        assertThat(messages.existsById(streaming.getMessageId())).isTrue();
+    }
+
+    @Test
+    void citationSourceChecksOwnershipAndDocumentVisibilityBeforeSigning() throws Exception {
+        String email = address();
+        String token = register(email, "STUDENT").path("data").path("accessToken").asText();
+        long courseId = send(post("/api/notebooks"), token, Map.of("title", "Sources", "domain", "OOP", "language", "vi"), 201).path("data").path("id").asLong();
+        Course course = courses.findById(courseId).orElseThrow();
+        Document doc = documents.saveAndFlush(Document.builder().course(course).user(users.findByEmail(email).orElseThrow())
+                .fileName("OOP.pdf").fileUrlPath("private/oop.pdf").docStatus(UploadStatus.COMPLETED).build());
+        String base = "/api/courses/" + courseId + "/chat/sessions";
+        long id = send(post(base), token, Map.of("title", "Sources"), 201).path("data").path("sessionId").asLong();
+        ChatMessage answer = messages.saveAndFlush(ChatMessage.builder().session(sessions.findById(id).orElseThrow()).senderType(SenderType.BOT).content("[1]").build());
+        long citation = citations.saveAndFlush(MessageCitation.builder().message(answer).documentId(doc.getDocumentId()).pageNumber(7)
+                .citationNumber(1).citationType(CitationType.ANSWER_CONCEPT).build()).getCitationId();
+        when(storage.createSignedUrl("private/oop.pdf", 300)).thenReturn("https://storage.example/oop.pdf?token=test");
+        String endpoint = base + "/" + id + "/citations/" + citation + "/source";
+        JsonNode source = send(get(endpoint), token, null, 200).path("data");
+        assertThat(source.path("fileName").asText()).isEqualTo("OOP.pdf");
+        assertThat(source.path("pageNumber").asInt()).isEqualTo(7);
+        verify(storage).createSignedUrl("private/oop.pdf", 300);
+        clearInvocations(storage);
+        String other = register(address(), "STUDENT").path("data").path("accessToken").asText();
+        send(get(endpoint), other, null, 404);
+        long global = send(post("/api/chat/sessions"), token, Map.of("title", "Global"), 201).path("data").path("sessionId").asLong();
+        ChatMessage globalAnswer = messages.saveAndFlush(ChatMessage.builder().session(sessions.findById(global).orElseThrow()).senderType(SenderType.BOT).content("[1]").build());
+        long badCitation = citations.saveAndFlush(MessageCitation.builder().message(globalAnswer).documentId(doc.getDocumentId())
+                .citationNumber(1).citationType(CitationType.ANSWER_CONCEPT).build()).getCitationId();
+        send(get("/api/chat/sessions/" + global + "/citations/" + badCitation + "/source"), token, null, 404);
+        verifyNoInteractions(storage);
     }
 
     private JsonNode register(String email, String role) throws Exception {

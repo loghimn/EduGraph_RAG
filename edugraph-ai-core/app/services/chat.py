@@ -1,5 +1,5 @@
 from app.db.queries import chat as queries
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ChatRequest, GraphRelationship
 import json
 import asyncio
 import logging
@@ -11,11 +11,14 @@ from app.config import settings
 from app.db import graph_repository
 from app.retrieval.concept_linker import link_concepts
 from app.retrieval.chunk_retriever import retrieve_chunks
+from app.retrieval.relationship_retriever import retrieve_relationship
 from app.chat.answer import build_explain_prompt, filter_citations, build_sources_payload
 from app.core.llm import llm_client
 from app.core.errors import LLMUnavailableError
 from app.chat.context import prepare_history, resolve_question
 from app.chat.streaming import with_sse_heartbeats
+from app.chat.path_intent import detect_path_intent, needs_topic_context
+from app.services.chat_paths import build_chat_path
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +59,11 @@ async def chat_explain_stream_generator(
     history: Optional[List[Dict[str, str]]] = None,
     reply_context: Optional[List[Dict[str, str]]] = None,
     course_names: Optional[Dict[str, str]] = None,
+    graph_relationship: Optional[GraphRelationship] = None,
+    known_concepts_by_course: Optional[Dict[str, List[str]]] = None,
 ) -> AsyncGenerator[str, None]:
     events = _chat_explain_events(course_id, message, concept_ids, authorized_course_ids, history, reply_context,
-                                  course_names)
+                                  course_names, graph_relationship, known_concepts_by_course)
     stream = with_sse_heartbeats(events, settings.CHAT_HEARTBEAT_INTERVAL_SECONDS)
     try:
         async for frame in stream:
@@ -75,6 +80,8 @@ async def _chat_explain_events(
     history: Optional[List[Dict[str, str]]] = None,
     reply_context: Optional[List[Dict[str, str]]] = None,
     course_names: Optional[Dict[str, str]] = None,
+    graph_relationship: Optional[GraphRelationship] = None,
+    known_concepts_by_course: Optional[Dict[str, List[str]]] = None,
 ) -> AsyncGenerator[str, None]:
     try:
         # Java supplies global access. Per-course chat must remain scoped to
@@ -93,7 +100,8 @@ async def _chat_explain_events(
         history = prepare_history(history)
         reply_context = prepare_history(reply_context)
         search_query = message
-        if history or reply_context:
+        path_intent = detect_path_intent(message) if graph_relationship is None else None
+        if (history or reply_context) and (path_intent is None or needs_topic_context(path_intent)):
             yield ": resolving conversation context\n\n"
             try:
                 resolution = (resolve_question(message, history, reply_context) if reply_context
@@ -107,6 +115,22 @@ async def _chat_explain_events(
                 yield ": using original question\n\n"
             else:
                 yield ": conversation context resolved\n\n"
+        if graph_relationship is None:
+            path_intent = detect_path_intent(search_query) or path_intent
+        if path_intent is not None:
+            yield ": computing prerequisite learning path\n\n"
+            path = await build_chat_path(path_intent, authorized_course_ids, concept_ids, course_names,
+                                         known_concepts_by_course)
+            if path.get("candidates"):
+                yield format_sse("clarify", {"candidates": path["candidates"]})
+            else:
+                answer, indices = filter_citations(path["answer"], len(path["chunks"]))
+                for offset in range(0, len(answer), 256):
+                    yield format_sse("token", {"token": answer[offset:offset + 256]})
+                yield format_sse("answer", {"content": answer})
+                yield format_sse("sources", build_sources_payload(indices, path["chunks"]))
+            yield format_sse("done", {})
+            return
         # 1. Concept linking (bỏ qua nếu client đã truyền concept_ids)
         linked_concept_ids = concept_ids
         if linked_concept_ids is None:
@@ -117,16 +141,10 @@ async def _chat_explain_events(
                 link_res = await link_concepts(authorized_course_ids, search_query)
             if link_res.get("clarify"):
                 # Gửi clarify event và kết thúc bằng done
-                yield format_sse("clarify", {"candidates": link_res["clarify"]})
+                yield format_sse("clarify", {"candidates": link_res["clarify"][:50]})
                 yield format_sse("done", {})
                 return
             linked_concept_ids = link_res.get("concept_ids", [])
-
-        if not linked_concept_ids:
-            logger.info("Chat retrieval stopped: no linked concepts")
-            for event in no_data_events():
-                yield event
-            return
 
         # 2. Truy xuất chunks (Graph + Vector + Fulltext + RRF)
         chunks = await retrieve_chunks(
@@ -137,18 +155,26 @@ async def _chat_explain_events(
             max_chunks=settings.CHAT_MAX_CHUNKS
         )
 
+        relationship_context = None
+        if graph_relationship is not None:
+            relationship_context, evidence = await retrieve_relationship(graph_relationship, authorized_course_ids)
+            evidence_ids = {item["id"] for item in evidence}
+            chunks = (evidence + [item for item in chunks if item["id"] not in evidence_ids])[:settings.CHAT_MAX_CHUNKS]
+
         if not chunks:
             logger.info(
                 "Chat retrieval stopped: no chunks linked_concepts=%d",
-                len(linked_concept_ids),
+                len(linked_concept_ids or []),
             )
             for event in no_data_events():
                 yield event
             return
 
         # 3. Dựng prompt cho nhánh explain
-        prompt = build_explain_prompt(message, chunks, history=history, resolved_question=search_query,
-                                      reply_context=reply_context)
+        prompt_args = dict(history=history, resolved_question=search_query, reply_context=reply_context)
+        if relationship_context is not None:
+            prompt_args["relationship_context"] = relationship_context
+        prompt = build_explain_prompt(message, chunks, **prompt_args)
 
         # 4. Stream token từ LLM (với priority=True)
         accumulated_tokens = []
@@ -166,7 +192,8 @@ async def _chat_explain_events(
         # 5. Lọc trích dẫn [n] và gửi sources
         if not has_error:
             full_text = "".join(accumulated_tokens)
-            _, cited_indices = filter_citations(full_text, len(chunks))
+            cleaned_answer, cited_indices = filter_citations(full_text, len(chunks))
+            yield format_sse("answer", {"content": cleaned_answer})
             sources = build_sources_payload(cited_indices, chunks)
             yield format_sse("sources", sources)
 
@@ -184,7 +211,8 @@ async def chat_endpoint(req: ChatRequest):
     return StreamingResponse(
         chat_explain_stream_generator(req.course_id, req.message, req.concept_ids, req.authorized_course_ids,
                                       [item.model_dump() for item in req.history],
-                                      [item.model_dump() for item in req.reply_context], req.course_names),
+                                      [item.model_dump() for item in req.reply_context], req.course_names, req.graph_relationship,
+                                      req.known_concepts_by_course),
         media_type="text/event-stream"
     )
 

@@ -47,8 +47,10 @@ def test_context_failure_keeps_original_question_and_streams_answer(
 @patch("app.services.chat.verify_course_exists", new=AsyncMock())
 @patch("app.services.chat.resolve_question", new_callable=AsyncMock)
 @patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
 @patch("app.services.chat.llm_client")
-def test_context_failure_without_matching_concept_still_returns_no_data(mock_llm, mock_link, mock_resolve):
+def test_context_failure_without_matching_concept_still_returns_no_data(mock_llm, mock_retrieve, mock_link, mock_resolve):
+    mock_retrieve.return_value = []
     from app.services.chat import NO_DATA_MESSAGE
     mock_resolve.side_effect = TimeoutError()
     mock_link.return_value = {"concept_ids": [], "clarify": None}
@@ -79,7 +81,8 @@ async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
         assert timeout == 20
         return await real_wait_for(awaitable, timeout=0.01)
 
-    with patch("app.services.chat.resolve_question", side_effect=slow_resolution), \
+    with patch("app.services.chat.retrieve_chunks", new=AsyncMock(return_value=[])), \
+         patch("app.services.chat.resolve_question", side_effect=slow_resolution), \
          patch("app.services.chat.asyncio.wait_for", side_effect=short_timeout), \
          patch("app.services.chat.link_concepts", new_callable=AsyncMock) as linker:
         linker.return_value = {"concept_ids": [], "clarify": None}
@@ -162,8 +165,10 @@ def test_followup_links_and_retrieves_using_contextual_question(mock_llm, mock_r
 @patch("app.services.chat.verify_course_exists", new=AsyncMock())
 @patch("app.services.chat.resolve_question", new_callable=AsyncMock)
 @patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
 @patch("app.services.chat.llm_client")
-def test_changed_topic_still_returns_no_data(mock_llm, mock_link, mock_resolve):
+def test_changed_topic_still_returns_no_data(mock_llm, mock_retrieve, mock_link, mock_resolve):
+    mock_retrieve.return_value = []
     from app.services.chat import NO_DATA_MESSAGE
     mock_resolve.return_value = "weather tomorrow"
     mock_link.return_value = {"concept_ids": [], "clarify": None}
@@ -181,9 +186,10 @@ def test_changed_topic_still_returns_no_data(mock_llm, mock_link, mock_resolve):
 @patch("app.services.chat.link_concepts", new_callable=AsyncMock)
 @patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
 @patch("app.services.chat.llm_client")
-def test_chat_no_concepts_returns_message_without_retrieval_or_llm(
+def test_chat_no_concepts_uses_hybrid_search_then_returns_no_data_when_empty(
     mock_llm, mock_retrieve, mock_link, concept_ids
 ):
+    mock_retrieve.return_value = []
     from app.services.chat import NO_DATA_MESSAGE
     mock_link.return_value = {"concept_ids": [], "clarify": None}
     resp = client.post(
@@ -196,7 +202,7 @@ def test_chat_no_concepts_returns_message_without_retrieval_or_llm(
     assert NO_DATA_MESSAGE in resp.text
     assert "event: sources\ndata: []" in resp.text
     assert resp.text.endswith("event: done\ndata: {}\n\n")
-    mock_retrieve.assert_not_awaited()
+    mock_retrieve.assert_awaited_once()
     mock_llm.generate_stream.assert_not_called()
     if concept_ids is None:
         mock_link.assert_awaited_once_with(["c1"], "weather tomorrow")

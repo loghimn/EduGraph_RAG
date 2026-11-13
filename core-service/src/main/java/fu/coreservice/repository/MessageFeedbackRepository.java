@@ -11,6 +11,9 @@ import java.util.Optional;
 
 @Repository
 public interface MessageFeedbackRepository extends JpaRepository<MessageFeedback, Long> {
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("delete from MessageFeedback f where f.message.session = :session")
+    void deleteSessionFeedback(@org.springframework.data.repository.query.Param("session") fu.coreservice.entity.ChatSession session);
     Optional<MessageFeedback> findByMessage(ChatMessage message);
     List<MessageFeedback> findByUser(User user);
     Optional<MessageFeedback> findByMessage_MessageId(Long messageId);

@@ -141,6 +141,8 @@ def test_mode_goal_assume_known_prerequisites():
     )
     assert set(res_assume_false["linear_order"]) == {"C1", "C2", "C4", "C5"}
     assert "C3" not in res_assume_false["linear_order"]
+    assert res_assume_false["linear_order"] == ["C1", "C2", "C4", "C5"]
+    assert [[step["concept_id"] for step in stage["steps"]] for stage in res_assume_false["stages"]] == [["C1"], ["C2"], ["C4"], ["C5"]]
 
 # 6. Test goal nằm trong known -> Lộ trình rỗng kèm thông báo
 def test_goal_already_in_known_empty_path():

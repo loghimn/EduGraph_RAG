@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "chat_messages", indexes = {
-        @Index(name = "idx_chat_messages_session_created", columnList = "session_id, created_at, message_id")
+        @Index(name = "idx_chat_messages_session_created", columnList = "session_id, created_at, message_id"),
+        @Index(name = "idx_chat_messages_session_cursor", columnList = "session_id, message_id")
 })
 @Getter
 @Setter
@@ -35,6 +36,9 @@ public class ChatMessage {
     // deleted. Scalar by design: the referenced answer no longer exists.
     @Column(name = "finalized_clarification_answer_id")
     private Long finalizedClarificationAnswerId;
+
+    @Column(name = "clarification_options", columnDefinition = "TEXT")
+    private String clarificationOptions;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "sender_type", nullable = false)

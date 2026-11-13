@@ -18,6 +18,16 @@ import jakarta.persistence.LockModeType;
 
 @Repository
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+    List<ChatMessage> findBySessionAndMessageIdLessThanOrderByMessageIdDesc(ChatSession session, Long beforeId, Pageable pageable);
+    boolean existsBySessionAndStatus(ChatSession session, ChatMessageStatus status);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("update ChatMessage m set m.replyToMessage = null where m.session = :session")
+    void detachReplies(@Param("session") ChatSession session);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("delete from ChatMessage m where m.session = :session")
+    void deleteSessionMessages(@Param("session") ChatSession session);
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select m from ChatMessage m where m.messageId = :messageId and m.session = :session")
     Optional<ChatMessage> findForFeedbackUpdate(@Param("messageId") Long messageId,

@@ -17,7 +17,22 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 
 @Repository
-public interface UserRepository extends JpaRepository<User, Long> {
+public interface UserRepository extends JpaRepository<User, Long>, org.springframework.data.jpa.repository.JpaSpecificationExecutor<User> {
+
+    /** Serialize privileged mutations in a stable order, then revalidate the acting admin. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.role = fu.coreservice.entity.UserRole.ADMIN order by u.userId")
+    java.util.List<User> findAdminsForUpdate();
+
+    boolean existsByEmailIgnoreCaseAndUserIdNot(String email, Long userId);
+    boolean existsByUsernameAndUserIdNot(String username, Long userId);
+    boolean existsByEmailIgnoreCase(String email);
+    long countByCreatedAtGreaterThanEqual(java.time.LocalDateTime since);
+    interface Population {
+        UserRole getRole(); Boolean getActive(); ApprovalStatus getApproval(); long getCount();
+    }
+    @Query("select u.role as role, u.isActive as active, u.approvalStatus as approval, count(u) as count from User u group by u.role, u.isActive, u.approvalStatus")
+    java.util.List<Population> population();
 
     Page<User> findByRoleAndApprovalStatus(UserRole role, ApprovalStatus approvalStatus, Pageable pageable);
 

@@ -95,12 +95,17 @@ def generate_learning_path(
 
     # 1. Trích xuất subgraph trên tập concept cần học
     subG = G.subgraph(need).copy()
+    ordering_graph = subG
+    if mode == "goal" and known_concept_ids and not assume_known_prerequisites:
+        # A -> known B -> C still means A must precede C. Keep known nodes
+        # while computing dependencies; they cost no learning stage below.
+        ordering_graph = G.subgraph(goal_set | goal_ancestors)
 
     # 2. Kiểm tra chu trình trên subgraph của need-set (mọi vòng còn lại đều trả 409)
-    if not nx.is_directed_acyclic_graph(subG):
+    if not nx.is_directed_acyclic_graph(ordering_graph):
         cycles = []
         try:
-            for cycle in nx.simple_cycles(subG):
+            for cycle in nx.simple_cycles(ordering_graph):
                 cycle_str = [f"{u}->{v}" for u, v in zip(cycle, cycle[1:] + [cycle[0]])]
                 cycles.append(cycle_str)
         except Exception as e:
@@ -108,7 +113,17 @@ def generate_learning_path(
         raise GraphConflictError(cycles or [["Cycle detected in learning path subgraph"]])
 
     # 3. Phân tầng: topological_generations
-    generations = list(nx.topological_generations(subG))
+    generations = list(nx.topological_generations(ordering_graph))
+    if ordering_graph is not subG:
+        levels = {}
+        for generation in generations:
+            for cid in generation:
+                previous = max((levels[parent] for parent in ordering_graph.predecessors(cid)), default=-1)
+                levels[cid] = previous + (1 if cid in subG else 0)
+        grouped = {}
+        for cid in subG:
+            grouped.setdefault(levels[cid], []).append(cid)
+        generations = [grouped[level] for level in sorted(grouped)]
     stages = []
     for lvl, gen in enumerate(generations):
         # Sắp xếp các concept trong cùng tầng theo (Concept.order, name, id)
@@ -129,10 +144,10 @@ def generate_learning_path(
         stages.append({"level": lvl, "steps": steps})
 
     # 4. Thứ tự tuyến tính: lexicographical_topological_sort (tie-break theo Concept.order)
-    linear_order = list(nx.lexicographical_topological_sort(
-        subG, 
-        key=lambda c: (subG.nodes[c].get("order", 0), subG.nodes[c].get("name", ""), c)
-    ))
+    linear_order = [cid for cid in nx.lexicographical_topological_sort(
+        ordering_graph,
+        key=lambda c: (ordering_graph.nodes[c].get("order", 0), ordering_graph.nodes[c].get("name", ""), c)
+    ) if cid in subG]
 
     # 5. Dữ liệu đồ thị Cytoscape (chỉ chứa id, name, order, role, outside_document)
     cyto_nodes = []

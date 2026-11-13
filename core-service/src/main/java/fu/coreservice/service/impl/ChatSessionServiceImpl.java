@@ -167,6 +167,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .content(message.getContent()).status(message.getStatus())
                 .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .createdAt(message.getCreatedAt())
+                .clarificationCandidates(fu.coreservice.utils.ClarificationCodec.decode(message.getClarificationOptions()))
                 .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
     }
 
@@ -264,6 +265,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .content(message.getContent()).status(message.getStatus())
                 .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .createdAt(message.getCreatedAt())
+                .clarificationCandidates(fu.coreservice.utils.ClarificationCodec.decode(message.getClarificationOptions()))
                 .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
     }
 
@@ -318,6 +320,17 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         return PageResponse.<R>builder().content(page.getContent().stream().map(mapper).toList())
                 .page(page.getNumber()).size(page.getSize()).totalElements(page.getTotalElements())
                 .totalPages(page.getTotalPages()).first(page.isFirst()).last(page.isLast()).build();
+    }
+
+    @Override
+    @Transactional
+    public void finishClarification(ChatTurn turn, List<fu.coreservice.dto.chat.ClarificationCandidate> candidates, int latencyMs) {
+        ChatMessage question = chatMessageRepository.findById(turn.userMessageId())
+                .filter(item -> item.getSession().getSessionId().equals(turn.sessionId()) && item.getSenderType() == SenderType.USER)
+                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        question.setClarificationOptions(fu.coreservice.utils.ClarificationCodec.encode(candidates));
+        chatMessageRepository.saveAndFlush(question);
+        finishTurn(turn, "", ChatMessageStatus.COMPLETED, null, latencyMs, List.of(), true);
     }
 
     @Override
@@ -380,7 +393,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 MessageCitation citation = MessageCitation.builder()
                         .message(answer)
                         .citationNumber(source.citationNumber())
-                        .citationType(CitationType.ANSWER_CONCEPT)
+                        .citationType(source.citationType())
                         .documentId(source.documentId())
                         .vectorChunkId(source.chunkId())
                         .pageNumber(source.pageNumber())

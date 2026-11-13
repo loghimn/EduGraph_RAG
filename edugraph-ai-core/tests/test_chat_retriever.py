@@ -126,7 +126,7 @@ async def test_retrieval_uses_course_scope_for_graph_vector_and_fulltext(monkeyp
                 chunk_id = "vector"
             else:
                 chunk_id = "fulltext"
-            return _FakeResult([{"id": chunk_id, "text": "Servlet", "index": 0}])
+            return _FakeResult([{"id": chunk_id, "text": "Servlet " + chunk_id, "index": 0}])
 
     session = ScopedSession()
     monkeypatch.setattr(chunk_retriever.neo4j_client, "driver", _FakeDriver(session))

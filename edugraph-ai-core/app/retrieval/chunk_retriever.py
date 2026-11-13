@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from app.config import settings
 from app.core.embedding import embed_model
 from app.db.neo4j_client import neo4j_client
+from app.core.text_utils import normalize_text_unaccent
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ async def retrieve_chunks(
           AND c.course_id IN $authorized_course_ids
           AND ch.course_id IN $authorized_course_ids
         RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
-        ORDER BY ch.index ASC
+        ORDER BY ch.index ASC LIMIT 200
         """
         async with neo4j_client.driver.session() as session:
             res = await session.run(query_graph, course_id=course_id, concept_ids=concept_ids, authorized_course_ids=authorized_course_ids)
@@ -113,6 +114,7 @@ async def retrieve_chunks(
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    ORDER BY score DESC LIMIT 200
     """
 
     # 3. Fulltext search
@@ -122,6 +124,7 @@ async def retrieve_chunks(
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    ORDER BY score DESC LIMIT 200
     """
 
     vector_results = []
@@ -161,25 +164,39 @@ async def retrieve_chunks(
             # Nếu fulltext index chưa sẵn sàng
             pass
 
-    # Gộp vector + fulltext bằng RRF
-    rrf_chunks = compute_rrf(vector_results, fulltext_results, k_rrf=60)
+    return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks)
 
-    # Ghép: Ưu tiên graph_chunks (is_evidence của concepts), sau đó bổ sung từ RRF
-    selected = []
-    seen_ids = set()
 
-    for ch in graph_chunks:
-        if ch["id"] not in seen_ids:
-            seen_ids.add(ch["id"])
-            selected.append(ch)
-            if len(selected) >= max_chunks:
-                break
-
-    for ch in rrf_chunks:
-        if len(selected) >= max_chunks:
-            break
-        if ch["id"] not in seen_ids:
-            seen_ids.add(ch["id"])
-            selected.append(ch)
-
-    return selected
+def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
+    """Fuse all channels before truncation, with lexical relevance and document diversity."""
+    terms = set(re.findall(r"\w+", normalize_text_unaccent(query.casefold())))
+    terms -= {"va", "la", "cua", "cho", "toi", "hay", "cac", "nhung", "mot", "the", "a", "an", "is", "of", "to", "in"}
+    candidates = {}
+    for channel, rows in [("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)]:
+        for rank, row in enumerate(rows, 1):
+            if not row.get("id") or not row.get("text", "").strip():
+                continue
+            if channel == "vector" and row.get("score", 1) < getattr(settings, "CHAT_MIN_VECTOR_SCORE", 0.35):
+                continue
+            item = candidates.setdefault(row["id"], {"chunk": dict(row), "score": 0.0})
+            item["score"] += 60 / (60 + rank)
+            if channel == "vector":
+                item["score"] += max(0, min(1, row.get("score", 0)))
+    for item in candidates.values():
+        words = set(re.findall(r"\w+", normalize_text_unaccent(item["chunk"]["text"].casefold())))
+        item["score"] += 1.5 * len(words & terms) / max(1, len(terms))
+    ordered = sorted(candidates.values(), key=lambda item: (-item["score"], str(item["chunk"]["id"])))
+    selected, deferred, counts, seen_text = [], [], {}, set()
+    for item in ordered:
+        chunk = item["chunk"]
+        text = " ".join(chunk["text"].split()).casefold()
+        if text in seen_text:
+            continue
+        seen_text.add(text)
+        doc = chunk.get("doc_id", chunk["id"])
+        if counts.get(doc, 0) >= 2:
+            deferred.append(chunk)
+        else:
+            selected.append(chunk)
+            counts[doc] = counts.get(doc, 0) + 1
+    return (selected + deferred)[:limit]

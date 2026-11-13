@@ -2,6 +2,8 @@ package fu.coreservice.dto.chat;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -21,9 +23,14 @@ import java.util.List;
 public class ChatRequest {
 
     @NotBlank(message = "Message must not be empty")
+    @Size(max = 12000)
     private String message;
 
-    private List<String> conceptIds;
+    @Size(max = 20)
+    private List<@NotBlank @Size(max = 200) String> conceptIds;
+
+    @Valid
+    private ChatGraphRelationship graphRelationship;
 
     @Positive(message = "Reply message ID must be positive")
     private Long replyToMessageId;
