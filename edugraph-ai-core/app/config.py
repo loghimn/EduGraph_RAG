@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     NEO4J_URI: str = "neo4j://localhost:7687"
     NEO4J_USERNAME: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
+    # Native Windows certificate-chain validation; Python defaults remain unchanged elsewhere.
+    NEO4J_TLS_TRUST_STORE: Literal["auto", "system", "python"] = "auto"
+    NEO4J_CA_CERT_FILE: Path | None = None
 
     # LLM Keys
     OPENAI_API_KEY: str = ""
