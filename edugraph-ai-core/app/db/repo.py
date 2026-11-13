@@ -61,7 +61,8 @@ async def save_ingestion_transaction(
     chunks: List[Dict[str, Any]],
     concepts: List[Dict[str, Any]],
     mentions: List[Dict[str, Any]],
-    affected_concept_ids: List[str] = None
+    affected_concept_ids: List[str] = None,
+    publication: dict | None = None,
 ):
     """
     Ghi MỘT transaction duy nhất bằng execute_write (idempotent).
@@ -189,6 +190,18 @@ async def save_ingestion_transaction(
         })
         
     async def _tx_func(tx):
+        if publication is not None:
+            from fastapi import HTTPException
+            from app.db.queries import publication as pq
+            locked = await (await tx.run(pq.LOCK_COURSE, course_id=course_id,
+                                        owner_id=publication["user_id"])).single()
+            if locked["owner_id"] != publication["user_id"]:
+                raise HTTPException(403, "Permission denied: user is not course owner")
+            if locked["version"] != publication["version"]:
+                raise HTTPException(409, "Published graph changed; regenerate the document draft before approval")
+            await tx.run(pq.DOCUMENT, course_id=course_id, doc_id=doc_id,
+                         owner_id=publication["user_id"], filename=publication["filename"],
+                         review_id=publication["review_id"])
         await tx.run("""MERGE (course:Course {id: $course_id})
             SET course.concept_write_lock = coalesce(course.concept_write_lock, 0) + 1""", course_id=course_id)
 
@@ -254,6 +267,12 @@ async def save_ingestion_transaction(
             """, mentions=param_mentions[i:i+batch_size])
             inserted_mentions += (await res.consume()).counters.relationships_created
             
+        if publication is not None:
+            from app.db.queries import publication as pq
+            await tx.run(pq.CONCEPTS, concepts=param_concepts, owner_id=publication["user_id"])
+            await tx.run(pq.EDGES, course_id=course_id, edges=publication["edges"],
+                         owner_id=publication["user_id"])
+
         # 5. Dọn dẹp Concept mồ côi
         res = await tx.run("""
         OPTIONAL MATCH (orphan:Concept {course_id: $course_id})

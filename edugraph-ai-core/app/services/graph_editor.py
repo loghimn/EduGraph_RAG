@@ -58,6 +58,26 @@ async def review_graph(course_id: str):
         return await session.execute_read(read)
 
 
+def _validate_edge_pair(nodes, existing, pair, old, creating_or_updating):
+    if old and old not in existing:
+        raise HTTPException(404, "Relationship not found")
+    if pair[0] not in nodes or pair[1] not in nodes:
+        raise HTTPException(404, "Both concepts must be active and belong to this course")
+    if pair[0] == pair[1]:
+        raise HTTPException(422, "A concept cannot be its own prerequisite")
+    if creating_or_updating and pair != old and pair in existing and existing[pair] != "REJECTED":
+        raise HTTPException(409, "Relationship already exists")
+
+
+def _validate_edge_topology(existing, pair, old, target_status):
+    if target_status == "REJECTED":
+        return
+    graph = nx.DiGraph((s, t) for (s, t), st in existing.items() if st != "REJECTED" and (s, t) != old)
+    graph.add_edge(*pair)
+    if not nx.is_directed_acyclic_graph(graph):
+        raise HTTPException(409, detail={"message": "Relationship would create a prerequisite cycle", "cycle": nx.find_cycle(graph)})
+
+
 async def mutate_edge(course_id, actor, expected_version, req=None, old=None, status=None, note=""):
     async def write(tx):
         await lock_graph(tx, course_id, expected_version)
@@ -65,21 +85,10 @@ async def mutate_edge(course_id, actor, expected_version, req=None, old=None, st
         nodes = {r["id"] for r in rows}
         rows = await (await graph_repository.run(tx, queries.MUTATE_EDGE_QUERY_4, course_id=course_id)).data()
         existing = {(r["source"], r["target"]): r["status"] for r in rows}
-        if old and old not in existing:
-            raise HTTPException(404, "Relationship not found")
         pair = (req.source_id, req.target_id) if req else old
-        if pair[0] not in nodes or pair[1] not in nodes:
-            raise HTTPException(404, "Both concepts must be active and belong to this course")
-        if pair[0] == pair[1]:
-            raise HTTPException(422, "A concept cannot be its own prerequisite")
-        if req and pair != old and pair in existing and existing[pair] != "REJECTED":
-            raise HTTPException(409, "Relationship already exists")
+        _validate_edge_pair(nodes, existing, pair, old, req is not None)
         target_status = "MANUAL" if req else status
-        graph = nx.DiGraph((s, t) for (s, t), st in existing.items() if st != "REJECTED" and (s, t) != old)
-        if target_status != "REJECTED":
-            graph.add_edge(*pair)
-            if not nx.is_directed_acyclic_graph(graph):
-                raise HTTPException(409, detail={"message": "Relationship would create a prerequisite cycle", "cycle": nx.find_cycle(graph)})
+        _validate_edge_topology(existing, pair, old, target_status)
         if old and pair != old:
             await graph_repository.run(tx, queries.MUTATE_EDGE_QUERY_2,
                 course_id=course_id, source=old[0], target=old[1], actor=actor)

@@ -63,6 +63,10 @@ async def build_candidate_pairs(course_id: str) -> Dict[str, List[Dict[str, Any]
         
     cooccurrences = await get_chunk_cooccurrences(course_id)
     existing_edges = await get_existing_directed_edges(course_id)
+    return candidate_pairs_from_data(concepts, cooccurrences, existing_edges)
+
+
+def candidate_pairs_from_data(concepts, cooccurrences, existing_edges):
     
     # Chu\u1ea9n b\u1ecb numpy array cho embeddings
     concept_ids = [c["id"] for c in concepts]
@@ -101,7 +105,7 @@ async def build_candidate_pairs(course_id: str) -> Dict[str, List[Dict[str, Any]
         
         # Helper \u0111\u1ec3 add candidate
         def add_cand(cid):
-            if cid == tgt_id or cid in added_ids:
+            if cid == tgt_id or cid in added_ids or cid not in concept_map:
                 return
             # Lo\u1ea1i c\u00e1c c\u1ea1nh \u0111\u00e3 c\u00f3 status CONFIRMED, MANUAL, REJECTED t\u1eeb cid -> tgt
             st = tgt_edges.get(cid)

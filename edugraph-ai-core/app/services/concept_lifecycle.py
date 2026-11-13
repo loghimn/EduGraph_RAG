@@ -23,6 +23,19 @@ async def deletion_impact(course_id: str, concept_id: str):
         return record.data()
 
 
+async def _validate_restored_graph(tx, course_id, concept_id):
+    result = await graph_repository.run(tx, queries.CHANGE_STATUS_QUERY_4, course_id=course_id, concept_id=concept_id)
+    graph = nx.DiGraph((row["source"], row["target"]) for row in await result.data())
+    if concept_id not in graph:
+        return
+    component = nx.node_connected_component(graph.to_undirected(), concept_id)
+    try:
+        cycle = nx.find_cycle(graph.subgraph(component))
+    except nx.NetworkXNoCycle:
+        return
+    raise HTTPException(409, detail={"message": "Restoring concept would leave a cycle", "cycle": cycle})
+
+
 async def change_status(course_id, concept_id, actor, expected_version, restore):
     target = "ACTIVE" if restore else "ARCHIVED"
 
@@ -39,16 +52,7 @@ async def change_status(course_id, concept_id, actor, expected_version, restore)
             raise HTTPException(409, detail={"message": "Graph changed; reload deletion impact", "graph_version": record["version"]})
         if restore:
             # Restoring retained edges must not introduce a cycle in the active graph.
-            result = await graph_repository.run(tx, queries.CHANGE_STATUS_QUERY_4, course_id=course_id, concept_id=concept_id)
-            graph = nx.DiGraph((row["source"], row["target"]) for row in await result.data())
-            if concept_id in graph:
-                component = nx.node_connected_component(graph.to_undirected(), concept_id)
-                try:
-                    cycle = nx.find_cycle(graph.subgraph(component))
-                except nx.NetworkXNoCycle:
-                    pass
-                else:
-                    raise HTTPException(409, detail={"message": "Restoring concept would leave a cycle", "cycle": cycle})
+            await _validate_restored_graph(tx, course_id, concept_id)
         query = queries.CHANGE_STATUS_QUERY_1
         query += (" SET n.restored_by = $actor, n.restored_at = timestamp()" if restore
                   else " SET n.archived_by = $actor, n.archived_at = timestamp()")

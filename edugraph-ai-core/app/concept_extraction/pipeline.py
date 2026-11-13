@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Dict, Any, List
 from app.db.repo import get_course_concepts, save_ingestion_transaction
@@ -11,6 +12,7 @@ from app.db.neo4j_client import neo4j_client
 from app.core.document_tasks import gather_owned, to_thread_owned
 
 logger = logging.getLogger(__name__)
+draft_heartbeat = ContextVar("draft_heartbeat", default=None)
 
 # Locks per course_id — đảm bảo an toàn DB khi nhiều document cùng course
 # Không dùng global semaphore vì nó block toàn server (chat, API khác)
@@ -22,6 +24,9 @@ def get_course_lock(course_id: str) -> asyncio.Lock:
     return course_locks[course_id]
 
 async def update_heartbeat(doc_id: str, progress: str = None, current_step: str = None):
+    if draft_heartbeat.get() is not None:
+        draft_heartbeat.get()(progress=progress, current_step=current_step)
+        return
     set_clauses = ["d.updated_at = timestamp()"]
     parameters = {"doc_id": doc_id}
     if progress is not None:
@@ -38,7 +43,7 @@ async def update_heartbeat(doc_id: str, progress: str = None, current_step: str 
     async with neo4j_client.driver.session() as session:
         await session.run(query, **parameters)
 
-async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
+async def process_document_pipeline(doc_id: str, course_id: str, filename: str, *, draft: bool = False):
     """
     Thực thi pipeline trích xuất. Chạy hoàn toàn trong RAM, cuối cùng ghi DB 1 lượt.
     Mỗi document chạy độc lập; course_lock bảo vệ DB khi 2 document cùng course.
@@ -79,6 +84,8 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         f"({time.perf_counter() - t_io:.2f}s)"
     )
     if not chunks:
+        if draft:
+            raise ValueError("Document contains no extractable text")
         logger.warning(f"[{doc_id}] ✖ Tài liệu trống hoặc không hợp lệ — dừng pipeline.")
         return
 
@@ -278,6 +285,9 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         for c in merged_new:
             if "canonical" in c:
                 c["name"] = c["canonical"]
+        if draft:
+            return {"chunks": chunks, "concepts": merged_new, "mentions": mentions,
+                    "all_concepts": db_concepts + merged_new}
         record = await save_ingestion_transaction(
             doc_id=doc_id,
             course_id=course_id,

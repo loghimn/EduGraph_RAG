@@ -167,12 +167,9 @@ async def retrieve_chunks(
     return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks)
 
 
-def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
-    """Fuse all channels before truncation, with lexical relevance and document diversity."""
-    terms = set(re.findall(r"\w+", normalize_text_unaccent(query.casefold())))
-    terms -= {"va", "la", "cua", "cho", "toi", "hay", "cac", "nhung", "mot", "the", "a", "an", "is", "of", "to", "in"}
+def _fuse_chunk_channels(channels):
     candidates = {}
-    for channel, rows in [("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)]:
+    for channel, rows in channels:
         for rank, row in enumerate(rows, 1):
             if not row.get("id") or not row.get("text", "").strip():
                 continue
@@ -182,10 +179,10 @@ def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
             item["score"] += 60 / (60 + rank)
             if channel == "vector":
                 item["score"] += max(0, min(1, row.get("score", 0)))
-    for item in candidates.values():
-        words = set(re.findall(r"\w+", normalize_text_unaccent(item["chunk"]["text"].casefold())))
-        item["score"] += 1.5 * len(words & terms) / max(1, len(terms))
-    ordered = sorted(candidates.values(), key=lambda item: (-item["score"], str(item["chunk"]["id"])))
+    return candidates
+
+
+def _diversify_chunks(ordered, limit):
     selected, deferred, counts, seen_text = [], [], {}, set()
     for item in ordered:
         chunk = item["chunk"]
@@ -200,3 +197,16 @@ def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
             selected.append(chunk)
             counts[doc] = counts.get(doc, 0) + 1
     return (selected + deferred)[:limit]
+
+
+def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
+    """Fuse all channels before truncation, with lexical relevance and document diversity."""
+    terms = set(re.findall(r"\w+", normalize_text_unaccent(query.casefold())))
+    terms -= {"va", "la", "cua", "cho", "toi", "hay", "cac", "nhung", "mot", "the", "a", "an", "is", "of", "to", "in"}
+    candidates = _fuse_chunk_channels([
+        ("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)])
+    for item in candidates.values():
+        words = set(re.findall(r"\w+", normalize_text_unaccent(item["chunk"]["text"].casefold())))
+        item["score"] += 1.5 * len(words & terms) / max(1, len(terms))
+    ordered = sorted(candidates.values(), key=lambda item: (-item["score"], str(item["chunk"]["id"])))
+    return _diversify_chunks(ordered, limit)

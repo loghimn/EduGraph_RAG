@@ -10,6 +10,16 @@ class PathIntent:
     target: str
 
 
+def _remove_request_suffix(target: str) -> str:
+    for suffix in ("bao gom nhung gi", "gom nhung gi", "la gi", "please", "nhe", "voi", "a"):
+        if not target.endswith(suffix):
+            continue
+        prefix = target[:-len(suffix)]
+        if prefix and prefix[-1].isspace():
+            return prefix.rstrip()
+    return target
+
+
 def detect_path_intent(message: str) -> PathIntent | None:
     text = normalize_text_unaccent(message.casefold()).strip()
     if re.match(r"^(?:tai sao\b|vi sao\b|why\b|giai thich\b|explain\b|dinh nghia\b|define\b|what is\b)", text):
@@ -37,9 +47,9 @@ def detect_path_intent(message: str) -> PathIntent | None:
         if not match:
             continue
         target = re.split(r"[?!\n]", match.group(1))[0].strip(' .?!:;"“”‘’\'')
-        target = re.sub(r"\s+(?:la gi|gom nhung gi|bao gom nhung gi|please|nhe|voi|a)$", "", target)
+        target = _remove_request_suffix(target)
         # Knowledge is taken from the learner's saved mastery, not guessed from prose.
-        target = re.split(r"[,;\n]|\s+(?:khi toi|toi da|i already|assuming i)\b", target)[0].strip()
+        target = re.split(r"[,;\n]|\s(?:khi toi|toi da|i already|assuming i)\b", target, maxsplit=1)[0].strip()
         if target and target not in {"la gi", "gi", "what", "hoc", "tap"}:
             return PathIntent(target)
     return None

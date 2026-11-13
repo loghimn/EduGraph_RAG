@@ -40,6 +40,10 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8082 --reload
 python -m pytest -q -m "not integration and not slow"
 ```
 
+## Duyệt và công bố đồ thị tài liệu
+
+Tài liệu môn học được trích xuất thành bản nháp trong `RAW_DATA_DIR/.graph-drafts`, không ghi vào Neo4j trước khi giảng viên duyệt. Java gửi `review_required=false` riêng cho sổ tay cá nhân. Khi triển khai, giữ `RAW_DATA_DIR` trên ổ lưu trữ bền vững, không phục vụ thư mục này qua HTTP và chạy một worker AI core như cơ chế quản lý tác vụ hiện tại. Metadata trạng thái được lưu riêng với payload embedding để polling không phải đọc toàn bộ đồ thị.
+
 ## Chứng chỉ Neo4j trên Windows
 
 Giữ URI `neo4j+s://...` hoặc `bolt+s://...` để xác minh TLS. Mặc định `NEO4J_TLS_TRUST_STORE=auto` dùng kho chứng chỉ native trên Windows; hệ điều hành khác giữ cấu hình mặc định của Neo4j driver. Có thể chọn `system` hoặc `python` khi cần cấu hình tường minh.

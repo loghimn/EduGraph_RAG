@@ -1,6 +1,5 @@
 from app.db.queries import learning_paths as queries
 from app.schemas.learning_paths import LearningPathPlanRequest
-from typing import Optional, Set
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
@@ -10,38 +9,52 @@ from app.retrieval.graph_cache import get_course_graph, GraphConflictError
 from app.retrieval.path_engine import generate_learning_path
 
 
-async def create_learning_path_plan(req: LearningPathPlanRequest):
-    # Core service authenticates the caller and checks ownership/enrollment before
-    # forwarding this internal request. Enrollment is stored in Java's database,
-    # so user_id identifies the learner and does not have to match the graph owner.
-    # 1. Load document status, course version, pending documents and document concepts.
-    q_check = queries.CREATE_LEARNING_PATH_PLAN_QUERY_1
+def _document_scope(req, record):
+    if not req.document_id:
+        return None
+    status = record["doc_status"]
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"Document '{req.document_id}' not found")
+    if status != "DONE":
+        return JSONResponse(status_code=409, content={
+            "status": status, "progress": record.get("doc_progress"),
+            "detail": f"Document is {status}, not DONE"})
+    return set(record["doc_concept_ids"] or [])
+
+
+async def _load_plan_context(req):
     async with graph_repository.session() as session:
-        res = await graph_repository.run(session, q_check, course_id=req.course_id, doc_id=req.document_id)
+        res = await graph_repository.run(session, queries.CREATE_LEARNING_PATH_PLAN_QUERY_1,
+                                         course_id=req.course_id, doc_id=req.document_id)
         rec = await res.single()
         if not rec:
             raise HTTPException(status_code=404, detail="Course not found")
+        return rec, _document_scope(req, rec)
 
-        # Kiểm tra Document nếu có truyền document_id
-        doc_concept_ids: Optional[Set[str]] = None
-        if req.document_id:
-            doc_status = rec["doc_status"]
-            if doc_status is None:
-                raise HTTPException(status_code=404, detail=f"Document '{req.document_id}' not found")
-            if doc_status != "DONE":
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "status": doc_status,
-                        "progress": rec.get("doc_progress"),
-                        "detail": f"Document is {doc_status}, not DONE"
-                    }
-                )
-            doc_concept_ids = set(rec["doc_concept_ids"] or [])
 
-        course_version = rec["course_version"]
-        pending_doc_count = rec["pending_doc_count"]
+def _validate_plan_concepts(graph, req):
+    for ids, kind, status in [(req.goal_concept_ids, "Goal", 404), (req.known_concept_ids, "Known", 400)]:
+        for concept_id in ids or []:
+            if concept_id not in graph:
+                raise HTTPException(status_code=status, detail=f"{kind} concept '{concept_id}' not found in course")
 
+
+def _plan_mode(req):
+    if req.goal_concept_ids:
+        return "goal"
+    if req.document_id:
+        return "document"
+    return "course"
+
+
+async def create_learning_path_plan(req: LearningPathPlanRequest):
+    # Java authenticates ownership/enrollment; user_id identifies the learner,
+    # not necessarily the course owner.
+    rec, doc_concept_ids = await _load_plan_context(req)
+    if isinstance(doc_concept_ids, JSONResponse):
+        return doc_concept_ids
+    course_version = rec["course_version"]
+    pending_doc_count = rec["pending_doc_count"]
     # 2. Nạp đồ thị từ cache (truyền course_version để nạp lại nếu version thay đổi)
     try:
         G, graph_version, evidences, hard_conflicts = await get_course_graph(
@@ -61,23 +74,10 @@ async def create_learning_path_plan(req: LearningPathPlanRequest):
         )
 
     # 3. Xác thực các concept mục tiêu (goal_concept_ids) và đã biết (known_concept_ids)
-    if req.goal_concept_ids:
-        for gid in req.goal_concept_ids:
-            if gid not in G:
-                raise HTTPException(status_code=404, detail=f"Goal concept '{gid}' not found in course")
-
-    if req.known_concept_ids:
-        for kid in req.known_concept_ids:
-            if kid not in G:
-                raise HTTPException(status_code=400, detail=f"Known concept '{kid}' not found in course")
+    _validate_plan_concepts(G, req)
 
     # 4. Xác định chế độ lộ trình: goal | document | course
-    if req.goal_concept_ids:
-        mode = "goal"
-    elif req.document_id:
-        mode = "document"
-    else:
-        mode = "course"
+    mode = _plan_mode(req)
 
     # 5. Kiểm tra cache kết quả tính toán
     cache_params = {

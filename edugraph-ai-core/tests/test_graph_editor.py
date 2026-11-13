@@ -55,7 +55,8 @@ def test_create_edge_increments_version_and_records_actor(monkeypatch):
     assert response.json()['status'] == 'MANUAL'
     assert response.json()['graph_version'] == 9
     kwargs = session.run.call_args_list[3].kwargs
-    assert kwargs['actor'] == '15' and kwargs['note'] == 'Foundation'
+    assert kwargs['actor'] == '15'
+    assert kwargs['note'] == 'Foundation'
     clear.assert_called_once_with('22')
 
 
@@ -166,7 +167,8 @@ async def test_ingestion_rechecks_cycles_after_concurrent_instructor_change(monk
         {'source': 'b', 'target': 'a', 'status': 'AUTO', 'score': 0.7}]), result()])
     await save_prerequisite_edges('22', [], [], [])
     cleanup = session.run.call_args_list[2]
-    assert cleanup.kwargs['source'] == 'b' and cleanup.kwargs['target'] == 'a'
+    assert cleanup.kwargs['source'] == 'b'
+    assert cleanup.kwargs['target'] == 'a'
     assert "status: 'AUTO'" in cleanup.args[0]
 
 

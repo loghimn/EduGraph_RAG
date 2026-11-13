@@ -3,6 +3,7 @@ from app.schemas.ingest import IngestRequest
 import os
 import logging
 import asyncio
+from anyio import Path as AsyncPath
 
 from fastapi import HTTPException, BackgroundTasks, UploadFile
 
@@ -16,6 +17,7 @@ from scripts.run_pipeline import delete_document
 from app.core.document_tasks import document_tasks
 
 logger = logging.getLogger(__name__)
+COURSE_OWNER_REQUIRED = "Permission denied: user is not course owner"
 
 
 async def _background_ingest(doc_id: str, course_id: str, filename: str):
@@ -67,7 +69,10 @@ async def _background_ingest(doc_id: str, course_id: str, filename: str):
         async with graph_repository.session() as session:
             await graph_repository.run(session, query, doc_id=doc_id, course_id=course_id, error=str(e))
 
-async def ingest_document(req: IngestRequest, background_tasks: BackgroundTasks):
+async def ingest_document(req: IngestRequest):
+    if req.review_required:
+        from app.services import document_review
+        return await document_review.start(req)
     # 1. Upsert Course & kiểm tra quyền sở hữu (Java là nguồn sự thật về metadata;
     #    node Course/Document được tạo tại đây vì Python sở hữu graph)
     query_course = queries.INGEST_DOCUMENT_QUERY_1
@@ -75,7 +80,7 @@ async def ingest_document(req: IngestRequest, background_tasks: BackgroundTasks)
         rec = await graph_repository.run(session, query_course, course_id=req.course_id, user_id=req.user_id)
         single_course = await rec.single()
         if single_course["owner_id"] != req.user_id:
-            raise HTTPException(status_code=403, detail="Permission denied: user is not course owner")
+            raise HTTPException(status_code=403, detail=COURSE_OWNER_REQUIRED)
 
     # Register under the same lock used by pause/delete; duplicate requests are
     # acknowledgements of the existing run, never a second background pipeline.
@@ -109,10 +114,21 @@ async def verify_document_owner(course_id: str, user_id: str):
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     if course["owner_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Permission denied: user is not course owner")
+        raise HTTPException(status_code=403, detail=COURSE_OWNER_REQUIRED)
 
 
 async def pause_document_endpoint(doc_id: DocumentId, course_id: str, user_id: str):
+    from app.db import draft_store
+    from app.services.document_review import owned
+    if draft_store.load(doc_id):
+        async with document_tasks.lock(doc_id):
+            draft = owned(doc_id, course_id, user_id)
+            if draft["status"] not in {"PROCESSING", "PAUSED"}:
+                raise HTTPException(409, "Document cannot be paused in its current state")
+            await document_tasks.stop(doc_id)
+            draft.update(status="PAUSED", payload=None)
+            draft_store.save(draft)
+        return {"status": "paused"}
     await verify_document_owner(course_id, user_id)
     async with document_tasks.lock(doc_id):
         async with graph_repository.session() as session:
@@ -133,6 +149,19 @@ async def pause_document_endpoint(doc_id: DocumentId, course_id: str, user_id: s
 
 
 async def delete_document_endpoint(doc_id: str, course_id: str, user_id: str):
+    from app.db import draft_store
+    from app.services.document_review import owned
+    if draft_store.load(doc_id):
+        async with document_tasks.lock(doc_id):
+            draft = owned(doc_id, course_id, user_id)
+            from app.services.document_review import resolve_receipt
+            await resolve_receipt(draft)
+            if draft["status"] == "DONE":
+                raise HTTPException(409, "Published document cannot be cancelled")
+            await document_tasks.stop(doc_id)
+            draft.update(status="CANCELLED", payload=None)
+            draft_store.save(draft)
+        return {"status": "deleted"}
     await verify_document_owner(course_id, user_id)
     async with document_tasks.lock(doc_id):
         async with graph_repository.session() as session:
@@ -153,6 +182,8 @@ async def delete_document_endpoint(doc_id: str, course_id: str, user_id: str):
 
 
 async def recover_processing_documents():
+    from app.db import draft_store
+    draft_store.recover()
     # Single-worker deployment: BackgroundTasks die with the process, so every
     # leftover PROCESSING document at startup is orphaned by definition.
     # No age filter on purpose: heartbeat keeps updated_at fresh, which would
@@ -162,7 +193,7 @@ async def recover_processing_documents():
         await graph_repository.run(session, query)
         logger.info("Startup recovery: marked orphaned PROCESSING documents as FAILED")
 
-async def generate_course_prerequisites(course_id: str, user_id: str=..., background_tasks: BackgroundTasks=BackgroundTasks()):
+async def generate_course_prerequisites(course_id: str, user_id: str, background_tasks: BackgroundTasks):
     # Kiểm tra Course & Quyền sở hữu
     query_course = queries.GENERATE_COURSE_PREREQUISITES_QUERY_1
     async with graph_repository.session() as session:
@@ -171,7 +202,7 @@ async def generate_course_prerequisites(course_id: str, user_id: str=..., backgr
         if not single:
             raise HTTPException(status_code=404, detail="Course not found")
         if single["owner_id"] != user_id:
-            raise HTTPException(status_code=403, detail="Permission denied: user is not course owner")
+            raise HTTPException(status_code=403, detail=COURSE_OWNER_REQUIRED)
             
     async def _bg_prereq():
         try:
@@ -222,9 +253,9 @@ async def upload_document_file(doc_id: DocumentId, file: UploadFile=...):
         if document_tasks.active(doc_id):
             raise HTTPException(status_code=409, detail="Document is currently processing")
         try:
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-            with open(target_path, "wb") as f:
-                f.write(content)
+            destination = AsyncPath(target_path)
+            await destination.parent.mkdir(parents=True, exist_ok=True)
+            await destination.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"Failed to store file: {e}")
 
@@ -232,6 +263,13 @@ async def upload_document_file(doc_id: DocumentId, file: UploadFile=...):
 
 
 async def get_document_status(doc_id: str, course_id: str=...):
+    from app.db import draft_store
+    draft = draft_store.load(doc_id, include_payload=False)
+    if draft and draft["course_id"] == course_id:
+        from app.services.document_review import resolve_receipt
+        async with document_tasks.lock(doc_id):
+            draft = await resolve_receipt(draft_store.load(doc_id, include_payload=False))
+        return {k: draft.get(k) for k in ("document_id", "course_id", "status", "progress", "error", "current_step")}
     """Trả trạng thái xử lý của document trong Neo4j — Java poll để đồng bộ sang Postgres."""
     query = queries.GET_DOCUMENT_STATUS_QUERY_1
     async with graph_repository.session() as session:

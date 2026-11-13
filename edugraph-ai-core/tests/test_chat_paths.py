@@ -27,6 +27,11 @@ from app.services.chat_paths import build_chat_path, resolve_target
     ("What do I need to know before learning Servlet?", "servlet"),
     ("What should I understand before learning Servlet? Use selected sources.", "servlet"),
     ("Prerequisites for Servlet?", "servlet"),
+    ("Learning path for Servlet please", "servlet"),
+    ("Lộ trình học Servlet bao gồm những gì", "servlet"),
+    ("Lộ trình học Servlet gồm những gì", "servlet"),
+    ("Learning path for Servlet    i already know Java", "servlet"),
+    ("Learning path for Servlet\ti already know Java", "servlet"),
 ])
 def test_path_intent_recognizes_goal_and_prerequisite_requests(question, target):
     assert detect_path_intent(question).target == target

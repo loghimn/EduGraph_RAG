@@ -57,6 +57,7 @@ public enum ErrorCode {
     CANCEL_NOT_ALLOWED("DOCUMENT_013", "Only documents in PENDING, PROCESSING, PAUSED, or FAILED state can be cancelled", HttpStatus.CONFLICT),
     PAUSE_NOT_ALLOWED("DOCUMENT_014", "Only documents in PROCESSING state can be paused", HttpStatus.CONFLICT),
     USER_ERROR_NO_RETRY("DOCUMENT_015", "This error type cannot be retried (user-side issue)", HttpStatus.UNPROCESSABLE_ENTITY),
+    DOCUMENT_REVIEW_NOT_READY("DOCUMENT_016", "Document is not awaiting review", HttpStatus.CONFLICT),
 
     // Common
     INVALID_REQUEST("COMMON_001", "Invalid request", HttpStatus.BAD_REQUEST),

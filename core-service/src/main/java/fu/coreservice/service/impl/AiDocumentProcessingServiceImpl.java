@@ -128,6 +128,7 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                     .filename(filename)
                     .restart(restart)
                     .runId(String.valueOf(jobId))
+                    .reviewRequired(!document.getCourse().isNotebook())
                     .build());
                 document.setDocStatus(UploadStatus.PROCESSING);
                 documentRepository.save(document);
@@ -301,13 +302,15 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
     @Scheduled(fixedDelayString = "${ai-core.status-poll-interval-ms:15000}")
     @Override
     public void syncProcessingDocuments() {
-        List<Document> processingDocuments = documentRepository.findByDocStatus(UploadStatus.PROCESSING);
+        List<Document> processingDocuments = new java.util.ArrayList<>(documentRepository.findByDocStatus(UploadStatus.PROCESSING));
+        processingDocuments.addAll(documentRepository.findByDocStatus(UploadStatus.AWAITING_REVIEW));
         for (Document document : processingDocuments) {
             Long documentId = document.getDocumentId();
             try {
                 transactionTemplate.executeWithoutResult(tx -> {
                     Document current = documentRepository.findForUpdate(documentId).orElse(null);
-                    if (current == null || current.getDocStatus() != UploadStatus.PROCESSING) {
+                    if (current == null || (current.getDocStatus() != UploadStatus.PROCESSING
+                            && current.getDocStatus() != UploadStatus.AWAITING_REVIEW)) {
                         return;
                     }
                     AiDocumentStatusResponse status = aiCoreClient.getDocumentStatus(
@@ -328,6 +331,7 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
 
     private void applyStatus(Document document, AiDocumentStatusResponse status) {
         String pythonStatus = status == null || status.getStatus() == null ? "" : status.getStatus();
+        if (document.getDocStatus() == UploadStatus.AWAITING_REVIEW && "AWAITING_REVIEW".equals(pythonStatus)) return;
         JobType currentStep = parseCurrentStep(status, document.getDocumentId());
         Optional<DocumentProcessingJob> latestJob = findLatestJob(document.getDocumentId());
         switch (pythonStatus) {
@@ -342,8 +346,12 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
             // A cancel request may have timed out after Python stopped. Leave
             // Java retryable until DELETE is repeated and Storage is cleaned up.
             case "CANCELLED" -> log.warn("Python cancelled document {}; repeat DELETE to finish Storage cleanup", document.getDocumentId());
-            case "DONE" -> {
-                document.setDocStatus(UploadStatus.COMPLETED);
+            case "DONE", "AWAITING_REVIEW" -> {
+                document.setDocStatus("AWAITING_REVIEW".equals(pythonStatus)
+                        ? UploadStatus.AWAITING_REVIEW : UploadStatus.COMPLETED);
+                if (document.getDocStatus() == UploadStatus.COMPLETED && document.getParseAt() == null) {
+                    document.setParseAt(java.time.LocalDateTime.now());
+                }
                 documentRepository.save(document);
                 latestJob.ifPresent(job -> {
                     job.setJobStatus(JobStatus.DONE);

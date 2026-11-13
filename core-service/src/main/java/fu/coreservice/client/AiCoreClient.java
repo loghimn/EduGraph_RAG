@@ -9,6 +9,7 @@ import fu.coreservice.dto.ai.AiDocumentStatusResponse;
 import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.dto.ai.AiIngestResponse;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
+import fu.coreservice.dto.document.DocumentPublishRequest;
 import fu.coreservice.dto.knowledgegraph.GraphMutationResponse;
 import fu.coreservice.dto.knowledgegraph.GraphSnapshotResponse;
 import fu.coreservice.exception.AiCoreException;
@@ -135,6 +136,30 @@ public class AiCoreClient {
                     .uri("/documents/{documentId}/status?course_id={courseId}", documentId, courseId)
                     .retrieve()
                     .body(AiDocumentStatusResponse.class);
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(documentId), e);
+        }
+    }
+
+    public Map<String, Object> previewDocument(Long documentId, Long courseId, Long userId) {
+        try {
+            return restClient.get().uri("/documents/{id}/review?course_id={course}&user_id={user}",
+                    documentId, courseId, userId).retrieve().body(new ParameterizedTypeReference<>() {});
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(documentId), e);
+        }
+    }
+
+    public void publishDocument(Long documentId, Long courseId, Long userId,
+                                DocumentPublishRequest request) {
+        try {
+            restClient.post().uri("/documents/{id}/publish?course_id={course}&user_id={user}",
+                    documentId, courseId, userId).contentType(MediaType.APPLICATION_JSON)
+                    .body(request).retrieve().toBodilessEntity();
         } catch (RestClientResponseException e) {
             throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (RestClientException e) {

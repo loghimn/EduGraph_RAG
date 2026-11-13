@@ -4,7 +4,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 from app.services import ingest
 from app.core.document_tasks import DocumentTasks, gather_owned, to_thread_owned
@@ -83,16 +83,16 @@ async def test_duplicate_ingest_keeps_one_task(controls, monkeypatch):
 
     work = AsyncMock(side_effect=pipeline)
     monkeypatch.setattr(ingest, "_background_ingest", work)
-    request = ingest.IngestRequest(document_id="100", course_id="c1", user_id="u1")
+    request = ingest.IngestRequest(review_required=False, document_id="100", course_id="c1", user_id="u1")
     try:
-        await ingest.ingest_document(request, BackgroundTasks())
+        await ingest.ingest_document(request)
         await started.wait()
         # Duplicate request only checks the course owner before acknowledging.
         owner = AsyncMock()
         owner.single.return_value = {"owner_id": "u1"}
         session.run.side_effect = None
         session.run.return_value = owner
-        await ingest.ingest_document(request, BackgroundTasks())
+        await ingest.ingest_document(request)
         work.assert_awaited_once()
     finally:
         await manager.shutdown()
@@ -108,15 +108,15 @@ async def test_retry_is_explicit_and_cannot_revive_cancelled(controls, monkeypat
     document.single.return_value = {"status": status}
     work = AsyncMock()
     monkeypatch.setattr(ingest, "_background_ingest", work)
-    request = ingest.IngestRequest(document_id="100", course_id="c1", user_id="u1", restart=restart)
+    request = ingest.IngestRequest(review_required=False, document_id="100", course_id="c1", user_id="u1", restart=restart)
     try:
         if allowed:
-            await ingest.ingest_document(request, BackgroundTasks())
+            await ingest.ingest_document(request)
             await asyncio.sleep(0)
             work.assert_awaited_once()
         else:
             with pytest.raises(HTTPException) as error:
-                await ingest.ingest_document(request, BackgroundTasks())
+                await ingest.ingest_document(request)
             assert error.value.status_code == 409
             work.assert_not_awaited()
     finally:
@@ -142,10 +142,10 @@ async def test_delayed_request_for_paused_run_cannot_restart_it(controls, monkey
     document.single.return_value = {"status": "PAUSED", "run_id": "job-1"}
     work = AsyncMock()
     monkeypatch.setattr(ingest, "_background_ingest", work)
-    request = ingest.IngestRequest(document_id="100", course_id="c1", user_id="u1",
+    request = ingest.IngestRequest(review_required=False, document_id="100", course_id="c1", user_id="u1",
                                    restart=True, run_id="job-1")
     with pytest.raises(HTTPException) as error:
-        await ingest.ingest_document(request, BackgroundTasks())
+        await ingest.ingest_document(request)
     assert error.value.status_code == 409
     work.assert_not_awaited()
 

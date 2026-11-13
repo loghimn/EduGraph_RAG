@@ -48,7 +48,7 @@ def test_ingest_merges_nodes_200(mock_neo4j):
 
     mock_session.run.side_effect = [mock_rec_course, mock_rec_doc, AsyncMock()]
 
-    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "user1"})
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "user1", "review_required": False})
     assert response.status_code == 200
     assert response.json()["status"] == "processing"
     # Query Course phải là MERGE (tạo node nếu chưa có)
@@ -69,7 +69,7 @@ def test_ingest_owner_mismatch_403(mock_neo4j):
     mock_rec_course.single.return_value = {"owner_id": "real_owner"}
     mock_session.run.return_value = mock_rec_course
 
-    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "imposter"})
+    response = client.post("/ingest", headers={"X-Internal-Key": "test-internal-api-key"}, json={"document_id": "1", "course_id": "c1", "user_id": "imposter", "review_required": False})
     assert response.status_code == 403
     assert "Permission denied" in response.json()["detail"]
 

@@ -6,7 +6,8 @@ from app.concept_extraction.pipeline import process_document_pipeline
 
 
 @pytest.mark.asyncio
-async def test_pipeline_embeds_new_concepts_before_cosine_merge():
+@pytest.mark.parametrize("draft", [False, True])
+async def test_pipeline_embeds_new_concepts_before_cosine_merge(draft):
     new_concept = {
         "canonical": "đạo hàm",
         "language": "vi",
@@ -58,8 +59,14 @@ async def test_pipeline_embeds_new_concepts_before_cosine_merge():
         patch("app.concept_extraction.mention_scanner.scan_mentions", return_value=[]),
         patch("app.concept_extraction.pipeline.save_ingestion_transaction", new=AsyncMock(return_value=None)) as save,
     ):
-        result = await process_document_pipeline("doc-1", "course-1", "file.pdf")
+        result = await process_document_pipeline("doc-1", "course-1", "file.pdf", draft=draft)
 
     assert embed_batch.await_args_list[1].args[0] == ["đạo hàm"]
-    assert result["merge_candidates"] == [("đạo hàm", "derivative", "Merged (Cosine)")]
-    assert save.await_args.kwargs["concepts"] == []
+    if draft:
+        save.assert_not_awaited()
+        assert result["concepts"] == []
+        assert result["mentions"][0]["concept_key"] == "derivative"
+        assert all("MATCH" in call.args[0] and "SET " not in call.args[0] for call in session.run.await_args_list)
+    else:
+        assert result["merge_candidates"] == [("đạo hàm", "derivative", "Merged (Cosine)")]
+        assert save.await_args.kwargs["concepts"] == []
