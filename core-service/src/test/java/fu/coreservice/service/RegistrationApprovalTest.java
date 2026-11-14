@@ -1,8 +1,8 @@
 package fu.coreservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import fu.coreservice.config.CustomUserDetailsService;
-import fu.coreservice.config.JwtService;
+import fu.coreservice.security.CustomUserDetailsService;
+import fu.coreservice.security.JwtService;
 import fu.coreservice.dto.auth.*;
 import fu.coreservice.entity.*;
 import fu.coreservice.exception.AppException;

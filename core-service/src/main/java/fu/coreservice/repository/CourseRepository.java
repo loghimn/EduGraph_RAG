@@ -14,6 +14,8 @@ import java.util.List;
 
 @Repository
 public interface CourseRepository extends JpaRepository<Course, Long> {
+    long countByNotebook(boolean notebook);
+
     @Query("""
         SELECT c.courseId FROM Course c
         WHERE c.isPublic = true AND c.notebook = false

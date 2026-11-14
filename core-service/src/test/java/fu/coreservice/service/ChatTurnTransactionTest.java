@@ -75,7 +75,7 @@ class ChatTurnTransactionTest {
                 repositories.getRepository(ChatSessionRepository.class), messages,
                 repositories.getRepository(MessageCitationRepository.class), mock(ActivityAlertService.class)), ChatSessionService.class, manager);
         ai = mock(AiCoreClient.class);
-        service = transactional(new ChatMessageServiceImpl(storage, ai, new ObjectMapper(), mock(ActivityAlertService.class)),
+        service = transactional(new ChatMessageServiceImpl(storage, ai, new ObjectMapper(), mock(ActivityAlertService.class), mock(LearnerMasteryService.class)),
                 ChatMessageService.class, manager);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(EMAIL, null, List.of()));
@@ -145,9 +145,10 @@ class ChatTurnTransactionTest {
     void clarificationReceiptRollsBackIfDeletingPlaceholderFails() {
         var turn = storage.beginGlobalTurn(sessionId, ChatRequest.builder().message("Stack?").build());
         doThrow(new IllegalStateException("delete failed")).when(messages).delete(any(ChatMessage.class));
-        assertThrows(IllegalStateException.class, () -> storage.finishTurn(turn, "", ChatMessageStatus.COMPLETED,
-                null, 100, List.of(), true));
+        assertThrows(IllegalStateException.class, () -> storage.finishClarification(turn,
+                List.of(new fu.coreservice.dto.chat.ClarificationCandidate("a", "A", null, null)), 100));
         assertNull(messages.findById(turn.userMessageId()).orElseThrow().getFinalizedClarificationAnswerId());
+        assertNull(messages.findById(turn.userMessageId()).orElseThrow().getClarificationOptions());
         assertEquals(ChatMessageStatus.STREAMING,
                 messages.findById(turn.assistantMessageId()).orElseThrow().getStatus());
     }
@@ -157,20 +158,17 @@ class ChatTurnTransactionTest {
         ChatSessionService uncertainStorage = mock(ChatSessionService.class, delegatesTo(storage));
         AtomicBoolean lostAcknowledgment = new AtomicBoolean();
         doAnswer(call -> {
-            storage.finishTurn(call.getArgument(0), call.getArgument(1), call.getArgument(2),
-                    call.getArgument(3), call.getArgument(4), call.getArgument(5), call.getArgument(6));
-            if (Boolean.TRUE.equals(call.getArgument(6)) && lostAcknowledgment.compareAndSet(false, true)) {
-                throw new IllegalStateException("Commit acknowledgment lost");
-            }
+            storage.finishClarification(call.getArgument(0), call.getArgument(1), call.getArgument(2));
+            if (lostAcknowledgment.compareAndSet(false, true)) throw new IllegalStateException("Commit acknowledgment lost");
             return null;
-        }).when(uncertainStorage).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+        }).when(uncertainStorage).finishClarification(any(), any(), anyInt());
         ClientHttpResponse response = mock(ClientHttpResponse.class);
         when(ai.openChatStream(any())).thenReturn(response);
         when(response.getBody()).thenReturn(new ByteArrayInputStream((
                 "event: clarify\ndata: {\"candidates\":[{\"id\":\"a\",\"name\":\"A\"}]}\n\n"
                         + "event: done\ndata: {}\n\n").getBytes(StandardCharsets.UTF_8)));
         ChatMessageService uncertainService = transactional(
-                new ChatMessageServiceImpl(uncertainStorage, ai, new ObjectMapper(), mock(ActivityAlertService.class)), ChatMessageService.class,
+                new ChatMessageServiceImpl(uncertainStorage, ai, new ObjectMapper(), mock(ActivityAlertService.class), mock(LearnerMasteryService.class)), ChatMessageService.class,
                 new JpaTransactionManager(factory));
         var callback = uncertainService.sendMessage(null, sessionId, ChatRequest.builder().message("Stack?").build());
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -184,7 +182,9 @@ class ChatTurnTransactionTest {
         var question = messages.findBySenderType(SenderType.USER).getFirst();
         assertNotNull(question.getFinalizedClarificationAnswerId());
         assertEquals(1, storage.getGlobalMessages(sessionId, 0, 20).getTotalElements());
-        verify(uncertainStorage, times(2)).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+        verify(uncertainStorage).finishClarification(any(), any(), anyInt());
+        verify(uncertainStorage).finishTurn(any(), any(), any(), any(), anyInt(), any(), anyBoolean());
+        assertTrue(question.getClarificationOptions().contains("\"id\":\"a\""));
         verify(response).close();
     }
 

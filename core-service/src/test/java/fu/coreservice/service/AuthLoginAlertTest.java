@@ -1,7 +1,9 @@
 package fu.coreservice.service;
 
+import fu.coreservice.service.impl.ActivityAlertServiceImpl;
+
 import fu.coreservice.config.ActivityAlertProperties;
-import fu.coreservice.config.JwtService;
+import fu.coreservice.security.JwtService;
 import fu.coreservice.dto.auth.LoginRequest;
 import fu.coreservice.entity.User;
 import fu.coreservice.repository.UserRepository;
@@ -26,7 +28,7 @@ class AuthLoginAlertTest {
         var authentication = mock(AuthenticationManager.class);
         when(authentication.authenticate(any())).thenThrow(new BadCredentialsException("private detail"));
         var sink = mock(ActivityLogService.class);
-        var alerts = new ActivityAlertService(sink, users, new ActivityAlertProperties());
+        var alerts = new ActivityAlertServiceImpl(sink, users, new ActivityAlertProperties());
         var auth = new AuthServiceImpl(users, mock(UserSessionRepository.class), mock(PasswordEncoder.class),
                 mock(JwtService.class), authentication, mock(UserDetailsService.class), alerts);
         var request = new LoginRequest("student@test.local", "private-password");

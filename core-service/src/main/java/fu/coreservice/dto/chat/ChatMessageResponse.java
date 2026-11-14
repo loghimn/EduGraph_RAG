@@ -19,4 +19,5 @@ public class ChatMessageResponse {
     private Integer latencyMs;
     private LocalDateTime createdAt;
     private List<ChatCitationResponse> citations;
+    private List<ClarificationCandidate> clarificationCandidates;
 }

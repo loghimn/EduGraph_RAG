@@ -2,7 +2,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.api.internal_auth import verify_internal_key
+from app.core.internal_auth import verify_internal_key
 from app.config import Settings, settings
 
 

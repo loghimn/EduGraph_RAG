@@ -1,5 +1,7 @@
 package fu.coreservice.service.impl;
 
+import fu.coreservice.security.CourseAccessPolicy;
+
 import fu.coreservice.service.ActivityAlertService;
 
 import fu.coreservice.client.AiCoreClient;
@@ -64,9 +66,7 @@ public class DocumentServiceImpl implements DocumentService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
-        if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireOwner(course, currentUser);
 
         if (file == null || file.isEmpty()) {
             throw new AppException(ErrorCode.FILE_EMPTY);
@@ -127,6 +127,14 @@ public class DocumentServiceImpl implements DocumentService {
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, "uploadAt"));
 
+        // Unpublished document metadata belongs to the course owner as well.
+        if (!course.getUser().getUserId().equals(getCurrentUser().getUserId())) {
+            if (status != null && status != UploadStatus.COMPLETED) {
+                throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
+            }
+            status = UploadStatus.COMPLETED;
+        }
+
         Page<Document> documentPage;
 
         if (status != null) {
@@ -165,6 +173,11 @@ public class DocumentServiceImpl implements DocumentService {
 
         Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId,courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        if (document.getDocStatus() != UploadStatus.COMPLETED
+                && !course.getUser().getUserId().equals(getCurrentUser().getUserId())) {
+            throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
+        }
 
         return mapToResponse(document);
     }
@@ -236,9 +249,7 @@ public class DocumentServiceImpl implements DocumentService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
-        if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireOwner(course, currentUser);
 
     }
 
@@ -401,7 +412,7 @@ public class DocumentServiceImpl implements DocumentService {
         Document document = getDocumentForUpdate(courseId, documentId);
 
         UploadStatus status = document.getDocStatus();
-        if (status != UploadStatus.FAILED && status != UploadStatus.PAUSED) {
+        if (status != UploadStatus.FAILED && status != UploadStatus.PAUSED && status != UploadStatus.AWAITING_REVIEW) {
             throw new AppException(ErrorCode.RETRY_NOT_ALLOWED);
         }
 

@@ -105,7 +105,7 @@ async def test_error_keeps_old_data():
         chunks = [{"id": "c1", "doc_id": "d1", "course_id": "__test__", "index": 0, "page": 1, "text": "A", "embedding": [0.1]*1024, "embedding_model": "test", "heading_path": "H1", "char_start": 0, "char_end": 1, "text_unaccent": "A"}]
         await save_ingestion_transaction("d1", "__test__", chunks, [], [])
         
-        from app.api.ingest import _background_ingest
+        from app.services.ingest import _background_ingest
         with patch("app.concept_extraction.pipeline.save_ingestion_transaction", side_effect=Exception("mock error")):
             try:
                 async with neo4j_client.driver.session() as session:

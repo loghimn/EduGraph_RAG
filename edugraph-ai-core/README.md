@@ -24,3 +24,28 @@ LLM chính gọi trực tiếp OpenAI API. Trong file `.env` cục bộ, cấu h
 
 ## Windows Troubleshooting
 If you see encoding issues on Windows, set the environment variable: set PYTHONUTF8=1 or $env:PYTHONUTF8=1 in PowerShell.
+
+## Chạy và kiểm tra AI core
+
+Trong thư mục `edugraph-ai-core`, sau khi kích hoạt virtualenv:
+
+```powershell
+python scripts/check_neo4j_conn.py
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8082 --reload
+```
+
+`GET /health` kiểm tra kết nối Neo4j và trạng thái embedding. Chạy test không phụ thuộc dịch vụ/model thật bằng:
+
+```powershell
+python -m pytest -q -m "not integration and not slow"
+```
+
+## Duyệt và công bố đồ thị tài liệu
+
+Tài liệu môn học được trích xuất thành bản nháp trong `RAW_DATA_DIR/.graph-drafts`, không ghi vào Neo4j trước khi giảng viên duyệt. Java gửi `review_required=false` riêng cho sổ tay cá nhân. Khi triển khai, giữ `RAW_DATA_DIR` trên ổ lưu trữ bền vững, không phục vụ thư mục này qua HTTP và chạy một worker AI core như cơ chế quản lý tác vụ hiện tại. Metadata trạng thái được lưu riêng với payload embedding để polling không phải đọc toàn bộ đồ thị.
+
+## Chứng chỉ Neo4j trên Windows
+
+Giữ URI `neo4j+s://...` hoặc `bolt+s://...` để xác minh TLS. Mặc định `NEO4J_TLS_TRUST_STORE=auto` dùng kho chứng chỉ native trên Windows; hệ điều hành khác giữ cấu hình mặc định của Neo4j driver. Có thể chọn `system` hoặc `python` khi cần cấu hình tường minh.
+
+Nếu dùng CA riêng đã được quản trị viên xác nhận, đặt `NEO4J_CA_CERT_FILE` trỏ tới file PEM. Đường dẫn tương đối được tính từ thư mục `edugraph-ai-core`. Client vẫn kiểm tra hostname và chứng chỉ; không cần đổi sang chế độ tin mọi chứng chỉ.

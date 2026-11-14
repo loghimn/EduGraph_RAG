@@ -16,4 +16,6 @@ public class ChatCitationResponse {
     private Integer pageNumber;
     private Integer chunkIndex;
     private String snippetText;
+    private String fileName;
+    private Long courseId;
 }

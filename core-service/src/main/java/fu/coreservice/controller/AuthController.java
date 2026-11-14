@@ -1,5 +1,7 @@
 package fu.coreservice.controller;
 
+import fu.coreservice.security.OAuth2LoginSuccessHandler;
+
 import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;

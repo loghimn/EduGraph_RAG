@@ -16,6 +16,8 @@ import java.time.LocalDateTime;
 
 @Repository
 public interface ActivityLogRepository extends JpaRepository<ActivityLog, Long> {
+    long countByStatusAndCreatedAtGreaterThanEqual(ActivityLogStatus status, LocalDateTime since);
+
     @EntityGraph(attributePaths = "actor")
     @Query("""
             SELECT l FROM ActivityLog l LEFT JOIN l.actor a

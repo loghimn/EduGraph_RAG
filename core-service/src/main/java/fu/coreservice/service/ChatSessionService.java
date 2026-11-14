@@ -24,4 +24,5 @@ public interface ChatSessionService {
     Map<String, String> getChatCourseNames(List<String> courseIds);
     void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
                     int latencyMs, List<ChatSource> sources, boolean clarification);
+    void finishClarification(ChatTurn turn, List<fu.coreservice.dto.chat.ClarificationCandidate> candidates, int latencyMs);
 }

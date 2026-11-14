@@ -28,6 +28,10 @@ public enum ErrorCode {
     USERNAME_ALREADY_EXISTS("USER_002", "Username already exists", HttpStatus.CONFLICT),
     USER_NOT_FOUND("USER_003", "User not found", HttpStatus.NOT_FOUND),
 
+    ADMIN_USER_CHANGED("USER_005", "This account changed. Reload its details before saving.", HttpStatus.CONFLICT),
+    ADMIN_SELF_ACCESS_CHANGE("USER_006", "You cannot change your own email, role or account access here.", HttpStatus.CONFLICT),
+    ADMIN_USER_IDENTIFIER_CONFLICT("USER_007", "Email or username already exists. Reload and try again.", HttpStatus.CONFLICT),
+
     // Course Enrollment
     ALREADY_ENROLLED_COURSE("COURSE_ENROLL_001", "You are already enrolled in this course", HttpStatus.CONFLICT),
     NOT_ENROLLED_COURSE("COURSE_ENROLL_002", "You are not enrolled in this course", HttpStatus.NOT_FOUND),
@@ -53,6 +57,7 @@ public enum ErrorCode {
     CANCEL_NOT_ALLOWED("DOCUMENT_013", "Only documents in PENDING, PROCESSING, PAUSED, or FAILED state can be cancelled", HttpStatus.CONFLICT),
     PAUSE_NOT_ALLOWED("DOCUMENT_014", "Only documents in PROCESSING state can be paused", HttpStatus.CONFLICT),
     USER_ERROR_NO_RETRY("DOCUMENT_015", "This error type cannot be retried (user-side issue)", HttpStatus.UNPROCESSABLE_ENTITY),
+    DOCUMENT_REVIEW_NOT_READY("DOCUMENT_016", "Document is not awaiting review", HttpStatus.CONFLICT),
 
     // Common
     INVALID_REQUEST("COMMON_001", "Invalid request", HttpStatus.BAD_REQUEST),
@@ -77,6 +82,7 @@ public enum ErrorCode {
     CHAT_REPLY_NOT_READY("CHAT_003", "Only completed non-empty messages can be replied to", HttpStatus.BAD_REQUEST),
     CHAT_MESSAGE_NOT_FOUND("CHAT_004", "Chat message not found in this session", HttpStatus.NOT_FOUND),
     CHAT_FEEDBACK_NOT_ALLOWED("CHAT_005", "Only completed BOT messages can receive feedback", HttpStatus.BAD_REQUEST),
+    CHAT_SESSION_BUSY("CHAT_006", "Stop the current answer before deleting this conversation", HttpStatus.CONFLICT),
 
 
     // Activity logs

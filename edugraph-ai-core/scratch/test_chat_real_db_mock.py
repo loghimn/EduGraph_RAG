@@ -3,7 +3,7 @@ import json
 from unittest.mock import patch
 
 from app.db.neo4j_client import neo4j_client
-from app.api.chat import chat_explain_stream_generator
+from app.services.chat import chat_explain_stream_generator
 
 COURSE_ID = "demo-sql"
 
@@ -53,7 +53,7 @@ async def run_mock_chat_test():
                     await asyncio.sleep(0.01)
                     yield token
 
-            with patch("app.api.chat.llm_client.generate_stream", side_effect=fake_stream):
+            with patch("app.services.chat.llm_client.generate_stream", side_effect=fake_stream):
                 generator = chat_explain_stream_generator(
                     course_id=COURSE_ID,
                     message=q["message"],

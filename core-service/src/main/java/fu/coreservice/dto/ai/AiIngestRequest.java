@@ -34,4 +34,8 @@ public class AiIngestRequest {
 
     @JsonProperty("run_id")
     private String runId;
+
+    @JsonProperty("review_required")
+    @Builder.Default
+    private boolean reviewRequired = true;
 }

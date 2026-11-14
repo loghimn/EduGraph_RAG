@@ -1,5 +1,11 @@
 package fu.coreservice.config;
 
+import fu.coreservice.security.OAuth2LoginFailureHandler;
+
+import fu.coreservice.security.OAuth2LoginSuccessHandler;
+
+import fu.coreservice.security.JwtAuthenticationFilter;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.service.ActivityAlertService;

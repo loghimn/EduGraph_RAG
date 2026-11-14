@@ -48,7 +48,7 @@ public class Document {
     @Column(name = "upload_at", updatable = false)
     private LocalDateTime uploadAt;
 
-    @Column(name = "parse_at", updatable = false)
+    @Column(name = "parse_at")
     private LocalDateTime parseAt;
 
 }

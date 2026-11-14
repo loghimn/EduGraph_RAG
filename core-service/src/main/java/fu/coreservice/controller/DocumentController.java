@@ -5,8 +5,12 @@ import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.document.DocumentDownloadResponse;
 import fu.coreservice.dto.document.DocumentProcessingResponse;
 import fu.coreservice.dto.document.DocumentResponse;
+import fu.coreservice.dto.document.DocumentPublishRequest;
 import fu.coreservice.entity.UploadStatus;
 import fu.coreservice.service.DocumentService;
+import fu.coreservice.service.DocumentReviewService;
+import jakarta.validation.Valid;
+import java.util.Map;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -34,6 +38,22 @@ import org.springframework.web.multipart.MultipartFile;
 public class DocumentController {
 
     private final DocumentService documentService;
+    private final DocumentReviewService documentReviewService;
+
+    @GetMapping("/{courseId}/documents/{documentId}/review")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ApiResponse<Map<String, Object>> previewGraphDraft(@PathVariable Long courseId, @PathVariable Long documentId) {
+        return ApiResponse.<Map<String, Object>>builder().success(true)
+                .data(documentReviewService.preview(courseId, documentId)).build();
+    }
+
+    @PostMapping("/{courseId}/documents/{documentId}/publish")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ApiResponse<Void> publishGraphDraft(@PathVariable Long courseId, @PathVariable Long documentId,
+            @Valid @RequestBody DocumentPublishRequest request) {
+        documentReviewService.publish(courseId, documentId, request);
+        return ApiResponse.<Void>builder().success(true).message("Document graph published").build();
+    }
 
     @Operation(
             summary = "Upload course document",

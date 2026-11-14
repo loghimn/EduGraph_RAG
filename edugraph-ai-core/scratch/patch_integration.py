@@ -7,7 +7,7 @@ text = text.replace('await neo4j_client.connect()\n    try:', 'await neo4j_clien
 text = text.replace('"name": "C1"', '"name": "C1", "canonical": "C1"')
 text = text.replace('"name": "C2"', '"name": "C2", "canonical": "C2"')
 
-text = text.replace('from app.concept_extraction.pipeline import process_document_pipeline', 'from app.api.ingest import _background_ingest')
+text = text.replace('from app.concept_extraction.pipeline import process_document_pipeline', 'from app.services.ingest import _background_ingest')
 text = text.replace('await process_document_pipeline("d1", "__test__", "mock.pdf")', 'await _background_ingest("d1", "__test__", "mock.pdf", "u1")')
 
 text = text.replace("MERGE (c1:Concept {course_key: '__test__|C1'}) MERGE (c2:Concept {course_key: '__test__|C2'})", "MERGE (c1:Concept {course_key: '__test__|C1'}) SET c1.id='C1', c1.key='C1', c1.embedding=[0.1] MERGE (c2:Concept {course_key: '__test__|C2'}) SET c2.id='C2', c2.key='C2', c2.embedding=[0.1]")

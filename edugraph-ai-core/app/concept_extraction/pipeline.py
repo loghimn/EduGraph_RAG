@@ -1,8 +1,8 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Dict, Any, List
+from contextvars import ContextVar
+from typing import Dict
 from app.db.repo import get_course_concepts, save_ingestion_transaction
 from app.core.embedding import embed_model
 from app.core.text_utils import normalize_text_unaccent
@@ -11,6 +11,7 @@ from app.db.neo4j_client import neo4j_client
 from app.core.document_tasks import gather_owned, to_thread_owned
 
 logger = logging.getLogger(__name__)
+draft_heartbeat = ContextVar("draft_heartbeat", default=None)
 
 # Locks per course_id — đảm bảo an toàn DB khi nhiều document cùng course
 # Không dùng global semaphore vì nó block toàn server (chat, API khác)
@@ -22,6 +23,9 @@ def get_course_lock(course_id: str) -> asyncio.Lock:
     return course_locks[course_id]
 
 async def update_heartbeat(doc_id: str, progress: str = None, current_step: str = None):
+    if draft_heartbeat.get() is not None:
+        draft_heartbeat.get()(progress=progress, current_step=current_step)
+        return
     set_clauses = ["d.updated_at = timestamp()"]
     parameters = {"doc_id": doc_id}
     if progress is not None:
@@ -38,63 +42,21 @@ async def update_heartbeat(doc_id: str, progress: str = None, current_step: str 
     async with neo4j_client.driver.session() as session:
         await session.run(query, **parameters)
 
-async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
-    """
-    Thực thi pipeline trích xuất. Chạy hoàn toàn trong RAM, cuối cùng ghi DB 1 lượt.
-    Mỗi document chạy độc lập; course_lock bảo vệ DB khi 2 document cùng course.
-    Trả về dict gồm valid_concepts và new_concept_ids (dùng cho incremental prereq).
-    """
-    t_start = time.perf_counter()
-    course_lock = get_course_lock(course_id)
-    logger.info(f"[{doc_id}] ▶ BẮT ĐẦU trích xuất (course={course_id}, file={filename})")
-
-    # Lazy imports để tránh circular import
+def _prepare_text(doc_id, course_id, filename):
     from app.ingestion.loaders import load_document
     from app.ingestion.cleaner import clean_text, remove_repeating_headers_footers
     from app.ingestion.chunker import chunk_document
+    pages = load_document(doc_id, filename)
+    cleaned = [(page, clean_text(text)) for page, text in pages]
+    chunks = chunk_document(remove_repeating_headers_footers(cleaned), doc_id, course_id)
+    for chunk in chunks:
+        chunk["text_unaccent"] = normalize_text_unaccent(chunk["text"])
+    return chunks, len(pages)
+
+
+async def _filter_document_concepts(doc_id, chunks, embeddings):
     from app.concept_extraction.candidates import extract_candidates
     from app.concept_extraction.llm_filter import process_chunk_group
-    from app.concept_extraction.mention_scanner import scan_mentions
-    from app.concept_extraction.merger import merge_concepts
-
-    await update_heartbeat(doc_id, current_step="EXTRACTING_TEXT_AND_CHUNKING")
-
-    # I/O & Text processing trong to_thread
-    def _cpu_bound_text_prep():
-        pages = load_document(doc_id, filename)
-        cleaned_pages = [(p, clean_text(text)) for p, text in pages]
-        cleaned_pages = remove_repeating_headers_footers(cleaned_pages)
-        chunks = chunk_document(cleaned_pages, doc_id, course_id)
-
-        # Tính unaccent cho fulltext
-        for c in chunks:
-            c["text_unaccent"] = normalize_text_unaccent(c["text"])
-
-        return chunks, len(pages)
-
-    t_io = time.perf_counter()
-    chunks, num_pages = await to_thread_owned(_cpu_bound_text_prep)
-    logger.info(
-        f"[{doc_id}] ✔ Load/Clean/Chunk xong: {num_pages} trang → {len(chunks)} chunks "
-        f"({time.perf_counter() - t_io:.2f}s)"
-    )
-    if not chunks:
-        logger.warning(f"[{doc_id}] ✖ Tài liệu trống hoặc không hợp lệ — dừng pipeline.")
-        return
-
-    await update_heartbeat(doc_id, current_step="GENERATING_CHUNK_EMBEDDINGS")
-
-    # Tính Embedding cho các chunk (chạy 1 lần, dùng cho cả KeyBERT và DB)
-    chunk_texts = [c["text"] for c in chunks]
-    t_embed = time.perf_counter()
-    embeddings = await embed_model.embed_batch(chunk_texts)
-    logger.info(
-        f"[{doc_id}] ✔ Embed {len(chunk_texts)} chunks xong ({time.perf_counter() - t_embed:.2f}s)"
-    )
-    for i, c in enumerate(chunks):
-        c["embedding"] = embeddings[i]
-        c["embedding_model"] = "BAAI/bge-m3"
-
     await update_heartbeat(doc_id, current_step="EXTRACTING_KEYWORDS")
 
     # KeyBERT Candidates (to_thread)
@@ -125,11 +87,9 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         return res
 
     tasks = []
-    chunk_groups = []
     for i in range(0, len(chunks), settings.CHUNKS_PER_LLM_CALL):
         group_chunks = chunks[i:i+settings.CHUNKS_PER_LLM_CALL]
         group_cands = candidates[i:i+settings.CHUNKS_PER_LLM_CALL]
-        chunk_groups.append(group_chunks)
         tasks.append(process_and_report(i, group_chunks, group_cands))
 
     t_llm = time.perf_counter()
@@ -158,6 +118,155 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         f"còn lại: {len(new_concepts)}"
     )
 
+    return new_concepts, dropped_concepts, total_dropped_no_ev, total_returned
+
+
+async def _previous_affected_ids(doc_id, course_id):
+    # Capture concepts previously mentioned by this document before its old
+    # chunks/mentions are replaced, so prerequisite inference can re-judge
+    # concepts that lose evidence during re-ingestion.
+    async with neo4j_client.driver.session() as session:
+        _res = await session.run(
+            "MATCH (ch:Chunk {doc_id: $doc_id})-[:MENTIONS]->(c:Concept {course_id: $course_id}) "
+            "RETURN DISTINCT c.id AS id",
+            doc_id=doc_id, course_id=course_id)
+        old_mentioned_concept_ids = {r["id"] for r in await _res.data() if r.get("id")}
+        _pres = await session.run(
+            "MATCH (d:Document {id: $doc_id, course_id: $course_id}) "
+            "RETURN d.pending_affected_concept_ids AS ids",
+            doc_id=doc_id, course_id=course_id)
+        _prow = await _pres.single()
+        if _prow and _prow.get("ids"):
+            old_mentioned_concept_ids |= set(_prow["ids"])
+
+    return old_mentioned_concept_ids
+
+
+async def _embed_concepts(doc_id, new_concepts):
+    # Embed concepts before merging so cross-language cosine matching can run.
+    concept_texts_to_embed = []
+    for nc in new_concepts:
+        aliases = nc.get("aliases", [])[:settings.CONCEPT_EMBED_MAX_ALIASES]
+        emb_str = nc["canonical"]
+        if aliases:
+            emb_str += "; " + "; ".join(aliases)
+        concept_texts_to_embed.append(emb_str)
+
+    if concept_texts_to_embed:
+        c_embs = await embed_model.embed_batch(concept_texts_to_embed)
+        for i, nc in enumerate(new_concepts):
+            nc["embedding"] = c_embs[i]
+            nc["embedding_model"] = "BAAI/bge-m3"
+        logger.info(
+            f"[{doc_id}] ✔ Embed {len(concept_texts_to_embed)} concept mới xong"
+        )
+
+
+
+async def _collect_mentions(doc_id, chunks, new_concepts, db_concepts, merged_new):
+    from app.concept_extraction.mention_scanner import scan_mentions
+    # Sinh Mentions: từ LLM và từ Scanner
+    mentions = []
+
+    # MENTIONS (a): từ LLM
+    # Duyệt danh sách new_concepts ban đầu (kể cả những cái bị gộp)
+    for nc in new_concepts:
+        # Nếu bị gộp, nó sẽ có merge_target_id, nhưng ta map ngược bằng key
+        mentions.append({
+            "chunk_id": nc["evidence_chunk_id"],
+            "concept_key": nc.get("key"),
+            "is_evidence": True,
+            "start": nc["evidence_start"],
+            "end": nc["evidence_end"]
+        })
+
+    # MENTIONS (b): từ Scanner
+    all_concepts = db_concepts + merged_new
+    final_mentions = {}
+    scanned_mentions = await to_thread_owned(scan_mentions, chunks, all_concepts)
+    logger.info(
+        f"[{doc_id}] ✔ Scan mentions: {len(scanned_mentions)} từ scanner + {len(mentions)} từ LLM"
+    )
+    for m in scanned_mentions:
+        pair = (m['chunk_id'], m['concept_key'])
+        final_mentions[pair] = m
+    for m in mentions:
+        pair = (m['chunk_id'], m['concept_key'])
+        if pair in final_mentions:
+            final_mentions[pair]['is_evidence'] = True
+            final_mentions[pair]['start'] = m['start']
+            final_mentions[pair]['end'] = m['end']
+        else:
+            m['count'] = 1
+            final_mentions[pair] = m
+    mentions = list(final_mentions.values())
+
+    return mentions
+
+
+def _changed_concept_ids(old_mentioned_concept_ids, mentions, db_concepts, merged_new):
+    # Concepts whose mentions/evidence changed in this ingestion. Existing
+    # targets that gained new evidence must be re-judged even when the new
+    # concept is absent from their capped candidate list.
+    mentioned_keys = {m.get("concept_key") for m in mentions if m.get("concept_key")}
+    changed_concept_ids = set(old_mentioned_concept_ids)
+    for c in db_concepts:
+        if c.get("key") in mentioned_keys and c.get("id"):
+            changed_concept_ids.add(c["id"])
+    for nc in merged_new:
+        if nc.get("merge_target_id"):
+            changed_concept_ids.add(nc["merge_target_id"])
+
+    return changed_concept_ids
+
+
+def _set_canonical_names(concepts):
+    for concept in concepts:
+        if "canonical" in concept:
+            concept["name"] = concept["canonical"]
+
+
+async def process_document_pipeline(doc_id: str, course_id: str, filename: str, *, draft: bool = False):
+    """
+    Thực thi pipeline trích xuất. Chạy hoàn toàn trong RAM, cuối cùng ghi DB 1 lượt.
+    Mỗi document chạy độc lập; course_lock bảo vệ DB khi 2 document cùng course.
+    Trả về dict gồm valid_concepts và new_concept_ids (dùng cho incremental prereq).
+    """
+    t_start = time.perf_counter()
+    course_lock = get_course_lock(course_id)
+    logger.info(f"[{doc_id}] ▶ BẮT ĐẦU trích xuất (course={course_id}, file={filename})")
+
+    from app.concept_extraction.merger import merge_concepts
+
+    await update_heartbeat(doc_id, current_step="EXTRACTING_TEXT_AND_CHUNKING")
+
+    t_io = time.perf_counter()
+    chunks, num_pages = await to_thread_owned(_prepare_text, doc_id, course_id, filename)
+    logger.info(
+        f"[{doc_id}] ✔ Load/Clean/Chunk xong: {num_pages} trang → {len(chunks)} chunks "
+        f"({time.perf_counter() - t_io:.2f}s)"
+    )
+    if not chunks:
+        if draft:
+            raise ValueError("Document contains no extractable text")
+        logger.warning(f"[{doc_id}] ✖ Tài liệu trống hoặc không hợp lệ — dừng pipeline.")
+        return
+
+    await update_heartbeat(doc_id, current_step="GENERATING_CHUNK_EMBEDDINGS")
+
+    # Tính Embedding cho các chunk (chạy 1 lần, dùng cho cả KeyBERT và DB)
+    chunk_texts = [c["text"] for c in chunks]
+    t_embed = time.perf_counter()
+    embeddings = await embed_model.embed_batch(chunk_texts)
+    logger.info(
+        f"[{doc_id}] ✔ Embed {len(chunk_texts)} chunks xong ({time.perf_counter() - t_embed:.2f}s)"
+    )
+    for i, c in enumerate(chunks):
+        c["embedding"] = embeddings[i]
+        c["embedding_model"] = "BAAI/bge-m3"
+
+    new_concepts, dropped_concepts, total_dropped_no_ev, total_returned = await _filter_document_concepts(doc_id, chunks, embeddings)
+
     await update_heartbeat(doc_id, current_step="MERGING_CONCEPTS")
 
     # Locking khi đụng đến DB (chỉ lock phần đọc-ghi DB, không lock toàn pipeline)
@@ -168,40 +277,9 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             f"[{doc_id}] ✔ Đã nạp {len(db_concepts)} concept hiện có của course để merge"
         )
 
-        # Capture concepts previously mentioned by this document before its old
-        # chunks/mentions are replaced, so prerequisite inference can re-judge
-        # concepts that lose evidence during re-ingestion.
-        async with neo4j_client.driver.session() as session:
-            _res = await session.run(
-                "MATCH (ch:Chunk {doc_id: $doc_id})-[:MENTIONS]->(c:Concept {course_id: $course_id}) "
-                "RETURN DISTINCT c.id AS id",
-                doc_id=doc_id, course_id=course_id)
-            old_mentioned_concept_ids = {r["id"] for r in await _res.data() if r.get("id")}
-            _pres = await session.run(
-                "MATCH (d:Document {id: $doc_id, course_id: $course_id}) "
-                "RETURN d.pending_affected_concept_ids AS ids",
-                doc_id=doc_id, course_id=course_id)
-            _prow = await _pres.single()
-            if _prow and _prow.get("ids"):
-                old_mentioned_concept_ids |= set(_prow["ids"])
+        old_mentioned_concept_ids = await _previous_affected_ids(doc_id, course_id)
 
-        # Embed concepts before merging so cross-language cosine matching can run.
-        concept_texts_to_embed = []
-        for nc in new_concepts:
-            aliases = nc.get("aliases", [])[:settings.CONCEPT_EMBED_MAX_ALIASES]
-            emb_str = nc["canonical"]
-            if aliases:
-                emb_str += "; " + "; ".join(aliases)
-            concept_texts_to_embed.append(emb_str)
-
-        if concept_texts_to_embed:
-            c_embs = await embed_model.embed_batch(concept_texts_to_embed)
-            for i, nc in enumerate(new_concepts):
-                nc["embedding"] = c_embs[i]
-                nc["embedding_model"] = "BAAI/bge-m3"
-            logger.info(
-                f"[{doc_id}] ✔ Embed {len(concept_texts_to_embed)} concept mới xong"
-            )
+        await _embed_concepts(doc_id, new_concepts)
 
         # Gộp và xử lý
         t_merge = time.perf_counter()
@@ -218,53 +296,9 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
             seq = 1
             nc["order"] = seq * 100000 + fc_index
 
-        # Sinh Mentions: từ LLM và từ Scanner
-        mentions = []
+        mentions = await _collect_mentions(doc_id, chunks, new_concepts, db_concepts, merged_new)
 
-        # MENTIONS (a): từ LLM
-        # Duyệt danh sách new_concepts ban đầu (kể cả những cái bị gộp)
-        for nc in new_concepts:
-            # Nếu bị gộp, nó sẽ có merge_target_id, nhưng ta map ngược bằng key
-            mentions.append({
-                "chunk_id": nc["evidence_chunk_id"],
-                "concept_key": nc.get("key"),
-                "is_evidence": True,
-                "start": nc["evidence_start"],
-                "end": nc["evidence_end"]
-            })
-
-        # MENTIONS (b): từ Scanner
-        all_concepts = db_concepts + merged_new
-        final_mentions = {}
-        scanned_mentions = await to_thread_owned(scan_mentions, chunks, all_concepts)
-        logger.info(
-            f"[{doc_id}] ✔ Scan mentions: {len(scanned_mentions)} từ scanner + {len(mentions)} từ LLM"
-        )
-        for m in scanned_mentions:
-            pair = (m['chunk_id'], m['concept_key'])
-            final_mentions[pair] = m
-        for m in mentions:
-            pair = (m['chunk_id'], m['concept_key'])
-            if pair in final_mentions:
-                final_mentions[pair]['is_evidence'] = True
-                final_mentions[pair]['start'] = m['start']
-                final_mentions[pair]['end'] = m['end']
-            else:
-                m['count'] = 1
-                final_mentions[pair] = m
-        mentions = list(final_mentions.values())
-
-        # Concepts whose mentions/evidence changed in this ingestion. Existing
-        # targets that gained new evidence must be re-judged even when the new
-        # concept is absent from their capped candidate list.
-        mentioned_keys = {m.get("concept_key") for m in mentions if m.get("concept_key")}
-        changed_concept_ids = set(old_mentioned_concept_ids)
-        for c in db_concepts:
-            if c.get("key") in mentioned_keys and c.get("id"):
-                changed_concept_ids.add(c["id"])
-        for nc in merged_new:
-            if nc.get("merge_target_id"):
-                changed_concept_ids.add(nc["merge_target_id"])
+        changed_concept_ids = _changed_concept_ids(old_mentioned_concept_ids, mentions, db_concepts, merged_new)
 
         await update_heartbeat(doc_id)
 
@@ -275,9 +309,10 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str):
         )
         await update_heartbeat(doc_id, current_step="SAVING_GRAPH")
         t_save = time.perf_counter()
-        for c in merged_new:
-            if "canonical" in c:
-                c["name"] = c["canonical"]
+        _set_canonical_names(merged_new)
+        if draft:
+            return {"chunks": chunks, "concepts": merged_new, "mentions": mentions,
+                    "all_concepts": db_concepts + merged_new}
         record = await save_ingestion_transaction(
             doc_id=doc_id,
             course_id=course_id,

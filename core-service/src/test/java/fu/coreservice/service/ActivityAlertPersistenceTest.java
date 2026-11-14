@@ -1,5 +1,9 @@
 package fu.coreservice.service;
 
+import fu.coreservice.listener.PrivilegedChangeListener;
+
+import fu.coreservice.service.impl.ActivityAlertServiceImpl;
+
 import fu.coreservice.config.ActivityAlertProperties;
 import fu.coreservice.entity.*;
 import fu.coreservice.repository.ActivityLogRepository;
@@ -44,7 +48,7 @@ class ActivityAlertPersistenceTest {
         factory = config.buildSessionFactory();
         var repositories = new JpaRepositoryFactory(SharedEntityManagerCreator.createSharedEntityManager(factory));
         var manager = new JpaTransactionManager(factory);
-        alerts = new ActivityAlertService(new ActivityLogServiceImpl(repositories.getRepository(ActivityLogRepository.class),
+        alerts = new ActivityAlertServiceImpl(new ActivityLogServiceImpl(repositories.getRepository(ActivityLogRepository.class),
                 repositories.getRepository(UserRepository.class), manager),
                 repositories.getRepository(UserRepository.class), new ActivityAlertProperties());
         beans.registerSingleton("activityAlertService", alerts);

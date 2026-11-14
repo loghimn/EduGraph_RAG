@@ -31,6 +31,9 @@ public class AiChatRequest {
     @JsonProperty("course_names")
     private Map<String, String> courseNames;
 
+    @JsonProperty("known_concepts_by_course")
+    private Map<String, List<String>> knownConceptsByCourse;
+
     @JsonProperty("user_id")
     private String userId;
 
@@ -38,6 +41,9 @@ public class AiChatRequest {
 
     @JsonProperty("concept_ids")
     private List<String> conceptIds;
+
+    @JsonProperty("graph_relationship")
+    private Map<String, String> graphRelationship;
 
     private List<AiChatHistoryMessage> history;
 

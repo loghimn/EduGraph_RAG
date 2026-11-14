@@ -48,6 +48,37 @@ class AiCoreClientTest {
         client = new AiCoreClient(properties, builder, new ObjectMapper(), false);
     }
 
+    @Test
+    void editorForwardsVersionActorAndTypedEdgeBody() {
+        server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph/edges/a/b?expected_version=8"))
+                .andExpect(method(HttpMethod.PUT)).andExpect(header("X-Actor-Id", "15"))
+                .andExpect(header("X-Internal-Key", "test-key"))
+                .andExpect(content().json("{\"source_id\":\"b\",\"target_id\":\"a\",\"note\":\"Correct direction\"}"))
+                .andRespond(withSuccess("{\"graph_version\":9}", MediaType.APPLICATION_JSON));
+        assertThat(client.mutateGraph(7L, 15L, GraphEditorAction.EDGE_UPDATE, "a", "b", 8L,
+                Map.of("source_id", "b", "target_id", "a", "note", "Correct direction")).graphVersion())
+                .isEqualTo(9L);
+        server.verify();
+    }
+
+    @Test
+    void graphReviewRoundTripsThePythonContractIncludingEvidenceAndReviewMetadata() throws Exception {
+        String payload = """
+                {"graph_version":8,"nodes":[{"id":"a","name":"Class","aliases":["Lop"],
+                 "language":"vi","review_status":"CONFIRMED","origin":"MANUAL"}],
+                 "edges":[{"source":"a","target":"b","status":"CONFIRMED","score":0.75,
+                 "evidence":"Foundation","evidence_chunk_id":null,"note":"Reviewed",
+                 "reviewed_by":"15","reviewed_at":1730000000000}]}
+                """;
+        server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph/review"))
+                .andExpect(method(HttpMethod.GET)).andExpect(header("X-Actor-Id", "15"))
+                .andRespond(withSuccess(payload, MediaType.APPLICATION_JSON));
+        var snapshot = client.getGraphReview(7L, 15L);
+        ObjectMapper mapper = new ObjectMapper();
+        assertThat(mapper.readTree(mapper.writeValueAsBytes(snapshot))).isEqualTo(mapper.readTree(payload));
+        server.verify();
+    }
+
 
     @Test
     void pauseDocument_realTransportSupportsPatch() throws Exception {

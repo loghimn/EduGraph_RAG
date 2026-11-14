@@ -22,7 +22,7 @@ async def test_api_course_version():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # 1. POST /courses/__test__/documents (Ingest) -> calls process_document_pipeline & run_prerequisite_pipeline
         with patch("app.concept_extraction.pipeline.process_document_pipeline", new=AsyncMock(return_value={"stats": {}})) as mock_extract:
-            with patch("app.api.ingest.run_prerequisite_pipeline", new=AsyncMock()) as mock_prereq:
+            with patch("app.services.ingest.run_prerequisite_pipeline", new=AsyncMock()) as mock_prereq:
                 from app.db.repo import save_ingestion_transaction
                 await save_ingestion_transaction("d1", "__test__", [], [], [])
                 

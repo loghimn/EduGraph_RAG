@@ -10,6 +10,7 @@ import fu.coreservice.dto.chat.ChatRequest;
 import fu.coreservice.entity.ChatMessageStatus;
 import fu.coreservice.service.ChatMessageService;
 import fu.coreservice.service.ChatSessionService;
+import fu.coreservice.service.LearnerMasteryService;
 import fu.coreservice.dto.chat.ChatSource;
 import fu.coreservice.dto.chat.ChatTurn;
 import fu.coreservice.utils.BoundedSseReader;
@@ -32,6 +33,9 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
+import fu.coreservice.dto.chat.ClarificationCandidate;
+import fu.coreservice.entity.CitationType;
 
 @Service
 @RequiredArgsConstructor
@@ -48,6 +52,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     private final ObjectMapper objectMapper;
 
     private final ActivityAlertService alerts;
+    private final LearnerMasteryService masteryService;
 
     @Override
     @Transactional
@@ -64,9 +69,12 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                 .courseId(courseId == null ? null : courseId.toString())
                 .authorizedCourseIds(authorizedCourseIds)
                 .courseNames(chatSessionService.getChatCourseNames(authorizedCourseIds))
+                .knownConceptsByCourse(courseId == null ? Map.of() : Map.of(courseId.toString(), masteryService.knownConcepts(courseId)))
                 .userId(turn.userId().toString()).message(request.getMessage())
                 .history(turn.history())
                 .replyContext(turn.replyContext())
+                .graphRelationship(request.getGraphRelationship() == null ? null : Map.of(
+                        "source_id", request.getGraphRelationship().sourceId(), "target_id", request.getGraphRelationship().targetId()))
                 .conceptIds(request.getConceptIds() == null ? null : new ArrayList<>(request.getConceptIds())).build();
         StreamExecution execution = new StreamExecution(turn);
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
@@ -242,8 +250,9 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
         private void persist() {
             int latency = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - started) / 1_000_000);
-            chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
-                    latency, List.copyOf(state.sources), state.clarification);
+            if (state.clarification) chatSessionService.finishClarification(turn, state.candidates, latency);
+            else chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
+                    latency, List.copyOf(state.sources), false);
             finalized = true; // Set only after the transactional call has committed.
             if (state.status == ChatMessageStatus.FAILED) {
                 alerts.repeatedSystemFailure("CHAT_GENERATE", "CHAT_MESSAGE");
@@ -275,10 +284,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
         switch (event) {
             case "token" -> {
-                if (state.failed || state.clarification || !json.path("token").isTextual()) {
+                if (state.failed || state.clarification || state.finalAnswer || !json.path("token").isTextual()) {
                     throw new IOException("Invalid token event");
                 }
                 state.content.append(json.get("token").textValue());
+            }
+            case "answer" -> {
+                if (state.failed || state.clarification || state.finalAnswer || state.sourcesReceived || !json.path("content").isTextual()) {
+                    throw new IOException("Invalid final answer");
+                }
+                state.content.setLength(0);
+                state.content.append(json.get("content").textValue());
+                state.finalAnswer = true;
             }
             case "sources" -> {
                 if (state.failed || state.clarification || state.sourcesReceived || !json.isArray()) {
@@ -303,7 +320,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                     }
                     sources.add(new ChatSource(citation.intValue(), documentId, chunkId,
                             optionalInteger(source, "page"), optionalInteger(source, "index"),
-                            source.path("text").asText("")));
+                            source.path("text").asText(""), CitationType.valueOf(source.path("citation_type").asText("ANSWER_CONCEPT"))));
                 }
                 state.sources = sources;
                 state.sourcesReceived = true;
@@ -313,6 +330,15 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                         || !json.path("candidates").isArray()) {
                     throw new IOException("Invalid clarification event");
                 }
+                if (json.path("candidates").isEmpty() || json.path("candidates").size() > 50) throw new IOException("Invalid candidate count");
+                List<ClarificationCandidate> candidates = new ArrayList<>();
+                for (JsonNode candidate : json.path("candidates")) {
+                    String id = candidate.path("id").asText("");
+                    String name = candidate.path("name").asText("");
+                    if (id.isBlank() || id.length() > 200 || name.isBlank() || name.length() > 255) throw new IOException("Invalid candidate");
+                    candidates.add(new ClarificationCandidate(id, name, candidate.path("course_id").asText(null), candidate.path("course_name").asText(null)));
+                }
+                state.candidates = List.copyOf(candidates);
                 state.clarification = true;
             }
             case "error" -> {
@@ -375,5 +401,7 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         boolean failed;
         boolean clarification;
         boolean sourcesReceived;
+        boolean finalAnswer;
+        List<ClarificationCandidate> candidates = List.of();
     }
 }

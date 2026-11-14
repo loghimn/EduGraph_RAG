@@ -90,6 +90,33 @@ class AiDocumentProcessingServiceTest {
         }).when(transactionTemplate).executeWithoutResult(any());
     }
 
+    @Test
+    void extractedCourseDocumentAwaitsReviewRatherThanBeingPublished() {
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(Optional.of(job));
+        AiDocumentStatusResponse status = new AiDocumentStatusResponse();
+        status.setStatus("AWAITING_REVIEW");
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenReturn(status);
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.AWAITING_REVIEW, document.getDocStatus());
+        assertEquals(JobStatus.DONE, job.getJobStatus());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void onlyPersonalNotebooksBypassDocumentApproval(boolean notebook) {
+        document.setDocStatus(UploadStatus.PENDING);
+        document.getCourse().setNotebook(notebook);
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))
+                .thenReturn(Optional.of(job));
+        service.triggerPipelineAsync(1L, 10L, 4L, "oop.txt", MediaType.TEXT_PLAIN,
+                new ByteArrayResource("Class and Object".getBytes()));
+        ArgumentCaptor<AiIngestRequest> request = ArgumentCaptor.forClass(AiIngestRequest.class);
+        verify(aiCoreClient, timeout(2000)).triggerIngest(request.capture());
+        assertEquals(!notebook, request.getValue().isReviewRequired());
+    }
+
     /** Chạy inline các transaction callback (markProcessing/markFailed dùng TransactionTemplate). */
     private void stubInlineTransactions() {
         doAnswer(invocation -> {

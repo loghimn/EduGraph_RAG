@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     NEO4J_URI: str = "neo4j://localhost:7687"
     NEO4J_USERNAME: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
+    # Native Windows certificate-chain validation; Python defaults remain unchanged elsewhere.
+    NEO4J_TLS_TRUST_STORE: Literal["auto", "system", "python"] = "auto"
+    NEO4J_CA_CERT_FILE: Path | None = None
 
     # LLM Keys
     OPENAI_API_KEY: str = ""
@@ -66,6 +69,7 @@ class Settings(BaseSettings):
     VECTOR_OVERFETCH_STEP: int = 4
     VECTOR_OVERFETCH_MAX: int = 2000
     CHAT_MAX_CHUNKS: int = 6
+    CHAT_MIN_VECTOR_SCORE: float = Field(default=0.35, ge=0, le=1)
     MIN_CHARS_PER_PAGE: int = 100
     ALIAS_FUZZY_MIN_LEN: int = 4
 

@@ -1,3 +1,4 @@
+from app.db import graph_repository
 import pytest
 import time
 import json
@@ -140,6 +141,8 @@ def test_mode_goal_assume_known_prerequisites():
     )
     assert set(res_assume_false["linear_order"]) == {"C1", "C2", "C4", "C5"}
     assert "C3" not in res_assume_false["linear_order"]
+    assert res_assume_false["linear_order"] == ["C1", "C2", "C4", "C5"]
+    assert [[step["concept_id"] for step in stage["steps"]] for stage in res_assume_false["stages"]] == [["C1"], ["C2"], ["C4"], ["C5"]]
 
 # 6. Test goal nằm trong known -> Lộ trình rỗng kèm thông báo
 def test_goal_already_in_known_empty_path():
@@ -166,7 +169,7 @@ def test_subgraph_cycle_detection_conflict_error():
     assert len(exc_info.value.conflicts) > 0
 
 # 8. Internal authentication and missing course checks.
-@patch("app.api.learning_paths.neo4j_client")
+@patch("app.db.graph_repository.neo4j_client")
 def test_api_internal_auth_and_missing_course(mock_neo4j):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -187,9 +190,9 @@ def test_api_internal_auth_and_missing_course(mock_neo4j):
     resp = client.post("/learning-paths/plan", headers={"X-Internal-Key": "test-internal-api-key"}, json={"course_id": "c_missing", "user_id": "u1"})
     assert resp.status_code == 404
 
-@patch("app.api.learning_paths.cache")
-@patch("app.api.learning_paths.get_course_graph")
-@patch("app.api.learning_paths.neo4j_client")
+@patch("app.services.learning_paths.cache")
+@patch("app.services.learning_paths.get_course_graph")
+@patch("app.db.graph_repository.neo4j_client")
 def test_api_accepts_learner_authorized_by_core_service(mock_neo4j, mock_get_graph, mock_cache):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -212,8 +215,8 @@ def test_api_accepts_learner_authorized_by_core_service(mock_neo4j, mock_get_gra
     mock_session.run.assert_awaited_once()
 
 # 9. Test API: Goal không tồn tại trong course -> 404 kèm ID
-@patch("app.api.learning_paths.get_course_graph")
-@patch("app.api.learning_paths.neo4j_client")
+@patch("app.services.learning_paths.get_course_graph")
+@patch("app.db.graph_repository.neo4j_client")
 def test_api_goal_not_found_404(mock_neo4j, mock_get_graph):
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
@@ -240,8 +243,8 @@ def test_api_goal_not_found_404(mock_neo4j, mock_get_graph):
     assert "UNKNOWN_ID" in resp.json()["detail"]
 
 # 10. Test API: Có tài liệu PROCESSING -> warning pending_documents
-@patch("app.api.learning_paths.get_course_graph")
-@patch("app.api.learning_paths.neo4j_client")
+@patch("app.services.learning_paths.get_course_graph")
+@patch("app.db.graph_repository.neo4j_client")
 def test_api_pending_documents_warning(mock_neo4j, mock_get_graph):
     clear_course_graph_cache()
     mock_session = AsyncMock()

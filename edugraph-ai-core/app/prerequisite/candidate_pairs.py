@@ -1,3 +1,4 @@
+from itertools import chain
 import numpy as np
 from typing import List, Dict, Any, Tuple, Set
 from app.db.neo4j_client import neo4j_client
@@ -63,9 +64,27 @@ async def build_candidate_pairs(course_id: str) -> Dict[str, List[Dict[str, Any]
         
     cooccurrences = await get_chunk_cooccurrences(course_id)
     existing_edges = await get_existing_directed_edges(course_id)
+    return candidate_pairs_from_data(concepts, cooccurrences, existing_edges)
+
+
+def _select_target_candidates(target_id, candidate_ids, concept_map, existing_statuses):
+    selected = []
+    added = set()
+    for candidate_id in candidate_ids:
+        if len(selected) >= settings.PREREQ_CANDIDATES:
+            break
+        if candidate_id == target_id or candidate_id in added or candidate_id not in concept_map:
+            continue
+        if existing_statuses.get(candidate_id) in {"CONFIRMED", "MANUAL", "REJECTED"}:
+            continue
+        selected.append(concept_map[candidate_id])
+        added.add(candidate_id)
+    return selected
+
+
+def candidate_pairs_from_data(concepts, cooccurrences, existing_edges):
     
     # Chu\u1ea9n b\u1ecb numpy array cho embeddings
-    concept_ids = [c["id"] for c in concepts]
     concept_map = {c["id"]: c for c in concepts}
     
     # L\u1ecdc nh\u1eefng concept kh\u00f4ng c\u00f3 embedding h\u1ee3p l\u1ec7 (n\u1ebfu c\u00f3)
@@ -96,32 +115,8 @@ async def build_candidate_pairs(course_id: str) -> Dict[str, List[Dict[str, Any]
         
         cosine_cands = [valid_ids[idx] for idx in top_indices if valid_ids[idx] != tgt_id]
         
-        final_cands = []
-        added_ids = set()
-        
-        # Helper \u0111\u1ec3 add candidate
-        def add_cand(cid):
-            if cid == tgt_id or cid in added_ids:
-                return
-            # Lo\u1ea1i c\u00e1c c\u1ea1nh \u0111\u00e3 c\u00f3 status CONFIRMED, MANUAL, REJECTED t\u1eeb cid -> tgt
-            st = tgt_edges.get(cid)
-            if st in ["CONFIRMED", "MANUAL", "REJECTED"]:
-                return
-            final_cands.append(concept_map[cid])
-            added_ids.add(cid)
-            
-        # 1. \u01af\u01b0 ti\u00ean c\u00f9ng chunk
-        for cid in tgt_cooc:
-            if len(final_cands) >= settings.PREREQ_CANDIDATES:
-                break
-            add_cand(cid)
-            
-        # 2. B\u1ed5 sung t\u1eeb cosine
-        for cid in cosine_cands:
-            if len(final_cands) >= settings.PREREQ_CANDIDATES:
-                break
-            add_cand(cid)
-            
+        final_cands = _select_target_candidates(tgt_id, chain(tgt_cooc, cosine_cands), concept_map, tgt_edges)
+
         candidates_dict[tgt_id] = final_cands
         
     return candidates_dict

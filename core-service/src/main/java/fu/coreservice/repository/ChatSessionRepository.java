@@ -14,6 +14,20 @@ import org.springframework.data.domain.Pageable;
 
 @Repository
 public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> {
+    @org.springframework.data.jpa.repository.Query("""
+            select s from ChatSession s left join s.course c where s.learner = :user
+            and ((:courseId is null and c.courseId is null) or c.courseId = :courseId)
+            and (lower(coalesce(s.title, '')) like :pattern escape '!'
+              or exists (select m.messageId from ChatMessage m where m.session = s and lower(m.content) like :pattern escape '!'))
+            """)
+    Page<ChatSession> searchOwned(@org.springframework.data.repository.query.Param("user") User user,
+                                 @org.springframework.data.repository.query.Param("courseId") Long courseId,
+                                 @org.springframework.data.repository.query.Param("pattern") String pattern, Pageable pageable);
+
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select s from ChatSession s where s.sessionId = :id and s.learner = :user")
+    Optional<ChatSession> findOwnedForUpdate(@org.springframework.data.repository.query.Param("id") Long id,
+                                           @org.springframework.data.repository.query.Param("user") User user);
     Page<ChatSession> findByLearnerAndCourse(User learner, Course course, Pageable pageable);
     Page<ChatSession> findByLearnerAndCourseIsNull(User learner, Pageable pageable);
     Page<ChatSession> findByLearnerAndCourseIsPublic(User learner, Boolean isPublic, Pageable pageable);

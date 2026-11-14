@@ -42,14 +42,14 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
     # 2. Lấy cạnh PREREQUISITE_OF không phải REJECTED
     q_edges = """
     MATCH (src:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(tgt:Concept {course_id: $course_id})
-    WHERE coalesce(src.status, 'ACTIVE') = 'ACTIVE' AND coalesce(tgt.status, 'ACTIVE') = 'ACTIVE' AND r.status <> 'REJECTED'
-    RETURN src.id AS src_id, tgt.id AS tgt_id, r.status AS status, 
+    WHERE coalesce(src.status, 'ACTIVE') = 'ACTIVE' AND coalesce(tgt.status, 'ACTIVE') = 'ACTIVE' AND coalesce(r.status, 'AUTO') <> 'REJECTED'
+    RETURN src.id AS src_id, tgt.id AS tgt_id, coalesce(r.status, 'AUTO') AS status,
            coalesce(r.score, 0.0) AS score, coalesce(r.evidence, '') AS evidence
     """
     # 3. Lấy evidence chunk có (Document.seq, Chunk.index) nhỏ nhất
     q_evidences = """
     MATCH (c:Concept {course_id: $course_id})<-[m:MENTIONS {is_evidence: true}]-(ch:Chunk)
-    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE'
+    WHERE coalesce(c.status, 'ACTIVE') = 'ACTIVE' AND ch.course_id = $course_id
     OPTIONAL MATCH (d:Document {id: ch.doc_id, course_id: $course_id})
     RETURN c.id AS concept_id, ch.id AS chunk_id, ch.page AS page, 
            coalesce(d.seq, 0) AS doc_seq, coalesce(ch.index, 0) AS chunk_index,

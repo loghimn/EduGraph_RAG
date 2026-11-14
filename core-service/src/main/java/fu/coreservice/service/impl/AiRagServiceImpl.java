@@ -1,38 +1,32 @@
 package fu.coreservice.service.impl;
 
-import fu.coreservice.service.LearnerMasteryService;
-
-import fu.coreservice.service.AiRagService;
-import fu.coreservice.service.ActivityAlertService;
-
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
-import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.knowledgegraph.ConceptDraftRequest;
 import fu.coreservice.dto.learningpath.LearningPathPlanRequest;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.Document;
 import fu.coreservice.entity.User;
-import fu.coreservice.exception.AiCoreException;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
-import fu.coreservice.repository.CourseRepository;
 import fu.coreservice.repository.CourseEnrollmentRepository;
+import fu.coreservice.repository.CourseRepository;
 import fu.coreservice.repository.DocumentRepository;
 import fu.coreservice.repository.UserRepository;
+import fu.coreservice.security.CourseAccessPolicy;
+import fu.coreservice.service.ActivityAlertService;
+import fu.coreservice.service.AiRagService;
+import fu.coreservice.service.LearnerMasteryService;
 import fu.coreservice.utils.SecurityUtils;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Service;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
 
 /**
  * Knowledge graph and learning-path operations via the internal AI core.
@@ -52,35 +46,19 @@ public class AiRagServiceImpl implements AiRagService {
     private final ActivityAlertService alerts;
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraph(Long courseId) {
+    public Map<String, Object> getKnowledgeGraph(Long courseId) {
         requireCourseAccess(courseId);
-        try {
-            Map<String, Object> graph = aiCoreClient.getKnowledgeGraph(courseId);
-            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
-                    .success(true)
-                    .message("Knowledge graph retrieved successfully")
-                    .data(graph)
-                    .build());
-        } catch (AiCoreException e) {
-            return relayAiCoreError(e, courseId, "Knowledge graph retrieval failed");
-        }
+        Map<String, Object> graph = aiCoreClient.getKnowledgeGraph(courseId);
+        return graph;
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getKnowledgeGraphConcept(Long courseId,
+    public Map<String, Object> getKnowledgeGraphConcept(Long courseId,
                                                                                      String conceptId) {
         requireCourseAccess(courseId);
-        try {
-            Map<String, Object> concept = aiCoreClient.getKnowledgeGraphConcept(courseId, conceptId);
-            enrichSourceFileNames(concept, courseId);
-            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
-                    .success(true)
-                    .message("Knowledge graph concept retrieved successfully")
-                    .data(concept)
-                    .build());
-        } catch (AiCoreException e) {
-            return relayAiCoreError(e, courseId, "Knowledge graph concept retrieval failed");
-        }
+        Map<String, Object> concept = aiCoreClient.getKnowledgeGraphConcept(courseId, conceptId);
+        enrichSourceFileNames(concept, courseId);
+        return concept;
     }
 
     private void enrichSourceFileNames(Map<String, Object> concept, Long courseId) {
@@ -141,7 +119,7 @@ public class AiRagServiceImpl implements AiRagService {
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> planLearningPath(Long courseId,
+    public Map<String, Object> planLearningPath(Long courseId,
                                                                              LearningPathPlanRequest request) {
         User learner = requireCourseAccess(courseId);
 
@@ -155,56 +133,30 @@ public class AiRagServiceImpl implements AiRagService {
                 .assumeKnownPrerequisites(request.getAssumeKnownPrerequisites() == null || request.getAssumeKnownPrerequisites())
                 .build();
 
-        try {
-            Map<String, Object> plan = aiCoreClient.createLearningPathPlan(aiRequest);
-            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
-                    .success(true)
-                    .message("Learning path planned successfully")
-                    .data(plan)
-                    .build());
-        } catch (AiCoreException e) {
-            observeAiFailure(e);
-            // Relay status + payload gốc từ Python (403/404/409 có payload quan trọng cho frontend)
-            HttpStatus status = HttpStatus.resolve(e.getHttpStatus());
-            if (status == null || status.is2xxSuccessful()) {
-                status = HttpStatus.BAD_GATEWAY;
-            }
-            log.warn("Learning path plan failed. courseId={}, status={}", courseId, e.getHttpStatus());
-            return ResponseEntity.status(status).body(ApiResponse.<Map<String, Object>>builder()
-                    .success(false)
-                    .errorCode("AI_CORE_" + e.getHttpStatus())
-                    .message(e.getDetail())
-                    .data(e.getBody().isEmpty() ? null : e.getBody())
-                    .build());
-        }
+        Map<String, Object> plan = aiCoreClient.createLearningPathPlan(aiRequest);
+        return plan;
     }
 
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> createConceptDraft(
+    public Map<String, Object> createConceptDraft(
             Long courseId, ConceptDraftRequest request) {
         return writeConceptDraft(courseId, null, Map.of(
                 "name", request.getName(), "aliases", request.getAliases(), "language", request.getLanguage()));
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> publishConceptDraft(
+    public Map<String, Object> publishConceptDraft(
             Long courseId, String draftId) {
         return writeConceptDraft(courseId, draftId, Map.of());
     }
 
-    private ResponseEntity<ApiResponse<Map<String, Object>>> writeConceptDraft(
+    private Map<String, Object> writeConceptDraft(
             Long courseId, String draftId, Map<String, Object> request) {
         User user = requireCourseOwner(courseId);
-        try {
-            Map<String, Object> result = aiCoreClient.postConceptDraft(
-                    courseId, user.getUserId(), draftId, request);
-            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
-                    .success(true).message(draftId == null ? "Concept embedding ready" : "Concept added to graph")
-                    .data(result).build());
-        } catch (AiCoreException e) {
-            return relayAiCoreError(e, courseId, "Concept creation failed");
-        }
+        Map<String, Object> result = aiCoreClient.postConceptDraft(
+                courseId, user.getUserId(), draftId, request);
+        return result;
     }
 
 
@@ -213,44 +165,37 @@ public class AiRagServiceImpl implements AiRagService {
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-        if (!course.getUser().getUserId().equals(user.getUserId())) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireGraphWriteAccess(course, user);
         return user;
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getConceptDeletionImpact(Long courseId, String conceptId) {
+    public Map<String, Object> getConceptDeletionImpact(Long courseId, String conceptId) {
         return conceptLifecycle(courseId, conceptId, "impact", null);
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getArchivedConcepts(Long courseId) {
+    public Map<String, Object> getArchivedConcepts(Long courseId) {
         return conceptLifecycle(courseId, null, "archived", null);
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> archiveConcept(Long courseId, String conceptId, Long expectedVersion) {
+    public Map<String, Object> archiveConcept(Long courseId, String conceptId, Long expectedVersion) {
         return conceptLifecycle(courseId, conceptId, "archive", expectedVersion);
     }
 
     @Override
-    public ResponseEntity<ApiResponse<Map<String, Object>>> restoreConcept(Long courseId, String conceptId, Long expectedVersion) {
+    public Map<String, Object> restoreConcept(Long courseId, String conceptId, Long expectedVersion) {
         return conceptLifecycle(courseId, conceptId, "restore", expectedVersion);
     }
 
-    private ResponseEntity<ApiResponse<Map<String, Object>>> conceptLifecycle(
+    private Map<String, Object> conceptLifecycle(
             Long courseId, String conceptId, String action, Long expectedVersion) {
         User owner = requireCourseOwner(courseId);
-        try {
-            Map<String, Object> result = aiCoreClient.conceptLifecycle(
-                    courseId, owner.getUserId(), conceptId, action, expectedVersion);
-            if ("archive".equals(action)) alerts.destructiveAfterCommit(owner.getUserId(), "CONCEPT_ARCHIVE", "CONCEPT");
-            return ResponseEntity.ok(ApiResponse.<Map<String, Object>>builder()
-                    .success(true).message("Concept operation completed").data(result).build());
-        } catch (AiCoreException e) {
-            return relayAiCoreError(e, courseId, "Concept operation failed");
-        }
+        Map<String, Object> result = aiCoreClient.conceptLifecycle(
+                courseId, owner.getUserId(), conceptId, action, expectedVersion);
+        if ("archive".equals(action)) alerts.destructiveAfterCommit(owner.getUserId(), "CONCEPT_ARCHIVE", "CONCEPT");
+        return result;
     }
 
     private User requireCourseAccess(Long courseId) {
@@ -261,32 +206,9 @@ public class AiRagServiceImpl implements AiRagService {
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
-        boolean isOwner = course.getUser().getUserId().equals(user.getUserId());
-        boolean isEnrolled = courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user);
-        if (!isOwner && (course.isNotebook() || !isEnrolled)) {
-            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-        }
+        CourseAccessPolicy.requireReadAccess(course, user,
+                courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user));
         return user;
-    }
-
-    private ResponseEntity<ApiResponse<Map<String, Object>>> relayAiCoreError(
-            AiCoreException e, Long courseId, String message) {
-        observeAiFailure(e);
-        HttpStatus status = HttpStatus.resolve(e.getHttpStatus());
-        if (status == null || status.is2xxSuccessful()) {
-            status = HttpStatus.BAD_GATEWAY;
-        }
-        log.warn("{}, courseId={}, status={}", message, courseId, e.getHttpStatus());
-        return ResponseEntity.status(status).body(ApiResponse.<Map<String, Object>>builder()
-                .success(false)
-                .errorCode("AI_CORE_" + e.getHttpStatus())
-                .message(e.getDetail())
-                .data(e.getBody().isEmpty() ? null : e.getBody())
-                .build());
-    }
-    private void observeAiFailure(AiCoreException error) {
-        if (error.isUserAuthorizationFailure()) alerts.accessDenied("KNOWLEDGE_GRAPH");
-        else if (error.getHttpStatus() == 403 || error.getHttpStatus() >= 500) alerts.repeatedSystemFailure("AI_CORE", "SYSTEM");
     }
 
 }

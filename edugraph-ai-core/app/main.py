@@ -24,19 +24,19 @@ async def lifespan(app: FastAPI):
     # Khởi tạo db
     await neo4j_client.connect()
     
-    # Khởi tạo embedding model
-    embed_model = EmbeddingModel()
-    embed_model.load() # model warmup
-    
-    from app.api.ingest import recover_processing_documents
-    await recover_processing_documents()
-    
     try:
+        # Warm up and recover only after Neo4j connectivity has been verified.
+        embed_model = EmbeddingModel()
+        embed_model.load()
+        from app.services.ingest import recover_processing_documents
+        await recover_processing_documents()
         yield
     finally:
         from app.core.document_tasks import document_tasks
-        await document_tasks.shutdown()
-        await neo4j_client.close()
+        try:
+            await document_tasks.shutdown()
+        finally:
+            await neo4j_client.close()
 
 app = FastAPI(title="EduGraph AI Core", lifespan=lifespan)
 
@@ -83,3 +83,6 @@ app.include_router(concept_creation_router)
 
 from app.api.concept_lifecycle import router as concept_lifecycle_router
 app.include_router(concept_lifecycle_router)
+
+from app.api.graph_editor import router as graph_editor_router
+app.include_router(graph_editor_router)

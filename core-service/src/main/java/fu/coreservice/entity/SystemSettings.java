@@ -1,5 +1,7 @@
 package fu.coreservice.entity;
 
+import fu.coreservice.listener.PrivilegedChangeListener;
+
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.UpdateTimestamp;

@@ -17,6 +17,8 @@ import java.util.Optional;
 @Repository
 public interface DocumentRepository extends JpaRepository<Document, Long> {
 
+    long countByDocStatus(UploadStatus status);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select d from Document d where d.documentId = :id")
     Optional<Document> findForUpdate(@Param("id") Long documentId);
