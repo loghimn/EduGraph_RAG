@@ -10,7 +10,10 @@ from app.retrieval.graph_cache import clear_course_graph_cache
 
 
 def owned(doc_id, course_id, user_id):
-    draft = draft_store.load(doc_id)
+    try:
+        draft = draft_store.load(doc_id)
+    except FileNotFoundError:
+        raise HTTPException(409, "Draft data is missing. Regenerate the draft from the original document.")
     if not draft or draft["course_id"] != course_id or draft["user_id"] != user_id:
         raise HTTPException(404, "Document draft not found")
     return draft

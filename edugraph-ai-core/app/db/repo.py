@@ -1,5 +1,21 @@
 from typing import List, Dict, Any
 from app.db.neo4j_client import neo4j_client
+import networkx as nx
+
+
+async def _validate_publication_dag(tx, course_id):
+    from fastapi import HTTPException
+    from app.db.queries import publication as pq
+
+    rows = await (await tx.run(pq.ACTIVE_EDGES, course_id=course_id)).data()
+    graph = nx.DiGraph((row["source"], row["target"]) for row in rows)
+    if not nx.is_directed_acyclic_graph(graph):
+        # One witness is sufficient; enumerating every cycle can be exponential.
+        raise HTTPException(409, detail={
+            "code": "PREREQUISITE_CYCLE",
+            "message": "Publication would leave a prerequisite cycle. Review the conflicting relationships before publishing.",
+            "cycle": [list(pair) for pair in nx.find_cycle(graph)],
+        })
 
 async def get_course_concepts(course_id: str) -> List[Dict[str, Any]]:
     """
@@ -272,6 +288,9 @@ async def save_ingestion_transaction(
             await tx.run(pq.CONCEPTS, concepts=param_concepts, owner_id=publication["user_id"])
             await tx.run(pq.EDGES, course_id=course_id, edges=publication["edges"],
                          owner_id=publication["user_id"])
+            # A failure rolls back chunks, concepts, relationships and the receipt
+            # together. Validate the entire course, not just the document draft.
+            await _validate_publication_dag(tx, course_id)
 
         # 5. Dọn dẹp Concept mồ côi
         res = await tx.run("""

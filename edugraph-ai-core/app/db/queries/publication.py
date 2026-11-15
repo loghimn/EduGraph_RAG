@@ -41,3 +41,13 @@ UNWIND $concepts AS concept
 MATCH (c:Concept {course_key: concept.course_key})
 SET c.curated = true, c.reviewed_by = $owner_id, c.reviewed_at = timestamp()
 """
+
+# Read the actual graph after applying the reviewed selection, under the same
+# Course write lock. Rejected edges and archived concepts do not constrain paths.
+ACTIVE_EDGES = """
+MATCH (s:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(t:Concept {course_id: $course_id})
+WHERE coalesce(s.status, 'ACTIVE') = 'ACTIVE'
+  AND coalesce(t.status, 'ACTIVE') = 'ACTIVE'
+  AND coalesce(r.status, 'AUTO') <> 'REJECTED'
+RETURN s.id AS source, t.id AS target
+"""

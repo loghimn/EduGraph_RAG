@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock
 import pytest
@@ -41,6 +42,27 @@ def ready():
                  review_id="review-1", status="AWAITING_REVIEW", version=7, payload=payload())
     draft_store.save(draft)
     return draft
+
+
+@pytest.mark.asyncio
+async def test_missing_payload_has_recovery_error_and_syncs_as_failed(workspace):
+    ready()
+    (Path(settings.RAW_DATA_DIR) / ".graph-drafts" / "101.payload").unlink()
+    with pytest.raises(HTTPException) as failure:
+        await review.preview("101", "26", "4")
+    assert failure.value.status_code == 409
+    assert "Regenerate" in failure.value.detail
+    status = await ingest.get_document_status("101", "26")
+    assert status["status"] == "FAILED"
+    assert "retry extraction" in status["error"]
+
+
+def test_relative_storage_directory_is_independent_of_process_cwd(tmp_path, monkeypatch):
+    from app.config import Settings
+    monkeypatch.chdir(tmp_path)
+    configured = Settings(_env_file=None, INTERNAL_API_KEY="test", RAW_DATA_DIR="data/raw")
+    project = Path(__file__).resolve().parent.parent
+    assert Path(configured.RAW_DATA_DIR) == (project / "data/raw").resolve()
 
 
 @pytest.mark.asyncio
@@ -168,3 +190,63 @@ async def test_publish_checks_course_version_inside_write_transaction_before_any
             "user_id": "4", "version": 7, "review_id": "review-1", "filename": "oop.txt", "edges": []})
     assert error.value.status_code == 409
     assert tx.run.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pairs,cyclic", [
+    ([("a", "b"), ("b", "c")], False),
+    ([("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")], False),
+    ([("a", "b"), ("c", "d")], False),
+    ([("a", "b"), ("b", "a")], True),
+    ([("a", "b"), ("b", "c"), ("c", "a")], True),
+    ([("a", "a")], True),
+    # A pre-existing cycle outside this document also blocks publication.
+    ([("a", "b"), ("x", "y"), ("y", "x")], True),
+])
+async def test_publication_validates_actual_course_graph_before_commit(monkeypatch, pairs, cyclic):
+    from app.db import repo
+    from app.db.queries import publication as pq
+    tx = AsyncMock()
+    result = AsyncMock()
+    result.single.return_value = {"owner_id": "4", "version": 7}
+    result.data.return_value = [{"source": s, "target": t} for s, t in pairs]
+    result.consume.return_value = MagicMock(counters=MagicMock(nodes_deleted=0))
+    tx.run.return_value = result
+    session = AsyncMock()
+    async def execute(write):
+        return await write(tx)
+    session.execute_write.side_effect = execute
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(return_value=session)
+    manager.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(repo.neo4j_client, "driver", MagicMock(session=lambda: manager))
+    operation = repo.save_ingestion_transaction("101", "26", [], [], [], publication={
+        "user_id": "4", "version": 7, "review_id": "r", "filename": "test", "edges": []})
+    if cyclic:
+        with pytest.raises(HTTPException) as error:
+            await operation
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "PREREQUISITE_CYCLE"
+        witness = error.value.detail["cycle"]
+        assert witness and all(tuple(edge) in pairs for edge in witness)
+    else:
+        await operation
+    calls = [call.args[0] for call in tx.run.await_args_list]
+    assert calls[0] == pq.LOCK_COURSE
+    assert calls.index(pq.EDGES) < calls.index(pq.ACTIVE_EDGES)
+    assert (calls[-1] == pq.ACTIVE_EDGES) == cyclic
+
+
+@pytest.mark.asyncio
+async def test_cycle_failure_keeps_private_draft_available_for_corrected_selection(workspace, monkeypatch):
+    ready()
+    save = AsyncMock(side_effect=HTTPException(409, detail={"code": "PREREQUISITE_CYCLE"}))
+    monkeypatch.setattr("app.db.repo.save_ingestion_transaction", save)
+    with pytest.raises(HTTPException):
+        await review.publish("101", "26", "4", PublishRequest(review_id="review-1"))
+    draft = draft_store.load("101")
+    assert draft["status"] == "AWAITING_REVIEW" and draft["payload"] == payload()
+    save.side_effect = None
+    await review.publish("101", "26", "4", PublishRequest(review_id="review-1", excluded_edges=["a:b"]))
+    assert save.await_args.kwargs["publication"]["edges"] == []
+    assert draft_store.load("101")["status"] == "DONE"
