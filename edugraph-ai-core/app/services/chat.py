@@ -17,7 +17,8 @@ from app.core.llm import llm_client
 from app.core.errors import LLMUnavailableError
 from app.chat.context import prepare_history, resolve_question
 from app.chat.streaming import with_sse_heartbeats
-from app.chat.path_intent import detect_path_intent, needs_topic_context
+from app.chat.path_intent import PathIntent, detect_path_intent, needs_topic_context
+from app.chat.intent import classify_chat_intent
 from app.services.chat_paths import build_chat_path
 
 logger = logging.getLogger(__name__)
@@ -183,11 +184,29 @@ async def _chat_explain_events(
         reply_context = prepare_history(reply_context)
         search_query = message
         path_intent = detect_path_intent(message) if graph_relationship is None else None
-        if _needs_conversation_context(history, reply_context, path_intent):
+        semantic = None
+        if graph_relationship is None and (path_intent is None or needs_topic_context(path_intent)):
+            yield ": understanding question\n\n"
+            try:
+                semantic = await asyncio.wait_for(classify_chat_intent(message, history, reply_context),
+                                                  timeout=settings.CHAT_INTENT_TIMEOUT_SECONDS)
+            except (ValueError, LLMUnavailableError, asyncio.TimeoutError) as error:
+                logger.warning("Intent classification failed; using existing routing. error_type=%s", type(error).__name__)
+            if semantic is not None:
+                if semantic.intent == "clarify" or semantic.confidence < .7 or (
+                    semantic.intent in {"learning_path", "prerequisites"} and not (semantic.target or "").strip()
+                ):
+                    async for event in _path_events({"answer": "Bạn muốn tìm lộ trình, kiến thức tiên quyết hay giải thích cho khái niệm nào? Hãy cho mình tên khái niệm cụ thể nhé.", "chunks": []}):
+                        yield event
+                    return
+                search_query = semantic.query.strip()
+                path_intent = (PathIntent(semantic.target.strip())
+                               if semantic.intent in {"learning_path", "prerequisites"} else None)
+        if semantic is None and _needs_conversation_context(history, reply_context, path_intent):
             yield ": resolving conversation context\n\n"
             search_query, resolution_event = await _resolve_search_query(message, history, reply_context)
             yield resolution_event
-        if graph_relationship is None:
+        if graph_relationship is None and semantic is None:
             path_intent = detect_path_intent(search_query) or path_intent
         if path_intent is not None:
             yield ": computing prerequisite learning path\n\n"

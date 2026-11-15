@@ -10,6 +10,13 @@ from app.core.errors import LLMUnavailableError
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def semantic_router_unavailable(monkeypatch):
+    # These tests exercise the established SSE/context fallback contract without
+    # contacting an external classifier. Semantic routing has its own suite.
+    monkeypatch.setattr("app.services.chat.classify_chat_intent", AsyncMock(side_effect=ValueError("classifier unavailable")))
+
+
 @pytest.mark.parametrize("failure", [ValueError("invalid shape"), LLMUnavailableError("provider unavailable"),
                                       TimeoutError()])
 @pytest.mark.parametrize("context_field", ["history", "reply_context"])
@@ -78,7 +85,8 @@ async def test_real_wait_for_timeout_cancels_resolution_and_falls_back():
             cancelled = True
 
     async def short_timeout(awaitable, timeout):
-        assert timeout == 20
+        from app.config import settings
+        assert timeout in (20, settings.CHAT_INTENT_TIMEOUT_SECONDS)
         return await real_wait_for(awaitable, timeout=0.01)
 
     with patch("app.services.chat.retrieve_chunks", new=AsyncMock(return_value=[])), \

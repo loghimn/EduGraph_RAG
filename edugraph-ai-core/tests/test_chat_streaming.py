@@ -6,6 +6,11 @@ import pytest
 from app.chat.streaming import with_sse_heartbeats
 
 
+@pytest.fixture(autouse=True)
+def semantic_router_unavailable(monkeypatch):
+    monkeypatch.setattr("app.services.chat.classify_chat_intent", AsyncMock(side_effect=ValueError("classifier unavailable")))
+
+
 @pytest.mark.asyncio
 async def test_heartbeats_do_not_cancel_or_restart_pending_work():
     release = asyncio.Event()

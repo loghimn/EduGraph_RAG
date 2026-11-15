@@ -9,6 +9,11 @@ from app.schemas.chat import GraphRelationship
 from app.services.chat import chat_explain_stream_generator
 
 
+@pytest.fixture(autouse=True)
+def semantic_router_unavailable(monkeypatch):
+    monkeypatch.setattr("app.services.chat.classify_chat_intent", AsyncMock(side_effect=ValueError("classifier unavailable")))
+
+
 def chunk(cid, text, doc="1", **extra):
     return {"id": cid, "text": text, "doc_id": doc, "page": 3, "index": 0, **extra}
 
