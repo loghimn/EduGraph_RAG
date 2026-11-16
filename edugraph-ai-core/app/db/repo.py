@@ -1,5 +1,21 @@
 from typing import List, Dict, Any
 from app.db.neo4j_client import neo4j_client
+import networkx as nx
+
+
+async def _validate_publication_dag(tx, course_id):
+    from fastapi import HTTPException
+    from app.db.queries import publication as pq
+
+    rows = await (await tx.run(pq.ACTIVE_EDGES, course_id=course_id)).data()
+    graph = nx.DiGraph((row["source"], row["target"]) for row in rows)
+    if not nx.is_directed_acyclic_graph(graph):
+        # One witness is sufficient; enumerating every cycle can be exponential.
+        raise HTTPException(409, detail={
+            "code": "PREREQUISITE_CYCLE",
+            "message": "Publication would leave a prerequisite cycle. Review the conflicting relationships before publishing.",
+            "cycle": [list(pair) for pair in nx.find_cycle(graph)],
+        })
 
 async def get_course_concepts(course_id: str) -> List[Dict[str, Any]]:
     """
@@ -198,7 +214,7 @@ async def save_ingestion_transaction(
             if locked["owner_id"] != publication["user_id"]:
                 raise HTTPException(403, "Permission denied: user is not course owner")
             if locked["version"] != publication["version"]:
-                raise HTTPException(409, "Published graph changed; regenerate the document draft before approval")
+                raise HTTPException(409, "Published graph changed; update the document draft before approval")
             await tx.run(pq.DOCUMENT, course_id=course_id, doc_id=doc_id,
                          owner_id=publication["user_id"], filename=publication["filename"],
                          review_id=publication["review_id"])
@@ -286,6 +302,11 @@ async def save_ingestion_transaction(
         DETACH DELETE orphan
         """, course_id=course_id)
         deleted_orphans = (await res.consume()).counters.nodes_deleted
+
+        if publication is not None:
+            # Validate the final course graph after orphan cleanup. A failure
+            # rolls back chunks, concepts, relationships and the receipt together.
+            await _validate_publication_dag(tx, course_id)
         
         res = await tx.run("""
         MATCH (d:Document {id: $doc_id, course_id: $course_id})

@@ -61,6 +61,39 @@ def test_property_validate_path_random_dags():
         ))
         assert validate_path(G, linear_order) == 0
 
+
+def test_generated_goal_paths_preserve_dependencies_through_mastered_concepts():
+    rng = random.Random(710)
+    for _ in range(50):
+        graph = nx.DiGraph()
+        for node in range(20):
+            graph.add_node(str(node), name=str(node), order=rng.randrange(100))
+        for source in range(20):
+            for target in range(source + 1, 20):
+                if rng.random() < .15:
+                    graph.add_edge(str(source), str(target))
+        known = {str(node) for node in range(19) if rng.random() < .4}
+        result = generate_learning_path(graph, {}, mode="goal", goal_concept_ids=["19"],
+                                        known_concept_ids=list(known), assume_known_prerequisites=False)
+        needed = (nx.ancestors(graph, "19") | {"19"}) - known
+        positions = {node: index for index, node in enumerate(result["linear_order"])}
+        assert set(positions) == needed
+        assert len(result["linear_order"]) == len(needed)
+        # Check transitive precedence too: A -> mastered B -> C still orders A before C.
+        for target in needed:
+            for source in nx.ancestors(graph, target) & needed:
+                assert positions[source] < positions[target]
+        assert result["validation"]["violations"] == 0
+
+
+def test_dense_cyclic_graph_is_rejected_without_enumerating_all_cycles():
+    graph = nx.complete_graph(20, create_using=nx.DiGraph)
+    started = time.perf_counter()
+    with pytest.raises(GraphConflictError) as error:
+        generate_learning_path(graph, {})
+    assert len(error.value.conflicts) == 1
+    assert time.perf_counter() - started < .5
+
 # 3. Test mode course (toàn bộ khóa học)
 def test_mode_course():
     G = create_sample_dag()

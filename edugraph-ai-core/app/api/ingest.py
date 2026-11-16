@@ -4,7 +4,7 @@ from fastapi import APIRouter, Header, Query, BackgroundTasks, UploadFile, File
 from typing import Annotated
 from app.core.identifiers import DocumentId
 from app.core.internal_auth import verify_internal_key
-from app.schemas.ingest import IngestRequest, PublishRequest
+from app.schemas.ingest import IngestRequest, PublishRequest, UpdateDraftRequest
 from app.services import ingest as service
 from app.services import document_review
 
@@ -22,6 +22,13 @@ async def publish_document(doc_id: DocumentId, request: PublishRequest,
                            course_id: str, user_id: str, x_internal_key: Annotated[str, Header()]):
     verify_internal_key(x_internal_key)
     return await document_review.publish(doc_id, course_id, user_id, request)
+
+
+@router.post('/documents/{doc_id}/review/update')
+async def update_document_draft(doc_id: DocumentId, request: UpdateDraftRequest,
+                                course_id: str, user_id: str, x_internal_key: Annotated[str, Header()]):
+    verify_internal_key(x_internal_key)
+    return await document_review.update_draft(doc_id, course_id, user_id, request)
 
 
 @router.post('/ingest')

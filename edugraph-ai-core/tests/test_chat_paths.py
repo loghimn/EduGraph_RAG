@@ -11,6 +11,21 @@ from app.services.chat_paths import build_chat_path, resolve_target
 
 
 @pytest.mark.parametrize("question,target", [
+    ("Cho tui hỏi, để học khái niệm null thì lộ trình ra sao", "null"),
+    ("Cho tui hỏi, tiên quyết của null là gì", "null"),
+    ("Để học NULL thì lộ trình như thế nào?", "null"),
+    ("Mình muốn học khái niệm NULL thì lộ trình học ra sao?", "null"),
+    ("Học con trỏ trong C thì kế hoạch học tập nên như thế nào?", "con tro trong c"),
+    ("Tôi muốn học NULL, cho tôi lộ trình", "null"),
+    ("Muốn học NULL, hãy cho mình một lộ trình học", "null"),
+    ("Tôi muốn học NULL, cho tôi lộ trình học nhé?", "null"),
+    ("Tôi đã học Java, cho tôi lộ trình học Servlet", "servlet"),
+    ("Tôi đã học Java; hãy cho mình một lộ trình cho Servlet", "servlet"),
+    ("Tôi đã học Java, cho tôi kế hoạch học Servlet", "servlet"),
+    ("Cho tôi lộ trình học khái niệm NULL như thế nào nhé?", "null"),
+    ("Lộ trình học NULL ra sao?", "null"),
+    ("Tiên quyết của khái niệm NULL là gì?", "null"),
+    ("Lộ trình học khái niệm này", "khai niem nay"),
     ("Muốn học Servlet cần biết gì trước?", "servlet"),
     ("Muốn học Servlet thì cần biết những gì trước?", "servlet"),
     ("Để học Servlet tôi cần biết những gì?", "servlet"),
@@ -42,6 +57,12 @@ def test_path_intent_recognizes_goal_and_prerequisite_requests(question, target)
     "Đừng tạo lộ trình, chỉ giải thích Servlet", "Do not create a roadmap for Servlet",
     "Cho tôi ví dụ Servlet"])
 def test_explanations_and_negated_requests_do_not_create_paths(question):
+    assert detect_path_intent(question) is None
+
+
+@pytest.mark.parametrize("question", ["Lộ trình ra sao?", "Lộ trình học như thế nào?",
+    "Đừng tạo lộ trình học NULL", "NULL là gì?", "Cho tui hỏi khái niệm NULL có nghĩa là gì?"])
+def test_question_words_and_definition_requests_are_not_path_targets(question):
     assert detect_path_intent(question) is None
 
 
@@ -80,6 +101,18 @@ async def test_path_uses_topology_with_direct_and_indirect_prerequisites():
     steps = [part for part in text.splitlines() if part.startswith("- **")]
     assert steps == ["- **HTTP**", "- **Java**", "- **OOP**", "- **Servlet** — mục tiêu"]
     loader.assert_awaited_once_with("7")
+
+
+@pytest.mark.asyncio
+async def test_prior_learning_does_not_override_explicit_path_target():
+    concepts = [concept("java", "Java"), concept()]
+    with patch("app.services.chat_paths.get_course_concepts_for_linking", AsyncMock(return_value=concepts)), \
+         patch("app.services.chat_paths.get_course_graph", AsyncMock(return_value=(graph(), 12, {}, []))):
+        result = await build_chat_path(
+            detect_path_intent("Tôi đã học Java, cho tôi lộ trình học Servlet"), ["7"],
+        )
+    assert "- **Servlet** — mục tiêu" in result["answer"]
+    assert "- **Java** — mục tiêu" not in result["answer"]
 
 
 @pytest.mark.asyncio
@@ -195,6 +228,31 @@ async def test_chat_stream_routes_to_path_engine_without_model_or_standard_retri
     assert events["answer"]["content"].startswith("## Lộ trình")
     assert events["sources"][0]["doc_id"] == "9"
     assert frames[-1].startswith("event: done")
+
+
+@pytest.mark.asyncio
+async def test_both_null_questions_return_the_same_graph_based_path_in_chat():
+    g = graph()
+    g.add_node("null", name="NULL", order=0)
+    g.add_edge("servlet", "null", status="CONFIRMED")
+    questions = ["Cho tui hỏi, để học khái niệm null thì lộ trình ra sao",
+                 "Cho tui hỏi, tiên quyết của null là gì"]
+    answers = []
+    with patch("app.services.chat_paths.get_course_concepts_for_linking", AsyncMock(return_value=[concept("null", "NULL")])), \
+         patch("app.services.chat_paths.get_course_graph", AsyncMock(return_value=(g, 12, {}, []))), \
+         patch("app.services.chat.llm_client") as llm, \
+         patch("app.services.chat.retrieve_chunks", AsyncMock()) as retrieve:
+        for question in questions:
+            frames = [frame async for frame in chat_explain_stream_generator("7", question, None, ["7"])]
+            answer = next(json.loads(frame.splitlines()[1][6:])["content"]
+                          for frame in frames if frame.startswith("event: answer"))
+            assert "### Giai đoạn" in answer and "**NULL**" in answer
+            assert frames[-1].startswith("event: done")
+            answers.append(answer)
+    assert answers[0] == answers[1]
+    retrieve.assert_not_awaited()
+    llm.generate.assert_not_called()
+    llm.generate_stream.assert_not_called()
 
 
 @pytest.mark.asyncio

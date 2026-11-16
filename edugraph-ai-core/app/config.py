@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Literal
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     
     # Path
     RAW_DATA_DIR: str = "/data/raw"
+
+    @field_validator("RAW_DATA_DIR")
+    @classmethod
+    def stable_raw_directory(cls, value: str) -> str:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent / path
+        return str(path.resolve())
 
     # Upload limit cho endpoint nhận file từ Java core-service (đồng bộ với max-file-size 40MB của Spring)
     MAX_UPLOAD_MB: int = 40
@@ -69,6 +77,7 @@ class Settings(BaseSettings):
     VECTOR_OVERFETCH_STEP: int = 4
     VECTOR_OVERFETCH_MAX: int = 2000
     CHAT_MAX_CHUNKS: int = 6
+    CHAT_INTENT_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
     CHAT_MIN_VECTOR_SCORE: float = Field(default=0.35, ge=0, le=1)
     MIN_CHARS_PER_PAGE: int = 100
     ALIAS_FUZZY_MIN_LEN: int = 4

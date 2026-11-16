@@ -6,6 +6,7 @@ import fu.coreservice.dto.document.DocumentDownloadResponse;
 import fu.coreservice.dto.document.DocumentProcessingResponse;
 import fu.coreservice.dto.document.DocumentResponse;
 import fu.coreservice.dto.document.DocumentPublishRequest;
+import fu.coreservice.dto.document.DocumentDraftUpdateRequest;
 import fu.coreservice.entity.UploadStatus;
 import fu.coreservice.service.DocumentService;
 import fu.coreservice.service.DocumentReviewService;
@@ -45,6 +46,14 @@ public class DocumentController {
     public ApiResponse<Map<String, Object>> previewGraphDraft(@PathVariable Long courseId, @PathVariable Long documentId) {
         return ApiResponse.<Map<String, Object>>builder().success(true)
                 .data(documentReviewService.preview(courseId, documentId)).build();
+    }
+
+    @PostMapping("/{courseId}/documents/{documentId}/review/update")
+    @PreAuthorize("hasRole('INSTRUCTOR')")
+    public ApiResponse<Map<String, Object>> updateGraphDraft(@PathVariable Long courseId, @PathVariable Long documentId,
+            @Valid @RequestBody DocumentDraftUpdateRequest request) {
+        return ApiResponse.<Map<String, Object>>builder().success(true)
+                .data(documentReviewService.updateDraft(courseId, documentId, request)).build();
     }
 
     @PostMapping("/{courseId}/documents/{documentId}/publish")

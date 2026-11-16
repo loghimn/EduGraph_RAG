@@ -269,6 +269,10 @@ async def get_document_status(doc_id: str, course_id: str=...):
         from app.services.document_review import resolve_receipt
         async with document_tasks.lock(doc_id):
             draft = await resolve_receipt(draft_store.load(doc_id, include_payload=False))
+            if draft["status"] == "AWAITING_REVIEW" and not draft_store.review_payload_exists(doc_id, draft):
+                draft.update(status="FAILED", payload=None,
+                             error="Review draft data is missing; retry extraction from the original file")
+                draft_store.save(draft)
         return {k: draft.get(k) for k in ("document_id", "course_id", "status", "progress", "error", "current_step")}
     """Trả trạng thái xử lý của document trong Neo4j — Java poll để đồng bộ sang Postgres."""
     query = queries.GET_DOCUMENT_STATUS_QUERY_1

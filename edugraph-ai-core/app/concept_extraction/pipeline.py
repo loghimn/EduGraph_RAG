@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from copy import deepcopy
 from contextvars import ContextVar
 from typing import Dict
 from app.db.repo import get_course_concepts, save_ingestion_transaction
@@ -226,6 +227,20 @@ def _set_canonical_names(concepts):
             concept["name"] = concept["canonical"]
 
 
+async def rebuild_draft_payload(doc_id, course_id, chunks, extracted_concepts):
+    """Reconcile saved extraction with the current graph without extracting/embedding again."""
+    from app.concept_extraction.merger import merge_concepts
+    new_concepts = deepcopy(extracted_concepts)
+    db_concepts = await get_course_concepts(course_id)
+    merged_new, _ = await to_thread_owned(merge_concepts, new_concepts, db_concepts)
+    for concept in merged_new:
+        concept["order"] = 100000 + concept.get("first_chunk_index", 0)
+    mentions = await _collect_mentions(doc_id, chunks, new_concepts, db_concepts, merged_new)
+    _set_canonical_names(merged_new)
+    return {"chunks": chunks, "extracted_concepts": deepcopy(extracted_concepts),
+            "concepts": merged_new, "mentions": mentions, "all_concepts": db_concepts + merged_new}
+
+
 async def process_document_pipeline(doc_id: str, course_id: str, filename: str, *, draft: bool = False):
     """
     Thực thi pipeline trích xuất. Chạy hoàn toàn trong RAM, cuối cùng ghi DB 1 lượt.
@@ -280,6 +295,9 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str, 
         old_mentioned_concept_ids = await _previous_affected_ids(doc_id, course_id)
 
         await _embed_concepts(doc_id, new_concepts)
+        # The merger mutates keys and IDs. Keep the original evidence and
+        # embeddings so later updates can reconcile against a newer graph.
+        extracted_concepts = deepcopy(new_concepts) if draft else None
 
         # Gộp và xử lý
         t_merge = time.perf_counter()
@@ -312,7 +330,7 @@ async def process_document_pipeline(doc_id: str, course_id: str, filename: str, 
         _set_canonical_names(merged_new)
         if draft:
             return {"chunks": chunks, "concepts": merged_new, "mentions": mentions,
-                    "all_concepts": db_concepts + merged_new}
+                    "all_concepts": db_concepts + merged_new, "extracted_concepts": extracted_concepts}
         record = await save_ingestion_transaction(
             doc_id=doc_id,
             course_id=course_id,

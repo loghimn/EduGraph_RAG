@@ -65,6 +65,10 @@ async def test_pipeline_embeds_new_concepts_before_cosine_merge(draft, existing)
     assert embed_batch.await_args_list[1].args[0] == ["đạo hàm"]
     if draft:
         save.assert_not_awaited()
+        assert result["extracted_concepts"][0]["canonical"] == "đạo hàm"
+        assert result["extracted_concepts"][0]["embedding"] == [1.0, 0.0]
+        assert "key" not in result["extracted_concepts"][0]
+        assert "id" not in result["extracted_concepts"][0]
         assert all("MATCH" in call.args[0] and "SET " not in call.args[0] for call in session.run.await_args_list)
         concepts = result["concepts"]
     else:

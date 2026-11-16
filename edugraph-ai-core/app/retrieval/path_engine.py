@@ -105,9 +105,7 @@ def generate_learning_path(
     if not nx.is_directed_acyclic_graph(ordering_graph):
         cycles = []
         try:
-            for cycle in nx.simple_cycles(ordering_graph):
-                cycle_str = [f"{u}->{v}" for u, v in zip(cycle, cycle[1:] + [cycle[0]])]
-                cycles.append(cycle_str)
+            cycles.append([f"{u}->{v}" for u, v in nx.find_cycle(ordering_graph)])
         except Exception as e:
             logger.warning(f"Error extracting cycles: {e}")
         raise GraphConflictError(cycles or [["Cycle detected in learning path subgraph"]])

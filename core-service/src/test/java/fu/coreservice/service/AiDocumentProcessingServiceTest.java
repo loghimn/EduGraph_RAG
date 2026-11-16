@@ -91,6 +91,31 @@ class AiDocumentProcessingServiceTest {
     }
 
     @Test
+    void missingReviewDraftBecomesRetryableInsteadOfWaitingForever() {
+        document.setDocStatus(UploadStatus.AWAITING_REVIEW);
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of());
+        when(documentRepository.findByDocStatus(UploadStatus.AWAITING_REVIEW)).thenReturn(java.util.List.of(document));
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenThrow(new AiCoreException(404, "Document draft not found", java.util.Map.of()));
+        when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L)).thenReturn(Optional.of(job));
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.FAILED, document.getDocStatus());
+        assertEquals(JobStatus.FAILED, job.getJobStatus());
+        assertEquals(ErrorCategory.SYSTEM_ERROR, job.getErrorCategory());
+        org.junit.jupiter.api.Assertions.assertTrue(job.getErrorMessage().contains("Review draft is missing"));
+    }
+
+    @Test
+    void temporaryAiOutageDoesNotDiscardAnAwaitingDraft() {
+        document.setDocStatus(UploadStatus.AWAITING_REVIEW);
+        when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of());
+        when(documentRepository.findByDocStatus(UploadStatus.AWAITING_REVIEW)).thenReturn(java.util.List.of(document));
+        when(aiCoreClient.getDocumentStatus(10L, 1L)).thenThrow(new AiCoreException(503, "Unavailable", java.util.Map.of()));
+        service.syncProcessingDocuments();
+        assertEquals(UploadStatus.AWAITING_REVIEW, document.getDocStatus());
+        verify(documentRepository, never()).save(any());
+    }
+
+    @Test
     void extractedCourseDocumentAwaitsReviewRatherThanBeingPublished() {
         when(documentRepository.findByDocStatus(UploadStatus.PROCESSING)).thenReturn(java.util.List.of(document));
         when(documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(10L))

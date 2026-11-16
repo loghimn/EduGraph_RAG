@@ -263,14 +263,24 @@ class RefactorHttpRegressionTest {
         Map<String, Object> body = Map.of("review_id", "draft-1", "excluded_concepts", List.of(), "excluded_edges", List.of());
         when(ai.previewDocument(documentId, courseId, teacher.getUserId()))
                 .thenReturn(Map.of("review_id", "draft-1", "concepts", List.of(), "edges", List.of()));
+        when(ai.updateDocumentDraft(eq(documentId), eq(courseId), eq(teacher.getUserId()), any()))
+                .thenReturn(Map.of("status", "processing"));
         send(get(base + "/review"), student, null, 403);
+        send(post(base + "/review/update"), student, Map.of("review_id", "draft-1"), 403);
         send(post(base + "/publish"), student, body, 403);
         send(get(base + "/review"), other, null, 404);
+        send(post(base + "/review/update"), other, Map.of("review_id", "draft-1"), 404);
+        verify(ai, never()).updateDocumentDraft(anyLong(), anyLong(), anyLong(), any());
         send(post(base + "/publish"), other, body, 404);
         send(get(base), other, null, 404);
         assertThat(send(get(list), other, null, 200).path("data").path("totalElements").asInt()).isZero();
         verify(ai, never()).publishDocument(anyLong(), anyLong(), anyLong(), any());
         assertThat(send(get(base + "/review"), owner, null, 200).path("data").path("review_id").asText()).isEqualTo("draft-1");
+        send(post(base + "/review/update"), owner, Map.of("review_id", ""), 400);
+        assertThat(send(post(base + "/review/update"), owner, Map.of("review_id", "draft-1"), 200)
+                .path("data").path("status").asText()).isEqualTo("processing");
+        verify(ai).updateDocumentDraft(eq(documentId), eq(courseId), eq(teacher.getUserId()),
+                argThat(request -> request.reviewId().equals("draft-1")));
         assertThat(documents.findById(documentId).orElseThrow().getDocStatus()).isEqualTo(UploadStatus.AWAITING_REVIEW);
         send(post(base + "/publish"), owner, body, 200);
         verify(ai).publishDocument(eq(documentId), eq(courseId), eq(teacher.getUserId()), any());

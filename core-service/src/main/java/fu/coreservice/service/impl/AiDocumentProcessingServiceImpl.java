@@ -313,8 +313,17 @@ public class AiDocumentProcessingServiceImpl implements AiDocumentProcessingServ
                             && current.getDocStatus() != UploadStatus.AWAITING_REVIEW)) {
                         return;
                     }
-                    AiDocumentStatusResponse status = aiCoreClient.getDocumentStatus(
-                            documentId, current.getCourse().getCourseId());
+                    AiDocumentStatusResponse status;
+                    try {
+                        status = aiCoreClient.getDocumentStatus(documentId, current.getCourse().getCourseId());
+                    } catch (AiCoreException missing) {
+                        if (missing.getHttpStatus() != 404 || current.getDocStatus() != UploadStatus.AWAITING_REVIEW) throw missing;
+                        status = new AiDocumentStatusResponse();
+                        status.setStatus("FAILED");
+                        status.setError("Review draft is missing. Retry processing to restore it from the original file.");
+                        documentProcessingJobRepository.findFirstByDocumentDocumentIdOrderByDocumentProcessingJobIdDesc(documentId)
+                                .ifPresent(job -> job.setErrorCategory(ErrorCategory.SYSTEM_ERROR));
+                    }
                     applyStatus(current, status);
                 });
             } catch (AppException e) {

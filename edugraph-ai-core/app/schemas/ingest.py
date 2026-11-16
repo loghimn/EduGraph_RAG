@@ -15,7 +15,10 @@ class IngestRequest(BaseModel):
     review_required: bool = True
 
 
-class PublishRequest(BaseModel):
+class UpdateDraftRequest(BaseModel):
     review_id: str = Field(min_length=1, max_length=100)
+
+
+class PublishRequest(UpdateDraftRequest):
     excluded_concepts: list[str] = Field(default_factory=list, max_length=10000)
     excluded_edges: list[str] = Field(default_factory=list, max_length=100000)
