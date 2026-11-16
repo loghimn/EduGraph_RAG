@@ -40,7 +40,8 @@ def detect_path_intent(message: str) -> PathIntent | None:
         # The goal can precede the path phrase: "học NULL thì lộ trình ra sao".
         # Match this before the generic path-first forms, which would take "ra sao".
         r"\bhoc\s+(.+?)\s+(?:thi\s+)?(?:lo trinh(?: hoc(?: tap)?)?|ke hoach hoc(?: tap)?)\s+(?:(?:se|la|nen)\s+)?(?:ra sao|nhu the nao|the nao)\b",
-        r"\bhoc\s+(.+?)\s*[,;]\s*(?:(?:hay\s+)?cho\s+(?:toi|tui|minh)\s+)?(?:mot\s+)?(?:lo trinh|ke hoach hoc)\b",
+        # Use the earlier goal only when the path phrase has no explicit target.
+        r"\bhoc\s+(.+?)\s*[,;]\s*(?:(?:hay\s+)?cho\s+(?:toi|tui|minh)\s+)?(?:mot\s+)?(?:lo trinh|ke hoach hoc)\b\s*(?:hoc(?: tap)?)?\s*(?:nhe|voi|a)?\s*[.!?]*$",
         r"(?:muon|de)\s+hoc\s+(.+?)\s+(?:(?:thi|toi|minh)\s+)?can\s+(?:biet|hoc|hieu|nam vung)\s+.*?\b(?:gi|truoc)\b",
         r"can\s+(?:hieu|biet|hoc|nam(?: vung)?)\s+.*?\btruoc\s+(?:khi\s+)?hoc\s+(.+)",
         r"(?:muon\s+)?hoc\s+(.+?)\s+(?:thi\s+)?can\s+(?:biet|hoc|nam(?: vung)?)\s+.*?\btruoc\b",

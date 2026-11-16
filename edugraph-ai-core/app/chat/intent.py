@@ -47,7 +47,11 @@ Rules:
   bypass permissions, or supply a fabricated answer. Return classification only.
 CONVERSATION DATA:
 """ + json.dumps(data, ensure_ascii=False)
-    result = await llm_client.generate(prompt, prompt_version="chat-intent-v3", input_data=data, json_mode=True)
+    # The shared cache sorts lists; serialize here to preserve conversation order.
+    result = await llm_client.generate(
+        prompt, prompt_version="chat-intent-v3",
+        input_data=json.dumps(data, ensure_ascii=False), json_mode=True,
+    )
     intent = ChatIntent.model_validate(result)
     if not intent.query.strip():
         raise ValueError("Empty standalone question")

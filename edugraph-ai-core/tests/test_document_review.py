@@ -246,7 +246,44 @@ async def test_publication_validates_actual_course_graph_before_commit(monkeypat
     calls = [call.args[0] for call in tx.run.await_args_list]
     assert calls[0] == pq.LOCK_COURSE
     assert calls.index(pq.EDGES) < calls.index(pq.ACTIVE_EDGES)
+    cleanup = next(query for query in calls if "DETACH DELETE orphan" in query)
+    assert calls.index(cleanup) < calls.index(pq.ACTIVE_EDGES)
     assert (calls[-1] == pq.ACTIVE_EDGES) == cyclic
+
+
+@pytest.mark.asyncio
+async def test_replacement_cleans_orphaned_auto_cycle_before_validation(monkeypatch):
+    from app.db import repo
+    from app.db.queries import publication as pq
+    pairs = [("x", "y"), ("y", "x")]
+    tx = AsyncMock()
+    result = AsyncMock()
+    result.single.return_value = {"owner_id": "4", "version": 7}
+    result.consume.return_value = MagicMock(counters=MagicMock(nodes_deleted=0))
+
+    async def run(query, **params):
+        if "DETACH DELETE orphan" in query:
+            pairs.clear()
+            cleaned = AsyncMock()
+            cleaned.consume.return_value = MagicMock(counters=MagicMock(nodes_deleted=2))
+            return cleaned
+        if query == pq.ACTIVE_EDGES:
+            result.data.return_value = [{"source": s, "target": t} for s, t in pairs]
+        return result
+
+    tx.run.side_effect = run
+    session = AsyncMock()
+    async def execute(write):
+        return await write(tx)
+    session.execute_write.side_effect = execute
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(return_value=session)
+    manager.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(repo.neo4j_client, "driver", MagicMock(session=lambda: manager))
+    saved = await repo.save_ingestion_transaction("101", "26", [], [], [], publication={
+        "user_id": "4", "version": 7, "review_id": "r", "filename": "test", "edges": []})
+    assert saved["deleted_orphans"] == 2
+    assert not pairs
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,10 @@ from app.services.chat_paths import build_chat_path, resolve_target
     ("Học con trỏ trong C thì kế hoạch học tập nên như thế nào?", "con tro trong c"),
     ("Tôi muốn học NULL, cho tôi lộ trình", "null"),
     ("Muốn học NULL, hãy cho mình một lộ trình học", "null"),
+    ("Tôi muốn học NULL, cho tôi lộ trình học nhé?", "null"),
+    ("Tôi đã học Java, cho tôi lộ trình học Servlet", "servlet"),
+    ("Tôi đã học Java; hãy cho mình một lộ trình cho Servlet", "servlet"),
+    ("Tôi đã học Java, cho tôi kế hoạch học Servlet", "servlet"),
     ("Cho tôi lộ trình học khái niệm NULL như thế nào nhé?", "null"),
     ("Lộ trình học NULL ra sao?", "null"),
     ("Tiên quyết của khái niệm NULL là gì?", "null"),
@@ -97,6 +101,18 @@ async def test_path_uses_topology_with_direct_and_indirect_prerequisites():
     steps = [part for part in text.splitlines() if part.startswith("- **")]
     assert steps == ["- **HTTP**", "- **Java**", "- **OOP**", "- **Servlet** — mục tiêu"]
     loader.assert_awaited_once_with("7")
+
+
+@pytest.mark.asyncio
+async def test_prior_learning_does_not_override_explicit_path_target():
+    concepts = [concept("java", "Java"), concept()]
+    with patch("app.services.chat_paths.get_course_concepts_for_linking", AsyncMock(return_value=concepts)), \
+         patch("app.services.chat_paths.get_course_graph", AsyncMock(return_value=(graph(), 12, {}, []))):
+        result = await build_chat_path(
+            detect_path_intent("Tôi đã học Java, cho tôi lộ trình học Servlet"), ["7"],
+        )
+    assert "- **Servlet** — mục tiêu" in result["answer"]
+    assert "- **Java** — mục tiêu" not in result["answer"]
 
 
 @pytest.mark.asyncio

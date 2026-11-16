@@ -7,6 +7,7 @@ import pytest
 
 from app.chat.intent import classify_chat_intent
 from app.config import settings
+from app.core.cache import generate_cache_key
 from app.services.chat import chat_explain_stream_generator
 
 
@@ -29,11 +30,33 @@ async def test_classifier_uses_bounded_history_and_explicit_reply_without_graph_
     with patch("app.chat.intent.llm_client.generate", AsyncMock(return_value=classification("prerequisites"))) as model:
         result = await classify_chat_intent("Trước đó cần biết gì?", history, reply)
     assert result.target == "NULL"
-    data = model.call_args.kwargs["input_data"]
+    data = json.loads(model.call_args.kwargs["input_data"])
     assert data["reply_context"][-1]["content"] == "Older answer about NULL "
     assert data["history"][-1]["content"] == "Recent topic SQL "
     assert set(data) == {"question", "history", "reply_context"}
     assert model.call_args.kwargs["json_mode"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_field", ["history", "reply_context"])
+async def test_classifier_cache_key_preserves_conversation_order(context_field):
+    messages = [
+        {"role": "assistant", "content": "Topic NULL"},
+        {"role": "assistant", "content": "Topic SQL"},
+    ]
+    with patch("app.chat.intent.llm_client.generate", AsyncMock(return_value=classification())) as model:
+        await classify_chat_intent("What does it mean?", **{context_field: messages})
+        await classify_chat_intent("What does it mean?", **{context_field: list(reversed(messages))})
+        await classify_chat_intent("What does it mean?", **{context_field: messages})
+
+    keys = []
+    for call in model.call_args_list:
+        payload = call.kwargs["input_data"]
+        # Cache serialization must preserve the conversation actually sent to the model.
+        assert json.loads(call.args[0].split("CONVERSATION DATA:\n", 1)[1]) == json.loads(payload)
+        keys.append(generate_cache_key(settings.MODEL_MAIN, call.kwargs["prompt_version"], payload))
+    assert keys[0] != keys[1]
+    assert keys[0] == keys[2]
 
 
 @pytest.mark.asyncio

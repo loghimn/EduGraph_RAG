@@ -288,9 +288,6 @@ async def save_ingestion_transaction(
             await tx.run(pq.CONCEPTS, concepts=param_concepts, owner_id=publication["user_id"])
             await tx.run(pq.EDGES, course_id=course_id, edges=publication["edges"],
                          owner_id=publication["user_id"])
-            # A failure rolls back chunks, concepts, relationships and the receipt
-            # together. Validate the entire course, not just the document draft.
-            await _validate_publication_dag(tx, course_id)
 
         # 5. Dọn dẹp Concept mồ côi
         res = await tx.run("""
@@ -305,6 +302,11 @@ async def save_ingestion_transaction(
         DETACH DELETE orphan
         """, course_id=course_id)
         deleted_orphans = (await res.consume()).counters.nodes_deleted
+
+        if publication is not None:
+            # Validate the final course graph after orphan cleanup. A failure
+            # rolls back chunks, concepts, relationships and the receipt together.
+            await _validate_publication_dag(tx, course_id)
         
         res = await tx.run("""
         MATCH (d:Document {id: $doc_id, course_id: $course_id})
