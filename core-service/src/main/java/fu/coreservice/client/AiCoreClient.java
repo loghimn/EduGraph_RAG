@@ -10,6 +10,7 @@ import fu.coreservice.dto.ai.AiIngestRequest;
 import fu.coreservice.dto.ai.AiIngestResponse;
 import fu.coreservice.dto.ai.AiLearningPathRequest;
 import fu.coreservice.dto.document.DocumentPublishRequest;
+import fu.coreservice.dto.document.DocumentDraftUpdateRequest;
 import fu.coreservice.dto.knowledgegraph.GraphMutationResponse;
 import fu.coreservice.dto.knowledgegraph.GraphSnapshotResponse;
 import fu.coreservice.exception.AiCoreException;
@@ -136,6 +137,18 @@ public class AiCoreClient {
                     .uri("/documents/{documentId}/status?course_id={courseId}", documentId, courseId)
                     .retrieve()
                     .body(AiDocumentStatusResponse.class);
+        } catch (RestClientResponseException e) {
+            throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
+        } catch (RestClientException e) {
+            throw unavailable(String.valueOf(documentId), e);
+        }
+    }
+
+    public Map<String, Object> updateDocumentDraft(Long documentId, Long courseId, Long userId,
+            DocumentDraftUpdateRequest request) {
+        try {
+            return restClient.post().uri("/documents/{id}/review/update?course_id={course}&user_id={user}",
+                    documentId, courseId, userId).body(request).retrieve().body(new ParameterizedTypeReference<>() {});
         } catch (RestClientResponseException e) {
             throw toAiCoreException(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (RestClientException e) {

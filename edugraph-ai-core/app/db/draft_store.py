@@ -95,6 +95,9 @@ def recover():
         if draft["status"] == "PROCESSING":
             draft.update(status="FAILED", error="Processing interrupted; retry extraction")
             save(draft)
+        elif draft.get("update_status") == "PROCESSING":
+            draft.update(update_status="FAILED", update_error="Draft update was interrupted. Update the draft again.")
+            save(draft)
 
 
 def review_payload_exists(doc_id, draft):

@@ -2,6 +2,7 @@ package fu.coreservice.service.impl;
 
 import fu.coreservice.client.AiCoreClient;
 import fu.coreservice.dto.document.DocumentPublishRequest;
+import fu.coreservice.dto.document.DocumentDraftUpdateRequest;
 import fu.coreservice.entity.*;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
@@ -47,6 +48,19 @@ public class DocumentReviewServiceImpl implements DocumentReviewService {
                 .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
         authorize(document, courseId, user);
         return ai.previewDocument(documentId, courseId, user.getUserId());
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> updateDraft(Long courseId, Long documentId, DocumentDraftUpdateRequest request) {
+        User user = actor();
+        Document document = documents.findForUpdate(documentId)
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+        authorize(document, courseId, user);
+        if (document.getDocStatus() != UploadStatus.AWAITING_REVIEW) {
+            throw new AppException(ErrorCode.DOCUMENT_REVIEW_NOT_READY);
+        }
+        return ai.updateDocumentDraft(documentId, courseId, user.getUserId(), request);
     }
 
     @Override

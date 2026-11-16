@@ -214,7 +214,7 @@ async def save_ingestion_transaction(
             if locked["owner_id"] != publication["user_id"]:
                 raise HTTPException(403, "Permission denied: user is not course owner")
             if locked["version"] != publication["version"]:
-                raise HTTPException(409, "Published graph changed; regenerate the document draft before approval")
+                raise HTTPException(409, "Published graph changed; update the document draft before approval")
             await tx.run(pq.DOCUMENT, course_id=course_id, doc_id=doc_id,
                          owner_id=publication["user_id"], filename=publication["filename"],
                          review_id=publication["review_id"])

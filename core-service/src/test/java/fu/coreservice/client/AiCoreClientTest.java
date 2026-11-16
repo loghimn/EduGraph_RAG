@@ -49,6 +49,18 @@ class AiCoreClientTest {
     }
 
     @Test
+    void draftUpdateForwardsReviewIdentityAndReturnsBackgroundAcknowledgement() {
+        server.expect(requestTo("http://localhost:8082/documents/108/review/update?course_id=32&user_id=4"))
+                .andExpect(method(HttpMethod.POST)).andExpect(header("X-Internal-Key", "test-key"))
+                .andExpect(content().json("{\"review_id\":\"review-old\"}"))
+                .andRespond(withSuccess("{\"status\":\"processing\"}", MediaType.APPLICATION_JSON));
+        assertThat(client.updateDocumentDraft(108L, 32L, 4L,
+                new fu.coreservice.dto.document.DocumentDraftUpdateRequest("review-old")))
+                .containsEntry("status", "processing");
+        server.verify();
+    }
+
+    @Test
     void editorForwardsVersionActorAndTypedEdgeBody() {
         server.expect(requestTo("http://localhost:8082/courses/7/knowledge-graph/edges/a/b?expected_version=8"))
                 .andExpect(method(HttpMethod.PUT)).andExpect(header("X-Actor-Id", "15"))

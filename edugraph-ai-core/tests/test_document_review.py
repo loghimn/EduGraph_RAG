@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from app.config import settings
 from app.core.document_tasks import DocumentTasks
 from app.db import draft_store
-from app.schemas.ingest import IngestRequest, PublishRequest
+from app.schemas.ingest import IngestRequest, PublishRequest, UpdateDraftRequest
 from app.services import document_review as review, ingest
 
 
@@ -262,3 +262,174 @@ async def test_cycle_failure_keeps_private_draft_available_for_corrected_selecti
     await review.publish("101", "26", "4", PublishRequest(review_id="review-1", excluded_edges=["a:b"]))
     assert save.await_args.kwargs["publication"]["edges"] == []
     assert draft_store.load("101")["status"] == "DONE"
+
+
+def updateable(doc_id="101"):
+    draft = ready()
+    draft["document_id"] = doc_id
+    draft["payload"]["extracted_concepts"] = [dict(canonical="Class", embedding=[1.0],
+        evidence_chunk_id="101:0", evidence_start=0, evidence_end=5, language="en", aliases=[])]
+    draft_store.save(draft)
+    return draft
+
+
+@pytest.mark.asyncio
+async def test_update_reuses_saved_extraction_changes_review_id_and_invalidates_old_approval(workspace, monkeypatch):
+    registry, _, _ = workspace
+    original = updateable()
+    rebuilt = payload()
+    rebuilt["extracted_concepts"] = original["payload"]["extracted_concepts"]
+    rebuild = AsyncMock(return_value=rebuilt)
+    monkeypatch.setattr("app.concept_extraction.pipeline.rebuild_draft_payload", rebuild)
+    monkeypatch.setattr(review, "infer_edges", AsyncMock(return_value=rebuilt["edges"]))
+    monkeypatch.setattr(review, "course_snapshot", AsyncMock(return_value={"version": 8, "owner_id": "4"}))
+    write = AsyncMock()
+    monkeypatch.setattr("app.db.repo.save_ingestion_transaction", write)
+    assert await review.update_draft("101", "26", "4", UpdateDraftRequest(review_id="review-1")) == {"status": "processing"}
+    assert draft_store.load("101")["update_status"] == "PROCESSING"
+    await registry.tasks["101"]
+    updated = draft_store.load("101")
+    assert updated["version"] == 8 and updated["review_id"] != "review-1"
+    assert updated["status"] == "AWAITING_REVIEW" and updated["update_status"] is None
+    rebuild.assert_awaited_once_with("101", "26", original["payload"]["chunks"], original["payload"]["extracted_concepts"])
+    write.assert_not_awaited()
+    with pytest.raises(HTTPException) as error:
+        await review.publish("101", "26", "4", PublishRequest(review_id="review-1"))
+    assert error.value.status_code == 409
+    await review.publish("101", "26", "4", PublishRequest(review_id=updated["review_id"]))
+    assert write.await_args.kwargs["publication"]["version"] == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["graph_changed", "inference_failed"])
+async def test_update_failure_preserves_original_payload_and_version(workspace, monkeypatch, failure):
+    registry, _, _ = workspace
+    original = updateable()
+    monkeypatch.setattr("app.concept_extraction.pipeline.rebuild_draft_payload", AsyncMock(return_value=payload()))
+    infer = AsyncMock(return_value=[])
+    if failure == "inference_failed":
+        infer.side_effect = RuntimeError("upstream unavailable")
+    monkeypatch.setattr(review, "infer_edges", infer)
+    monkeypatch.setattr(review, "course_snapshot", AsyncMock(side_effect=[
+        {"version": 8, "owner_id": "4"}, {"version": 9, "owner_id": "4"}]))
+    await review.update_draft("101", "26", "4", UpdateDraftRequest(review_id="review-1"))
+    await registry.tasks["101"]
+    current = draft_store.load("101")
+    assert current["payload"] == original["payload"]
+    assert current["version"] == 7 and current["review_id"] == "review-1"
+    assert current["update_status"] == "FAILED" and current["update_error"]
+    assert current["status"] == "AWAITING_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_pending_update_blocks_publication_and_duplicate_update_is_idempotent(workspace, monkeypatch):
+    registry, _, _ = workspace
+    updateable()
+    gate = asyncio.Event()
+    async def rebuild(*args):
+        await gate.wait()
+        return payload()
+    worker = AsyncMock(side_effect=rebuild)
+    monkeypatch.setattr("app.concept_extraction.pipeline.rebuild_draft_payload", worker)
+    monkeypatch.setattr(review, "infer_edges", AsyncMock(return_value=[]))
+    monkeypatch.setattr(review, "course_snapshot", AsyncMock(return_value={"version": 8, "owner_id": "4"}))
+    request = UpdateDraftRequest(review_id="review-1")
+    await review.update_draft("101", "26", "4", request)
+    task = registry.tasks["101"]
+    try:
+        await review.update_draft("101", "26", "4", request)
+        assert registry.tasks["101"] is task
+        with pytest.raises(HTTPException) as error:
+            await review.publish("101", "26", "4", PublishRequest(review_id="review-1"))
+        assert error.value.status_code == 409
+    finally:
+        gate.set()
+        await task
+    worker.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_old_draft_requires_one_regeneration_and_update_checks_ownership(workspace):
+    ready()
+    with pytest.raises(HTTPException) as error:
+        await review.update_draft("101", "26", "4", UpdateDraftRequest(review_id="review-1"))
+    assert error.value.status_code == 409 and "older draft" in error.value.detail
+    with pytest.raises(HTTPException) as error:
+        await review.update_draft("101", "26", "9", UpdateDraftRequest(review_id="review-1"))
+    assert error.value.status_code == 404
+
+
+def test_interrupted_update_keeps_original_review_available(workspace):
+    draft = updateable()
+    draft["update_status"] = "PROCESSING"
+    draft_store.save(draft)
+    draft_store.recover()
+    current = draft_store.load("101")
+    assert current["status"] == "AWAITING_REVIEW"
+    assert current["update_status"] == "FAILED" and current["update_error"]
+    assert current["payload"] == draft["payload"]
+
+
+@pytest.mark.asyncio
+async def test_four_drafts_from_same_version_update_and_publish_without_duplicate_concepts(workspace, monkeypatch):
+    from app.concept_extraction import pipeline
+    registry, _, _ = workspace
+    graph_concepts, graph_edges = {}, []
+    version = 0
+    async def snapshot(*args):
+        return {"version": version, "owner_id": "4"}
+    async def get_concepts(*args):
+        return deepcopy(list(graph_concepts.values()))
+    async def infer(course_id, payload):
+        by_key = {c["key"]: c for c in payload["all_concepts"]}
+        keys = {m["concept_key"] for m in payload["mentions"]} - {"class"}
+        target = by_key[next(iter(keys))]["id"]
+        source = by_key["class"]["id"]
+        return [dict(id=f"{source}:{target}", source_id=source, target_id=target, score=.9)]
+    async def save(doc_id, course_id, chunks, concepts, mentions, *, publication):
+        nonlocal version
+        if publication["version"] != version:
+            raise HTTPException(409, "graph changed")
+        for concept in concepts:
+            assert concept["key"] not in graph_concepts
+            graph_concepts[concept["key"]] = {**deepcopy(concept), "has_reviewed_edge": True}
+        known_ids = {c["id"] for c in graph_concepts.values()}
+        assert all(e["source_id"] in known_ids and e["target_id"] in known_ids for e in publication["edges"])
+        graph_edges.extend(publication["edges"])
+        version += 1
+    monkeypatch.setattr(review, "course_snapshot", snapshot)
+    monkeypatch.setattr(pipeline, "get_course_concepts", get_concepts)
+    monkeypatch.setattr(review, "infer_edges", infer)
+    monkeypatch.setattr("app.db.repo.save_ingestion_transaction", save)
+    embed = AsyncMock(side_effect=AssertionError("An update must not embed again"))
+    extract = AsyncMock(side_effect=AssertionError("An update must not extract again"))
+    monkeypatch.setattr(pipeline.embed_model, "embed_batch", embed)
+    monkeypatch.setattr(pipeline, "process_document_pipeline", extract)
+    doc_ids = ["201", "202", "203", "204"]
+    for doc_id, name in zip(doc_ids, ["Object", "Method", "Inheritance", "Polymorphism"]):
+        chunks = [dict(id=f"{doc_id}:0", text=f"Class {name}", page=1, embedding=[1.0])]
+        raw = [dict(canonical=word, aliases=[], language="en", embedding=[1.0],
+                    evidence_chunk_id=chunks[0]["id"], evidence_start=0, evidence_end=5)
+               for word in ["Class", name]]
+        built = await pipeline.rebuild_draft_payload(doc_id, "26", chunks, raw)
+        built["edges"] = await infer("26", built)
+        draft_store.save(dict(document_id=doc_id, course_id="26", user_id="4", filename="test.pdf",
+                              review_id=f"review-{doc_id}", version=0, status="AWAITING_REVIEW", payload=built))
+    for index, doc_id in enumerate(doc_ids):
+        draft = draft_store.load(doc_id)
+        if index:
+            with pytest.raises(HTTPException) as error:
+                await review.publish(doc_id, "26", "4", PublishRequest(review_id=draft["review_id"]))
+            assert error.value.status_code == 409
+            await review.update_draft(doc_id, "26", "4", UpdateDraftRequest(review_id=draft["review_id"]))
+            await registry.tasks[doc_id]
+            updated = draft_store.load(doc_id)
+            assert updated["version"] == index
+            assert next(c["id"] for c in updated["payload"]["all_concepts"] if c["key"] == "class") == graph_concepts["class"]["id"]
+            assert updated["payload"]["chunks"] == draft["payload"]["chunks"]
+            draft = updated
+        await review.publish(doc_id, "26", "4", PublishRequest(review_id=draft["review_id"]))
+        assert draft_store.load(doc_id)["status"] == "DONE"
+    assert version == 4 and len(graph_concepts) == 5 and len(graph_edges) == 4
+    embed.assert_not_awaited()
+    extract.assert_not_awaited()

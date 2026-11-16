@@ -140,6 +140,55 @@ async def preview(doc_id, course_id, user_id):
         return {**preview, "current_graph_version": snapshot["version"]}
 
 
+async def update_draft(doc_id, course_id, user_id, request):
+    async with document_tasks.lock(doc_id):
+        draft = owned(doc_id, course_id, user_id)
+        await resolve_receipt(draft)
+        if draft["status"] != "AWAITING_REVIEW":
+            raise HTTPException(409, "Document is not awaiting review")
+        if draft["review_id"] != request.review_id:
+            raise HTTPException(409, "Draft changed; reload the review")
+        if "extracted_concepts" not in draft["payload"]:
+            raise HTTPException(409, "This older draft needs to be regenerated once before it can be updated.")
+        if document_tasks.active(doc_id):
+            return {"status": "processing"}
+        snapshot = await course_snapshot(course_id)
+        if snapshot["owner_id"] not in (None, user_id):
+            raise HTTPException(403, "Permission denied: user is not course owner")
+        draft.update(update_status="PROCESSING", update_error=None)
+        draft_store.save(draft)
+        document_tasks.start(doc_id, lambda: _update_draft(draft, snapshot["version"]))
+        return {"status": "processing"}
+
+
+async def _update_draft(draft, version):
+    doc_id, course_id, user_id = (draft[k] for k in ("document_id", "course_id", "user_id"))
+    try:
+        from app.concept_extraction.pipeline import rebuild_draft_payload
+        payload = await rebuild_draft_payload(doc_id, course_id, draft["payload"]["chunks"],
+                                              draft["payload"]["extracted_concepts"])
+        payload["edges"] = await infer_edges(course_id, payload)
+        async with document_tasks.lock(doc_id):
+            current = owned(doc_id, course_id, user_id)
+            if current["status"] != "AWAITING_REVIEW" or current["review_id"] != draft["review_id"]:
+                return
+            snapshot = await course_snapshot(course_id)
+            if snapshot["version"] != version:
+                raise HTTPException(409, "The graph changed during the update. Update the draft again.")
+            current.update(payload=payload, version=version, review_id=str(uuid.uuid4()),
+                           publish_attempted=False, update_status=None, update_error=None)
+            draft_store.save(current)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        async with document_tasks.lock(doc_id):
+            current = owned(doc_id, course_id, user_id)
+            if current["status"] == "AWAITING_REVIEW" and current["review_id"] == draft["review_id"]:
+                message = exc.detail if isinstance(exc, HTTPException) else "Could not update the draft. Please try again."
+                current.update(update_status="FAILED", update_error=str(message)[:1000])
+                draft_store.save(current)
+
+
 def _build_preview(doc_id, course_id, user_id):
     draft = owned(doc_id, course_id, user_id)
     if draft["status"] != "AWAITING_REVIEW":
@@ -155,6 +204,8 @@ def _build_preview(doc_id, course_id, user_id):
                                "snippet": chunks[m["chunk_id"]]["text"][:500]}
                               for m in payload["mentions"] if m["concept_key"] == concept["key"]][:5]
     return {"review_id": draft["review_id"], "filename": draft["filename"], "draft_version": draft["version"],
+            "can_update": "extracted_concepts" in payload,
+            "update_status": draft.get("update_status"), "update_error": draft.get("update_error"),
             "concepts": concepts, "edges": payload["edges"]}
 
 
@@ -168,6 +219,8 @@ async def publish(doc_id, course_id, user_id, request):
             return {"status": "DONE"}
         if draft["status"] != "AWAITING_REVIEW":
             raise HTTPException(409, "Document is not awaiting review")
+        if draft.get("update_status") == "PROCESSING":
+            raise HTTPException(409, "Draft update is in progress. Wait for it to finish before publishing.")
         # Recover an ACK lost after Neo4j committed, before the private receipt was saved.
         async with graph_repository.session() as session:
             receipt = await (await graph_repository.run(session, queries.RECEIPT,
