@@ -89,6 +89,18 @@ async def test_default_ingest_stages_without_writing_any_neo4j_nodes(workspace, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("current_version", [7, 8])
+async def test_preview_reports_draft_and_current_graph_versions(workspace, monkeypatch, current_version):
+    ready()
+    monkeypatch.setattr(review, "course_snapshot", AsyncMock(return_value={"version": current_version, "owner_id": "4"}))
+    preview = await review.preview("101", "26", "4")
+    assert preview["draft_version"] == 7
+    assert preview["current_graph_version"] == current_version
+    assert draft_store.load("101")["version"] == 7
+    assert draft_store.load("101")["status"] == "AWAITING_REVIEW"
+
+
+@pytest.mark.asyncio
 async def test_approval_publishes_only_selected_nodes_edges_and_is_idempotent(workspace, monkeypatch):
     ready()
     save = AsyncMock()

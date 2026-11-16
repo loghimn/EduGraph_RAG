@@ -135,7 +135,9 @@ async def infer_edges(course_id, payload):
 
 async def preview(doc_id, course_id, user_id):
     async with document_tasks.lock(doc_id):
-        return await to_thread_owned(_build_preview, doc_id, course_id, user_id)
+        preview = await to_thread_owned(_build_preview, doc_id, course_id, user_id)
+        snapshot = await course_snapshot(course_id)
+        return {**preview, "current_graph_version": snapshot["version"]}
 
 
 def _build_preview(doc_id, course_id, user_id):
@@ -152,7 +154,7 @@ def _build_preview(doc_id, course_id, user_id):
         concept["sources"] = [{"page": chunks[m["chunk_id"]].get("page"),
                                "snippet": chunks[m["chunk_id"]]["text"][:500]}
                               for m in payload["mentions"] if m["concept_key"] == concept["key"]][:5]
-    return {"review_id": draft["review_id"], "filename": draft["filename"],
+    return {"review_id": draft["review_id"], "filename": draft["filename"], "draft_version": draft["version"],
             "concepts": concepts, "edges": payload["edges"]}
 
 
