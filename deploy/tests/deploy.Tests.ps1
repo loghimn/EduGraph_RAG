@@ -14,6 +14,7 @@ $global:edugraphTestConnectorPullError = ''
 $global:edugraphTestRecoveryRegistryDown = $false
 $global:edugraphTestMissingImages = [Collections.Generic.HashSet[string]]::new()
 $global:edugraphTestBadOrigin = $false
+$global:edugraphTestOriginRedirectPath = ''
 $global:edugraphTestTagGeneration = 'original'
 $global:edugraphTestRunningImages = @{}
 $global:edugraphTestStoppedImages = @{}
@@ -253,6 +254,10 @@ function Invoke-TestWebRequest {
         redirects = $MaximumRedirection; redirectsSpecified = $PSBoundParameters.ContainsKey('MaximumRedirection')
         headers = $Headers
     })
+    if (-not $public -and $path -eq $global:edugraphTestOriginRedirectPath) {
+        $global:edugraphTestOriginRedirectPath = ''
+        return @{ StatusCode = 302; Content = '<html><script src="/assets/index-test.js"></script></html>'; Headers = @{ Location = 'https://edugraph-rag.io.vn/courses' } }
+    }
     if ($public -and $path -eq '/courses' -and $global:edugraphTestPublicBodyTimeouts -gt 0) {
         $global:edugraphTestPublicBodyTimeouts--
         throw [TimeoutException]::new('Smoke request exceeded its full-response deadline.')
@@ -687,6 +692,27 @@ try {
     foreach ($call in @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' })) {
         Assert-True (($call.arguments -join ' ') -match '--pull never') 'up must never re-resolve tags'
         Assert-True ($call.images.Count -ge 4) 'every deployment and rollback must use a digest override'
+    }
+
+    $originBaseline = Get-Content $statePath -Raw
+    $originImages = (Get-Content $statePath -Raw | ConvertFrom-Json -AsHashtable).images
+    foreach ($redirectPath in @('/healthz', '/courses', '/api/users/me')) {
+        $global:edugraphTestOriginRedirectPath = $redirectPath
+        $originCallStart = $global:edugraphTestCalls.Count
+        $originRedirectFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+            $expectedError = if ($redirectPath -eq '/api/users/me') { 'Protected gateway API did not return 401' } else { "Origin check failed: $redirectPath" }
+            Assert-True ($_.Exception.Message -eq $expectedError) 'loopback redirect must fail its status check even with qualifying HTML'
+            Assert-True (-not $_.Exception.Data.Contains('RollbackFailure')) 'loopback redirect failure must allow rollback'
+            $originRedirectFailed = $true
+        }
+        Assert-True $originRedirectFailed 'origin probes must reject redirects to a public page'
+        Assert-True (@($global:edugraphTestCalls | Select-Object -Skip $originCallStart | Where-Object { $_.arguments -contains 'up' }).Count -eq 2) 'origin redirect must trigger rollback'
+        Assert-True ((Get-Content $statePath -Raw) -eq $originBaseline) 'origin redirect must preserve the previous release record'
+        Assert-TestRuntime $originImages
+    }
+    foreach ($call in @($global:edugraphTestHttpCalls | Where-Object { -not $_.public })) {
+        Assert-True ($call.redirectsSpecified -and $call.redirects -eq 0) 'loopback checks must explicitly disable redirects'
     }
 
     $publicCount = @($global:edugraphTestHttpCalls | Where-Object public).Count

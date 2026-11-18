@@ -2,8 +2,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$RecordsDirectory,
-    [Parameter(Mandatory)][string]$Repository,
-    [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$Commit,
+    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')][string]$Repository,
+    [Parameter(Mandatory)][ValidatePattern('(?-i)^[a-f0-9]{40}$')][string]$Commit,
     [Parameter(Mandatory)][ValidatePattern('^[1-9][0-9]*$')][string]$RunId,
     [Parameter(Mandatory)][ValidatePattern('^[1-9][0-9]*$')][string]$Attempt,
     [Parameter(Mandatory)][string]$OutputFile
@@ -21,7 +21,7 @@ foreach ($file in $records) {
         throw 'Image records must come from the selected repository, commit, run and attempt.'
     }
     $component = [string]$record.component
-    if ($component -notin $required -or $images.ContainsKey($component)) { throw 'Unexpected or duplicate backend component.' }
+    if ($component -cnotin $required -or $images.ContainsKey($component)) { throw 'Unexpected or duplicate backend component.' }
     if ($record.image -isnot [string] -or $record.digest -isnot [string] -or
         $record.image -cne "ghcr.io/$owner/edugraph/$component" -or $record.digest -cnotmatch '^sha256:[a-f0-9]{64}$') {
         throw 'Invalid published backend image reference.'

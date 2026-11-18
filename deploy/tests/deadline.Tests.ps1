@@ -9,6 +9,7 @@ if ($result.ExitCode -ne 7 -or $result.Output -ne 'output' -or $result.Error -ne
 }
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('edugraph-deadline-tests-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $testRoot | Out-Null
+$originalHttpProxy = [Net.Http.HttpClient]::DefaultProxy
 try {
     $childScript = Join-Path $testRoot 'slow-command.ps1'
     $pidFile = Join-Path $testRoot 'child.pid'
@@ -32,7 +33,7 @@ Start-Sleep -Seconds 30
     } catch [ArgumentException] { $alive = $false }
     if ($alive) { throw 'Timed-out deployment command must not remain running.' }
     $expectedBody = '<html><script src="/assets/test.js"></script></html>'
-    foreach ($mode in @('fast', 'unauthorized', 'redirect', 'stall', 'drip')) {
+    foreach ($mode in @('fast', 'unauthorized', 'redirect', 'stall', 'drip', 'proxy', 'eof', 'empty-request')) {
         $readyFile = Join-Path $testRoot "$mode.port"
         $headersFile = Join-Path $testRoot "$mode.headers"
         $server = Start-Job -ArgumentList $readyFile, $headersFile, $mode, $expectedBody -ScriptBlock {
@@ -47,7 +48,12 @@ Start-Sleep -Seconds 30
                 $connection = $listener.AcceptTcpClient()
                 $stream = $connection.GetStream()
                 $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 1024, $true)
-                while ($reader.ReadLine() -ne '') { }
+                $requestLine = $reader.ReadLine()
+                if ($null -eq $requestLine) { throw 'Smoke fixture client closed before completing request headers.' }
+                do {
+                    $headerLine = $reader.ReadLine()
+                    if ($null -eq $headerLine) { throw 'Smoke fixture client closed before completing request headers.' }
+                } while ($headerLine -ne '')
                 $status = if ($Mode -eq 'unauthorized') { '401 Unauthorized' } elseif ($Mode -eq 'redirect') { '302 Found' } else { '200 OK' }
                 $body = $ExpectedBody
                 $length = if ($Mode -in @('stall', 'drip')) { 100 } else { $body.Length }
@@ -55,7 +61,7 @@ Start-Sleep -Seconds 30
                 $headers = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status`r`nContent-Length: $length`r`nContent-Type: text/html; charset=utf-8`r`n${location}Connection: close`r`n`r`n")
                 $stream.Write($headers, 0, $headers.Length)
                 $stream.Flush()
-                [IO.File]::WriteAllText($HeadersFile, 'sent')
+                [IO.File]::WriteAllText($HeadersFile, $requestLine)
                 if ($Mode -eq 'stall') { Start-Sleep -Seconds 30 }
                 elseif ($Mode -eq 'drip') {
                     for ($index = 0; $index -lt 100; $index++) {
@@ -79,10 +85,34 @@ Start-Sleep -Seconds 30
                 Start-Sleep -Milliseconds 50
             }
             $port = [int](Get-Content -LiteralPath $readyFile)
+            if ($mode -in @('eof', 'empty-request')) {
+                $earlyClient = [Net.Sockets.TcpClient]::new()
+                try {
+                    $earlyClient.Connect([Net.IPAddress]::Loopback, $port)
+                    if ($mode -eq 'eof') {
+                        $partialHeaders = [Text.Encoding]::ASCII.GetBytes("GET /courses HTTP/1.1`r`nHost: localhost`r`n")
+                        $earlyClient.GetStream().Write($partialHeaders, 0, $partialHeaders.Length)
+                    }
+                } finally { $earlyClient.Dispose() }
+                $completed = Wait-Job -Job $server -Timeout 3
+                if ($null -eq $completed -or $server.State -ne 'Failed' -or
+                    $server.ChildJobs[0].JobStateInfo.Reason.Message -notlike '*client closed before completing request headers*') {
+                    throw 'Request EOF must promptly fail the fixture instead of spinning.'
+                }
+                continue
+            }
+            $probeUri = "http://127.0.0.1:$port/courses"
+            # Force a proxy that does not bypass loopback: local requests must ignore it.
+            [Net.Http.HttpClient]::DefaultProxy = [Net.WebProxy]::new('http://127.0.0.1:1', $false)
+            if ([Net.Http.HttpClient]::DefaultProxy.IsBypassed([uri]$probeUri)) { throw 'Proxy fixture must not bypass loopback on its own.' }
+            if ($mode -eq 'proxy') {
+                [Net.Http.HttpClient]::DefaultProxy = [Net.WebProxy]::new("http://127.0.0.1:$port", $false)
+                $probeUri = 'http://edugraph-probe.invalid/courses'
+            }
             $clock.Restart()
             $timedOut = $false
             try {
-                $response = Invoke-DeploymentWebRequest "http://127.0.0.1:$port/courses" -TimeoutSec 1 -SkipHttpErrorCheck -MaximumRedirection 0
+                $response = Invoke-DeploymentWebRequest $probeUri -TimeoutSec 1 -SkipHttpErrorCheck -MaximumRedirection 0
             } catch [TimeoutException] { $timedOut = $true }
             if ($mode -in @('stall', 'drip')) {
                 if (-not $timedOut -or $clock.Elapsed.TotalSeconds -gt 4) { throw 'A stalled or dripping body must exhaust the total request budget.' }
@@ -90,6 +120,9 @@ Start-Sleep -Seconds 30
             } else {
                 $expectedStatus = if ($mode -eq 'unauthorized') { 401 } elseif ($mode -eq 'redirect') { 302 } else { 200 }
                 if ($timedOut -or $response.StatusCode -ne $expectedStatus -or $response.Content -cne $expectedBody) { throw 'Fast smoke responses must retain status and the complete body without following redirects.' }
+                if ($mode -eq 'proxy' -and (Get-Content -LiteralPath $headersFile -Raw) -cne 'GET http://edugraph-probe.invalid/courses HTTP/1.1') {
+                    throw 'Non-loopback probes must still use the configured proxy.'
+                }
             }
         } finally {
             Stop-Job -Job $server
@@ -98,6 +131,7 @@ Start-Sleep -Seconds 30
     }
     Write-Host 'Bounded deployment process and full-response HTTP tests passed.'
 } finally {
+    [Net.Http.HttpClient]::DefaultProxy = $originalHttpProxy
     $resolved = [IO.Path]::GetFullPath($testRoot)
     $prefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     if ($resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path $resolved -Leaf).StartsWith('edugraph-deadline-tests-')) {

@@ -8,6 +8,7 @@ function Invoke-DeploymentWebRequest {
         [hashtable]$Headers = @{}
     )
     $handler = [Net.Http.HttpClientHandler]::new()
+    if (([uri]$Uri).IsLoopback) { $handler.UseProxy = $false }
     $handler.AllowAutoRedirect = $MaximumRedirection -gt 0
     if ($MaximumRedirection -gt 0) { $handler.MaxAutomaticRedirections = $MaximumRedirection }
     $client = [Net.Http.HttpClient]::new($handler)

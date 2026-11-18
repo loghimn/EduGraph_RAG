@@ -218,14 +218,14 @@ function Ensure-ReleaseImages([System.Collections.IDictionary]$Images) {
 
 function Test-Origin {
     foreach ($path in @('/healthz', '/courses')) {
-        $response = Invoke-DeploymentWebRequest "http://127.0.0.1:8088$path" -TimeoutSec (Get-OperationTimeout 15)
+        $response = Invoke-DeploymentWebRequest "http://127.0.0.1:8088$path" -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
         if ($response.StatusCode -ne 200) { throw "Origin check failed: $path" }
         if ($path -eq '/courses' -and $response.Content -notmatch '<html') {
             throw 'SPA fallback did not return HTML'
         }
         if ($path -eq '/courses') { $frontendHtml = $response.Content }
     }
-    $response = Invoke-DeploymentWebRequest 'http://127.0.0.1:8088/api/users/me' -SkipHttpErrorCheck -TimeoutSec (Get-OperationTimeout 15)
+    $response = Invoke-DeploymentWebRequest 'http://127.0.0.1:8088/api/users/me' -SkipHttpErrorCheck -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
     if ($response.StatusCode -ne 401) { throw 'Protected gateway API did not return 401' }
     $assets = @([regex]::Matches($frontendHtml, '\bsrc="(/assets/[^\"]+\.js)"') | ForEach-Object { $_.Groups[1].Value })
     if ($assets.Count -eq 0) { throw 'SPA response did not contain a frontend JavaScript asset.' }

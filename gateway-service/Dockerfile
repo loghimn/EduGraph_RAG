@@ -1,7 +1,12 @@
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /build
 COPY pom.xml .
-RUN mvn -B -ntp dependency:go-offline
+RUN for attempt in 1 2 3; do \
+      if mvn -B -ntp -U dependency:go-offline; then exit 0; fi; \
+      if [ "$attempt" -eq 3 ]; then exit 1; fi; \
+      echo "Dependency download failed; retrying in 5 seconds ($attempt/3)." >&2; \
+      sleep 5; \
+    done
 COPY src ./src
 RUN mvn -B -ntp -DskipTests package && cp target/*.jar /app.jar
 
