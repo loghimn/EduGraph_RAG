@@ -111,6 +111,30 @@ class SwaggerOAuthControllerTest {
         }
     }
 
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"authorize", "login", "", "custom"})
+    void swaggerRouteAlwaysUsesLoginCallbackRegardlessOfCallerAction(String action) throws Exception {
+        try (var context = context("dev", "true", "http://localhost:8080/{action}/oauth2/code/{registrationId}")) {
+            var request = get("/api/auth/google/authorize").param("state", "swagger-state");
+            if (action != null) { request.param("action", action); }
+            var result = MockMvcBuilders.webAppContextSetup(context).build()
+                    .perform(request).andExpect(status().isFound()).andReturn();
+            var query = UriComponentsBuilder.fromUriString(result.getResponse().getRedirectedUrl())
+                    .build().getQueryParams();
+            String redirectUri = UriUtils.decode(query.getFirst("redirect_uri"), java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals("http://localhost:8080/login/oauth2/code/google", redirectUri);
+            var callback = new MockHttpServletRequest();
+            callback.setSession(result.getRequest().getSession(false));
+            callback.setParameter("state", UriUtils.decode(query.getFirst("state"), java.nio.charset.StandardCharsets.UTF_8));
+            var saved = context.getBean(LoginAuthorizationRequestRepository.class).loadAuthorizationRequest(callback);
+            assertNotNull(saved);
+            assertEquals(redirectUri, saved.getRedirectUri());
+            assertEquals(Boolean.TRUE, saved.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_MODE));
+            assertEquals("swagger-state", saved.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_STATE));
+        }
+    }
+
     private AnnotationConfigWebApplicationContext context(String profile, String swaggerEnabled) {
         return context(profile, swaggerEnabled, "http://localhost/login/oauth2/code/google");
     }

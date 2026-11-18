@@ -50,6 +50,7 @@ function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
     $dockerPath = Get-DockerExecutable
     $result = Invoke-DeploymentProcess -FilePath $dockerPath -Arguments $Arguments -TimeoutSeconds $timeout
     $script:dockerExitCode = $result.ExitCode
+    $script:dockerErrorOutput = [string]$result.Error
     if ($CaptureOutput) {
         # Rendered Compose JSON can contain secrets; never print captured output.
         if ($result.Output) { return $result.Output -split '\r?\n' | Where-Object { $_ -ne '' } }
@@ -57,6 +58,29 @@ function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
         if ($result.Output) { Write-Host $result.Output.TrimEnd() }
         if ($result.Error) { Write-Host $result.Error.TrimEnd() }
     }
+}
+
+function Get-ConnectorPullDiagnostic([string]$Diagnostic, $Configuration) {
+    $secrets = @(
+        foreach ($service in $Configuration.services.PSObject.Properties) {
+            foreach ($setting in $service.Value.environment.PSObject.Properties) {
+                if ($setting.Name -match 'PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL' -and [string]$setting.Value) {
+                    [string]$setting.Value
+                }
+            }
+        }
+    )
+    foreach ($secret in ($secrets | Select-Object -Unique | Sort-Object Length -Descending)) {
+        $Diagnostic = $Diagnostic.Replace($secret, '[REDACTED]')
+    }
+    $Diagnostic = $Diagnostic -replace '(?i)(https?://)[^/\s@]+@', '$1[REDACTED]@'
+    $Diagnostic = $Diagnostic -replace '(?i)(authorization\s*[:=]\s*(?:Bearer|Basic)\s+)\S+', '$1[REDACTED]'
+    $Diagnostic = $Diagnostic -replace '(?i)((?:[?&]|\b)(?:[\w-]*(?:token|password|secret|credential|key)[\w-]*)\s*[=:]\s*)[^\s&]+', '$1[REDACTED]'
+    $Diagnostic = $Diagnostic -replace '\x1b\[[0-?]*[ -/]*[@-~]', '' -replace '[\x00-\x1f\x7f]', ' '
+    $Diagnostic = $Diagnostic.Trim()
+    if (-not $Diagnostic) { return 'Docker did not provide a diagnostic.' }
+    if ($Diagnostic.Length -gt 2000) { return $Diagnostic.Substring(0, 2000) + ' [truncated]' }
+    return $Diagnostic
 }
 
 function Get-ComposeArguments([bool]$UseGpu, [bool]$UseTunnel) {
@@ -355,7 +379,11 @@ try {
         if ($Tunnel) {
             # Third-party connector is outside the application CI build set.
             $connectorPull = @(Invoke-Docker @('pull', $configuration.services.cloudflared.image) -CaptureOutput)
-            if ($dockerExitCode -ne 0) { throw 'Docker Compose failed: pull' }
+            if ($dockerExitCode -ne 0) {
+                $diagnostic = if ($dockerErrorOutput) { $dockerErrorOutput } else { $connectorPull -join [Environment]::NewLine }
+                $diagnostic = Get-ConnectorPullDiagnostic $diagnostic $configuration
+                throw "Cloudflare connector image pull failed (exit code ${dockerExitCode}): $diagnostic"
+            }
             $images.cloudflared = Get-PulledConnectorImage $configuration.services.cloudflared.image $connectorPull
         }
         $composeArgs += @('-f', (New-ImageOverride $images $Tunnel))
@@ -417,8 +445,12 @@ try {
             # The project was confirmed empty before activation. Remove only this
             # attempt's service containers, keeping all volumes for the next retry.
             try {
-                Invoke-Compose (@('stop') + @($images.Keys))
-                Stop-InactiveTunnel $false
+                try {
+                    Invoke-Compose (@('stop') + @($images.Keys))
+                    Stop-InactiveTunnel $false
+                } catch {
+                    Write-Warning "Graceful first-release stop failed; attempting scoped container removal: $($_.Exception.Message)" -WarningAction Continue
+                }
                 foreach ($name in $images.Keys) {
                     $created = @(Invoke-Docker @('ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=edugraph',
                         '--filter', "label=com.docker.compose.service=$name", '--filter', 'label=com.docker.compose.oneoff=False') -CaptureOutput)

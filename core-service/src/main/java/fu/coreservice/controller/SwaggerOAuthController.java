@@ -32,12 +32,11 @@ public class SwaggerOAuthController {
     public void authorize(@RequestParam(value = "state", required = false) String state,
                           HttpServletRequest request, HttpServletResponse response) throws IOException {
         // The explicit-registration overload defaults {action} to "authorize";
-        // match the normal login resolver's "login" default without altering the caller's request.
+        // always use the login callback, regardless of a caller-supplied action.
         var loginRequest = new HttpServletRequestWrapper(request) {
             @Override
             public String getParameter(String name) {
-                String value = super.getParameter(name);
-                return "action".equals(name) && value == null ? "login" : value;
+                return "action".equals(name) ? "login" : super.getParameter(name);
             }
         };
         var resolved = resolver.resolve(loginRequest, "google");
