@@ -3,6 +3,7 @@ package fu.coreservice.config;
 import fu.coreservice.security.OAuth2LoginFailureHandler;
 
 import fu.coreservice.security.OAuth2LoginSuccessHandler;
+import fu.coreservice.security.LoginAuthorizationRequestRepository;
 
 import fu.coreservice.security.JwtAuthenticationFilter;
 
@@ -102,12 +103,18 @@ public class SecurityConfig {
                 .authenticationProvider(authenticationProvider())
                 .oauth2Login(oauth2 -> oauth2
                         .loginPage("/oauth2/authorization/google")
+                        .authorizationEndpoint(endpoint -> endpoint.authorizationRequestRepository(authorizationRequestRepository()))
                         .successHandler(oAuth2LoginSuccessHandler)
                         .failureHandler(oAuth2LoginFailureHandler)
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    @Bean
+    public LoginAuthorizationRequestRepository authorizationRequestRepository() {
+        return new LoginAuthorizationRequestRepository();
     }
 
     @Bean

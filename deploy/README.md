@@ -14,7 +14,7 @@ https://edugraph-rag.io.vn -> Cloudflare Tunnel -> frontend:80 (Nginx)
                                                        -> ai-core:8082
 ```
 
-Hai repo có SHA độc lập: một tag backend dùng chung cho ba service, một tag riêng cho frontend. Tag dùng để tra cứu image; deploy chốt từng image bằng digest `repository@sha256:...` trước khi khởi động. Không tự deploy khi PR chạy; workflow deploy chỉ nhận nhánh mặc định và dùng environment `production`. Hiện CD được kích hoạt bằng tay để chọn cặp phiên bản; sau khi kích hoạt, các bước triển khai/kiểm tra/rollback chạy tự động.
+Hai repo có SHA độc lập: một tag backend dùng chung cho ba service, một tag riêng cho frontend. Tag chỉ dùng để tra cứu; deploy lấy digest `repository@sha256:...` từ hai manifest của các CI build được chọn, không phân giải từng tag lúc deploy. Không tự deploy khi PR chạy; workflow deploy chỉ nhận nhánh mặc định và dùng environment `production`. Hiện CD được kích hoạt bằng tay để chọn cặp build; sau khi kích hoạt, các bước triển khai/kiểm tra/rollback chạy tự động.
 
 ## 1. Chuẩn bị máy một lần
 
@@ -46,7 +46,9 @@ ghcr.io/<frontend-owner>/edugraph/frontend:sha-<frontend-commit>
 
 Nếu tổ chức hạn chế package publishing, cho phép workflow tạo/ghi GHCR package. Giữ package private hoặc public theo nhu cầu. Nếu package đã tồn tại từ trước, cấp Actions access cho đúng repository.
 
-Mỗi job publish ghi `image-release.json` vào artifact `image-<service>-<commit>-<run-attempt>`, chứa tag và digest do Buildx trả về. Artifact nằm trong đúng workflow run/attempt, giúp phân biệt các lần build lại cùng commit. Tag commit có thể bị ghi đè khi rerun; digest xác định nội dung image bất biến.
+Mỗi job publish backend ghi `image-release.json` với digest Buildx và repository/commit/run ID/attempt vào artifact riêng. Job `release-manifest` chỉ chạy sau khi toàn bộ matrix publish thành công: tải record của đúng attempt, yêu cầu đủ core/gateway/AI CPU/AI GPU, không trùng component và không lẫn build, rồi xuất `backend-release.json` trong artifact `backend-release-<run-id>-<attempt>`. Frontend xuất `frontend-release.json` trong artifact `frontend-release-<run-id>-<attempt>` sau khi image duy nhất publish thành công. PR và manual validation không xuất release manifest.
+
+Chọn artifact của run/attempt thành công cụ thể, không chọn một tag để suy ra bộ image. Tag commit có thể bị ghi đè khi rerun, nhưng manifest đã tải vẫn chứa đúng bộ digest của build được chọn. Khi rerun backend, dùng **Re-run all jobs** để tạo đủ record của một attempt; rerun một phần không được ghép record attempt cũ vào manifest mới. Giữ các artifact/manifest và image digest của release cần dùng; nếu artifact hết hạn, không suy ra lại manifest bằng tag hiện tại.
 
 ## 3. Tạo file secrets trên máy server
 
@@ -66,7 +68,7 @@ Phân biệt hai yêu cầu quyền truy cập cho tài khoản vận hành/runn
 - Kết nối PostgreSQL, Neo4j, Supabase, SMTP; tài khoản/khóa cho môi trường production.
 - `JWT_SECRET`: Base64 của tối thiểu 32 byte ngẫu nhiên. `AI_CORE_INTERNAL_KEY`: secret ngẫu nhiên riêng. Compose dùng cùng giá trị JWT cho hai Java service và cùng internal key cho Java/Python.
 - Khóa LLM và Google OAuth. Không đặt secret vào biến `VITE_*` vì chúng xuất hiện trong JavaScript trình duyệt.
-- `BACKEND_TAG`, `FRONTEND_TAG`: tag của build thành công. Script deploy sẽ ghi đè hai biến này cho mỗi lần chạy.
+- `BACKEND_TAG`, `FRONTEND_TAG`: dùng cho Compose và tra cứu build. Script deploy ghi đè từ manifest được chọn; nếu truyền thêm tham số tag, tag đó phải khớp manifest.
 
 Trong container, `localhost` là container đó. Nếu DB chạy trực tiếp trên Windows host, dùng `host.docker.internal`; không dùng `localhost`. Nếu DB chạy trong Docker stack khác, cấu hình mạng/kết nối tương ứng trước.
 
@@ -120,25 +122,27 @@ Thiết lập tiếp trong phạm vi deployment đã cách ly:
 ## 7. Deploy lần đầu
 
 1. Đợi workflow backend/frontend trên `main` thành công và các image xuất hiện trong GHCR.
-2. Sao chép tag `sha-` cộng **đủ 40 ký tự commit** của từng repo.
+2. Trong run/attempt đã chọn, tải artifact `backend-release-<run-id>-<attempt>` và `frontend-release-<run-id>-<attempt>`. Giải nén hai JSON và chép lên server ngoài checkout, ví dụ `C:/edugraph-releases/backend-123-1.json` và `C:/edugraph-releases/frontend-456-1.json`. Chỉ dùng manifest từ workflow publish tin cậy trên nhánh mặc định, không từ PR; giữ nguyên nội dung JSON. Runner cần quyền đọc hai file này.
 3. Nếu đã cách ly CD theo mục 6: trong repo thực sự chạy deploy, Actions -> **Deploy home server** -> Run workflow trên nhánh mặc định. Nếu chưa cách ly, dùng lệnh PowerShell trực tiếp bên dưới, không kết nối runner production vào repo public.
-4. Điền backend/frontend tags; chọn `gpu` theo kiểm tra thực tế, chọn `tunnel=true` sau khi đã cấu hình token/hostname.
-5. Script kiểm tra cấu hình/secrets, pull toàn bộ image theo tag rồi lấy repository digest từ image đã pull. Một Compose override tạm chỉ chứa các digest được dùng để khởi động với `--pull never`. Script chờ health, kiểm tra frontend/SPA/protected API và đối chiếu image ID của container đang chạy với image đã ghim. Khi bật tunnel, script còn kiểm tra HTTPS qua domain trước khi lưu release thành công. Khởi động model lần đầu có thể mất nhiều phút vì tải model; thời gian chờ Compose là 20 phút.
+4. Điền `backend_manifest_file` và `frontend_manifest_file` bằng đường dẫn tuyệt đối tới hai JSON trên server. Tags là tùy chọn để đối chiếu, không quyết định digest. Chọn `gpu` theo kiểm tra thực tế, chọn `tunnel=true` sau khi đã cấu hình token/hostname.
+5. Script yêu cầu manifest đầy đủ, kiểm tra registry/repository khớp cấu hình và chọn AI CPU/GPU từ cùng manifest backend. Tất cả image ứng dụng được pull bằng digest đã chọn; không pull lại bằng tag commit. Connector cloudflared là image bên thứ ba ngoài CI ứng dụng, được phân giải riêng từ cấu hình và cũng lưu bằng digest. Một Compose override tạm chỉ chứa các digest được dùng để khởi động với `--pull never`. Script chờ health, kiểm tra frontend/SPA/protected API và đối chiếu image ID của container đang chạy với image đã ghim. Khi bật tunnel, script còn kiểm tra HTTPS qua domain trước khi lưu release thành công. Khởi động model lần đầu có thể mất nhiều phút vì tải model; thời gian chờ Compose là 20 phút.
 6. Kiểm tra domain trên trình duyệt: login thường/Google, reset password, upload tài liệu, duyệt đồ thị, chat stream và lộ trình học. Health checks không thay thế kiểm tra nghiệp vụ này.
 
 Chạy từ máy local cũng được (PowerShell 7, trong backend checkout):
 
 ```powershell
-./deploy/deploy.ps1 -EnvFile C:/edugraph-secrets/production.env `
-  -BackendTag sha-<40-character-backend-SHA> `
-  -FrontendTag sha-<40-character-frontend-SHA> -Gpu -Tunnel
+./deploy/deploy.ps1 -EnvFile C:/edugraph-secrets/production.env -BackendManifest C:/edugraph-releases/backend-123-1.json -FrontendManifest C:/edugraph-releases/frontend-456-1.json -Gpu -Tunnel
 ```
 
-Các SHA trong ví dụ là placeholder, phải thay trước khi chạy. Bỏ `-Gpu` để chạy CPU. `-ValidateOnly` chỉ kiểm tra cấu trúc Compose, không pull/start container và không xác minh credentials thật.
+Thay đường dẫn manifest bằng các file thực sự đã tải. Bỏ `-Gpu` để chạy CPU. Chỉ truyền tag mà không có manifest sẽ bị từ chối trước khi gọi Docker. `-ValidateOnly` kiểm tra cấu trúc manifest/tag và Compose, không pull/start container và không xác minh credentials thật.
 
 ## 8. Theo dõi, rollback và backup
 
-Sau deploy thành công, script lưu `current-release.json` và `previous-release.json` cạnh file secrets, không chứa credentials; với ví dụ trên là `C:/edugraph-secrets/current-release.json` và `C:/edugraph-secrets/previous-release.json`. Thư mục này phải cho runner tạo/thay thế/xóa metadata như mục 3. Mỗi file có tag để tra cứu, chế độ GPU/tunnel và map `images` chứa digest của từng service đã qua health/smoke check (kể cả cloudflared khi bật tunnel). Nếu health/smoke check hoặc kiểm tra image ID của release mới lỗi, script pull và khôi phục đúng các digest cùng chế độ GPU/tunnel của release trước, rồi vẫn đánh dấu job thất bại. Tag có bị ghi đè cũng không đổi image rollback. Lần deploy đầu chưa có release cũ nên cần sửa lỗi rồi chạy lại.
+Rollback tự động và thủ công kiểm tra từng digest đã lưu trong Docker cache trước; chỉ pull những digest chưa có. Khi cache đầy đủ, rollback không cần kết nối registry. Nếu image còn thiếu và không tải được, script báo lỗi phục hồi, giữ metadata/artifact cho xử lý thủ công. Activation luôn dùng digest đã lưu với `--pull never`.
+
+Khi chuyển `production.env` sang thư mục khác, chuyển cả `current-release.json` và `previous-release.json` tương ứng trong lúc không có deployment đang chạy. Script chỉ coi là lần deploy đầu khi chưa có current record và project `edugraph` không có container nào (kể cả container đã dừng). Nếu thiếu record nhưng project đã tồn tại, record không hợp lệ hoặc không kiểm tra được project, script từ chối trước khi pull/up; khôi phục metadata đúng với release hiện tại rồi chạy lại. Không xóa container hoặc metadata để bỏ qua kiểm tra này.
+
+Sau deploy thành công, script lưu `current-release.json` và `previous-release.json` cạnh file secrets, không chứa credentials; với ví dụ trên là `C:/edugraph-secrets/current-release.json` và `C:/edugraph-secrets/previous-release.json`. Thư mục này phải cho runner tạo/thay thế/xóa metadata như mục 3. Mỗi file có tag để tra cứu, danh tính build backend/frontend (repository, commit, run ID, attempt), chế độ GPU/tunnel và map `images` chứa digest của từng service đã qua health/smoke check (kể cả cloudflared khi bật tunnel). Nếu health/smoke check hoặc kiểm tra image ID của release mới lỗi, script pull và khôi phục đúng các digest cùng chế độ GPU/tunnel của release trước, rồi vẫn đánh dấu job thất bại. Tag có bị ghi đè cũng không đổi image rollback. Lần deploy đầu chưa có release cũ nên cần sửa lỗi rồi chạy lại.
 
 Trước khi đổi container, script ghi sẵn metadata mới và bản sao phục hồi vào các file tạm cạnh file đích. Sau khi health/smoke checks đạt, script công bố `previous-release.json` rồi đổi tên file metadata mới thành `current-release.json` bằng cùng filesystem; current là bước commit cuối. Lỗi staging không thay runtime. Lỗi công bố một trong hai file đi qua cùng luồng rollback runtime; nếu previous đã đổi thì script phục hồi lại bản ghi previous cũ, kể cả khi phục hồi runtime thất bại. Lần deploy đầu chưa có release để rollback thì script dừng các service vừa bật và xác minh chúng đã dừng.
 
@@ -150,11 +154,19 @@ Rollback chủ động: chạy workflow với `rollback_previous=true`; script �
 ./deploy/deploy.ps1 -EnvFile C:/edugraph-secrets/production.env -ReleaseFile C:/edugraph-secrets/previous-release.json
 ```
 
-Không rollback database tự động. Digest phải còn tồn tại trong registry; giữ image của các release cần rollback. Các file release cũ chỉ chứa tag, chưa có `images`, bị từ chối trước khi thay container vì không chứng minh được image cũ. Khi nâng cấp từ định dạng đó, cần xác minh digest của các container cũ và bổ sung đủ map `images` trước khi deploy tiếp; không suy ra digest cũ từ tag hiện tại.
+Rollback tự động và thủ công đều dùng nội dung **hiện tại** của `production.env` cùng các file Compose trong checkout đang chạy (`deploy/compose.yml`, thêm `deploy/compose.gpu.yml` khi bật GPU). Release record chỉ khôi phục image digest và chế độ GPU/tunnel; không lưu hay khôi phục secrets, biến môi trường hoặc phiên bản Compose. Ví dụ, nếu vừa thay `CLOUDFLARE_TUNNEL_TOKEN` bằng token sai, rollback image vẫn dùng token sai đó và connector có thể tiếp tục lỗi.
+
+Trước khi sửa cấu hình production, giữ bản sao bảo mật của `production.env` đã chạy tốt và ghi lại phiên bản cấu hình triển khai/Compose tương ứng với release. Lưu backup ngoài Git và Docker build context, giới hạn quyền truy cập như file secrets; không đưa secrets vào release record hay log. Nếu rollback lỗi do cấu hình, đợi deployment hiện tại kết thúc, khôi phục cấu hình đã chạy tốt vào đúng vị trí hiện tại của `production.env` và các file Compose tương ứng, giữ nguyên metadata, rồi retry rollback bằng release record muốn khôi phục. Nếu token/key cũ đã bị thu hồi, cấp giá trị hợp lệ thay vì chép lại giá trị hết hiệu lực. Sau một deployment thất bại chưa được ghi nhận, bản đang muốn phục hồi thường là `current-release.json`; `previous-release.json` là release trước bản current, nên kiểm tra record trước khi chọn. Chỉ xác nhận phục hồi sau khi các health/smoke checks của script đạt.
+
+Không rollback database tự động. Digest phải còn trong Docker cache hoặc tải được từ registry; giữ image của các release cần rollback. Các file release cũ chỉ chứa tag, chưa có `images`, bị từ chối trước khi thay container vì không chứng minh được image cũ. Khi nâng cấp từ định dạng đó, cần xác minh digest của các container cũ và bổ sung đủ map `images` trước khi deploy tiếp; không suy ra digest cũ từ tag hiện tại.
 
 Khi chế độ đích là `tunnel=false`, cả deploy và rollback đều gọi `stop cloudflared` trong đúng Compose project rồi xác minh connector không còn chạy trước khi chấp nhận release. Chỉ bỏ `--profile tunnel` hoặc dùng `--remove-orphans` không bảo đảm dừng connector từ release trước. Khi `tunnel=true`, connector vẫn khởi động qua luồng `up` hiện tại.
 
-Khi chế độ đích là `tunnel=true`, cả deploy và rollback phải qua smoke check tại `https://edugraph-rag.io.vn`: `/healthz` trả `200/ok`, `/courses` trả HTML chứa các asset JavaScript của frontend local, `/api/users/me` trả `401` khi chưa đăng nhập. Probe không theo redirect, thêm cache-busting query và header `no-cache`, dùng timeout 10 giây mỗi request, tối đa 4 lượt với khoảng nghỉ 2 giây giữa các lượt. Tunnel cần có hostname/upstream đúng trước khi chạy; lỗi public route làm release thất bại dù loopback/container health vẫn xanh. Chế độ tunnel-off chỉ kiểm tra loopback.
+Khi chế độ đích là `tunnel=true`, cả deploy và rollback phải qua smoke check tại `https://edugraph-rag.io.vn`: `/healthz` trả `200/ok`, `/courses` trả HTML chứa các asset JavaScript của frontend local, `/api/users/me` trả `401` khi chưa đăng nhập. Probe không theo redirect, thêm cache-busting query và header `no-cache`, dùng timeout tối đa 10 giây mỗi request, tối đa 4 lượt với khoảng nghỉ tối đa 2 giây giữa các lượt; các giới hạn còn bị rút ngắn theo deadline của pha hiện tại. Tunnel cần có hostname/upstream đúng trước khi chạy; lỗi public route làm release thất bại dù loopback/container health vẫn xanh. Chế độ tunnel-off chỉ kiểm tra loopback.
+
+Workflow có timeout 60 phút. Bước đầu đọc `started_at` của đúng job/run attempt qua GitHub API (quyền `actions: read`, request tối đa 15 giây) và đặt `DeadlineUtc` ở phút 55 từ lúc job bắt đầu, trước checkout (checkout tối đa 5 phút). Như vậy cả setup lẫn checkout đã tiêu tốn thời gian đều được tính, chừa 5 phút cho thoát tiến trình/cleanup trước khi GitHub hủy job. Nếu không xác định được giờ bắt đầu, workflow dừng trước khi deploy. Script giới hạn tổng ngân sách còn lại theo deadline đó và giữ riêng 30 phút cho phục hồi; vì vậy forward work phải dừng trước phút 25 của job, không được dùng hết giờ rồi mới rollback. Khi chạy trực tiếp, deadline mặc định là 55 phút từ lúc gọi script; có thể truyền deadline sớm hơn, nhưng script không mở rộng tổng ngân sách quá 55 phút.
+
+Mọi lệnh Docker chạy trong tiến trình có timeout và bị kết thúc nếu quá hạn: pull forward tối đa 15 phút, pull rollback tối đa 2 phút, Compose health wait tối đa 20 phút và luôn ngắn hơn thời gian còn lại, các lệnh inspect/config/stop tối đa 30 giây. CLI có khoảng chờ kết thúc/thu output hữu hạn; không có lệnh `WaitForExit` vô hạn. Loopback probes, public probes và retry delay cũng dùng phần ngân sách còn lại. Nếu hết giờ trước activation, release mới không được kích hoạt; nếu lỗi trong/sau activation, script chuyển sang ngân sách phục hồi cùng deadline tổng. Hết giờ phục hồi vẫn giữ lỗi ban đầu và báo cần phục hồi thủ công, không ghi nhận release thành công. Không coi timeout này là bảo đảm khôi phục khi Docker/server đang hỏng.
 
 Workflow dùng concurrency group `edugraph-production`; script còn dùng named mutex `Global\edugraph-production` trên máy Windows để bảo vệ cùng project khi chạy trực tiếp hoặc qua runner, kể cả từ checkout/file secrets khác. Khóa được giữ từ trước khi đọc file release đến hết deploy/rollback và ghi trạng thái, rồi nhả trong `finally`. Nếu đã có lượt chạy giữ khóa, lượt mới báo bận và dừng trước khi gọi Docker; đợi lượt cũ kết thúc rồi chạy lại. Runner và người chạy trực tiếp cần quyền truy cập cùng mutex (khuyến nghị dùng cùng tài khoản Windows như hướng dẫn runner); lỗi quyền truy cập không được bỏ qua để tiếp tục deploy.
 

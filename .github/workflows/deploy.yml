@@ -3,15 +3,23 @@ on:
   workflow_dispatch:
     inputs:
       backend_tag:
-        description: 'Backend image tag: sha-<40 character commit SHA>'
+        description: Optional backend commit tag (must match selected manifest)
         required: false
         type: string
       frontend_tag:
-        description: 'Frontend image tag: sha-<40 character commit SHA>'
+        description: Optional frontend commit tag (must match selected manifest)
+        required: false
+        type: string
+      backend_manifest_file:
+        description: Absolute server path to backend-release.json from selected successful CI run/attempt
+        required: false
+        type: string
+      frontend_manifest_file:
+        description: Absolute server path to frontend-release.json from selected successful CI run/attempt
         required: false
         type: string
       rollback_previous:
-        description: Restore exact digests and modes from previous-release.json (ignores tags/GPU/tunnel inputs)
+        description: Restore previous-release.json (ignores manifests/tags/GPU/tunnel inputs)
         type: boolean
         default: false
       gpu:
@@ -25,6 +33,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: edugraph-production
   cancel-in-progress: false
@@ -36,7 +45,21 @@ jobs:
     environment: production
     timeout-minutes: 60
     steps:
+      - name: Set deployment deadline before checkout
+        shell: pwsh
+        timeout-minutes: 1
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_READ_TOKEN"; Accept = 'application/vnd.github+json' }
+          $jobsUri = "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          $jobs = Invoke-RestMethod -Uri $jobsUri -Headers $headers -TimeoutSec 15
+          $currentJob = @($jobs.jobs | Where-Object { $_.name -eq $env:GITHUB_JOB -and $_.status -eq 'in_progress' })
+          if ($currentJob.Count -ne 1 -or -not $currentJob[0].started_at) { throw 'Cannot establish deployment job deadline.' }
+          $deadline = ([DateTimeOffset]$currentJob[0].started_at).AddMinutes(55).ToString('o')
+          "DEPLOY_DEADLINE_UTC=$deadline" | Out-File -LiteralPath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        timeout-minutes: 5
         with:
           persist-credentials: false
       - name: Deploy selected releases
@@ -45,6 +68,8 @@ jobs:
           DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
           BACKEND_RELEASE: ${{ inputs.backend_tag }}
           FRONTEND_RELEASE: ${{ inputs.frontend_tag }}
+          BACKEND_MANIFEST: ${{ inputs.backend_manifest_file }}
+          FRONTEND_MANIFEST: ${{ inputs.frontend_manifest_file }}
           USE_GPU: ${{ inputs.gpu }}
           USE_TUNNEL: ${{ inputs.tunnel }}
           ROLLBACK_PREVIOUS: ${{ inputs.rollback_previous }}
@@ -52,13 +77,16 @@ jobs:
           if (-not $env:DEPLOY_ENV_FILE) { throw 'Set production variable DEPLOY_ENV_FILE to an absolute secret-file path on this runner.' }
           if ($env:ROLLBACK_PREVIOUS -eq 'true') {
             $releaseFile = Join-Path (Split-Path $env:DEPLOY_ENV_FILE -Parent) 'previous-release.json'
-            ./deploy/deploy.ps1 -EnvFile $env:DEPLOY_ENV_FILE -ReleaseFile $releaseFile
+            ./deploy/deploy.ps1 -EnvFile $env:DEPLOY_ENV_FILE -ReleaseFile $releaseFile -DeadlineUtc $env:DEPLOY_DEADLINE_UTC
             exit 0
           }
           $deployParameters = @{
             EnvFile = $env:DEPLOY_ENV_FILE
             BackendTag = $env:BACKEND_RELEASE
             FrontendTag = $env:FRONTEND_RELEASE
+            BackendManifest = $env:BACKEND_MANIFEST
+            FrontendManifest = $env:FRONTEND_MANIFEST
+            DeadlineUtc = $env:DEPLOY_DEADLINE_UTC
             Gpu = ($env:USE_GPU -eq 'true')
             Tunnel = ($env:USE_TUNNEL -eq 'true')
           }
