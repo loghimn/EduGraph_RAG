@@ -18,6 +18,10 @@ Hệ thống học tập từ tài liệu, đồ thị khái niệm, quan hệ t
 - Cấu hình `INTERNAL_API_KEY` của Python và `AI_CORE_INTERNAL_KEY` của Java phải trùng nhau.
 - Giữ thông tin kết nối database, JWT, mail và API key trong môi trường local/runtime; không commit secret.
 
+## CI/CD và triển khai
+
+Xem [hướng dẫn CI/CD cho edugraph-rag.io.vn](deploy/README.md): kiểm tra tự động, Docker image CPU/GPU, deploy về máy Windows, Cloudflare Tunnel và rollback.
+
 ## Tra cứu API
 
 - Java: `http://localhost:8080/swagger-ui/index.html`.

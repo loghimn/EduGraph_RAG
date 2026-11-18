@@ -1,0 +1,50 @@
+name: Deploy home server
+on:
+  workflow_dispatch:
+    inputs:
+      backend_tag:
+        description: 'Backend image tag: sha-<40 character commit SHA>'
+        required: true
+        type: string
+      frontend_tag:
+        description: 'Frontend image tag: sha-<40 character commit SHA>'
+        required: true
+        type: string
+      gpu:
+        description: Use NVIDIA GPU image and device reservation
+        type: boolean
+        default: true
+      tunnel:
+        description: Start Cloudflare Tunnel (token must be configured on server)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+concurrency:
+  group: edugraph-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: [self-hosted, Windows, X64, edugraph-production]
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Deploy selected releases
+        shell: pwsh
+        env:
+          DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
+          BACKEND_RELEASE: ${{ inputs.backend_tag }}
+          FRONTEND_RELEASE: ${{ inputs.frontend_tag }}
+          USE_GPU: ${{ inputs.gpu }}
+          USE_TUNNEL: ${{ inputs.tunnel }}
+        run: |
+          if (-not $env:DEPLOY_ENV_FILE) { throw 'Set production variable DEPLOY_ENV_FILE to an absolute secret-file path on this runner.' }
+          ./deploy/deploy.ps1 -EnvFile $env:DEPLOY_ENV_FILE `
+            -BackendTag $env:BACKEND_RELEASE -FrontendTag $env:FRONTEND_RELEASE `
+            -Gpu:($env:USE_GPU -eq 'true') -Tunnel:($env:USE_TUNNEL -eq 'true')

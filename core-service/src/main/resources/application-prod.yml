@@ -1,0 +1,45 @@
+spring:
+  jpa:
+    # Retain existing schema upgrades until a complete baseline migration exists.
+    hibernate:
+      ddl-auto: ${DB_DDL_AUTO:update}
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:https://edugraph-rag.io.vn}
+  oauth2:
+    frontend-success-url: ${FRONTEND_SUCCESS_URL:https://edugraph-rag.io.vn/auth/callback}
+    frontend-failure-url: ${FRONTEND_FAILURE_URL:https://edugraph-rag.io.vn/auth/error}
+
+ai-core:
+  internal-key: ${AI_CORE_INTERNAL_KEY}
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+  health:
+    mail:
+      enabled: false
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
