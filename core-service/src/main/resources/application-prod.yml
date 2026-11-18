@@ -22,6 +22,7 @@ springdoc:
   api-docs:
     enabled: false
   swagger-ui:
+    # Also disables the development Swagger OAuth handler; its route excludes prod.
     enabled: false
 
 management:

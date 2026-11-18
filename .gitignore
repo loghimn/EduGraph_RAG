@@ -36,3 +36,5 @@ Thumbs.db
 test-results.xml
 current-release.json
 previous-release.json
+current-release.json.*.tmp
+previous-release.json.*.tmp

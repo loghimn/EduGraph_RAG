@@ -1,5 +1,7 @@
 *
 !requirements.txt
+!requirements-cpu.lock
+!requirements-cu121.lock
 !app/
 !app/**
 !prompts/

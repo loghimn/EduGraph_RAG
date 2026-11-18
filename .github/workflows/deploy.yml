@@ -4,12 +4,16 @@ on:
     inputs:
       backend_tag:
         description: 'Backend image tag: sha-<40 character commit SHA>'
-        required: true
+        required: false
         type: string
       frontend_tag:
         description: 'Frontend image tag: sha-<40 character commit SHA>'
-        required: true
+        required: false
         type: string
+      rollback_previous:
+        description: Restore exact digests and modes from previous-release.json (ignores tags/GPU/tunnel inputs)
+        type: boolean
+        default: false
       gpu:
         description: Use NVIDIA GPU image and device reservation
         type: boolean
@@ -32,7 +36,7 @@ jobs:
     environment: production
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Deploy selected releases
@@ -43,8 +47,19 @@ jobs:
           FRONTEND_RELEASE: ${{ inputs.frontend_tag }}
           USE_GPU: ${{ inputs.gpu }}
           USE_TUNNEL: ${{ inputs.tunnel }}
+          ROLLBACK_PREVIOUS: ${{ inputs.rollback_previous }}
         run: |
           if (-not $env:DEPLOY_ENV_FILE) { throw 'Set production variable DEPLOY_ENV_FILE to an absolute secret-file path on this runner.' }
-          ./deploy/deploy.ps1 -EnvFile $env:DEPLOY_ENV_FILE `
-            -BackendTag $env:BACKEND_RELEASE -FrontendTag $env:FRONTEND_RELEASE `
-            -Gpu:($env:USE_GPU -eq 'true') -Tunnel:($env:USE_TUNNEL -eq 'true')
+          if ($env:ROLLBACK_PREVIOUS -eq 'true') {
+            $releaseFile = Join-Path (Split-Path $env:DEPLOY_ENV_FILE -Parent) 'previous-release.json'
+            ./deploy/deploy.ps1 -EnvFile $env:DEPLOY_ENV_FILE -ReleaseFile $releaseFile
+            exit 0
+          }
+          $deployParameters = @{
+            EnvFile = $env:DEPLOY_ENV_FILE
+            BackendTag = $env:BACKEND_RELEASE
+            FrontendTag = $env:FRONTEND_RELEASE
+            Gpu = ($env:USE_GPU -eq 'true')
+            Tunnel = ($env:USE_TUNNEL -eq 'true')
+          }
+          ./deploy/deploy.ps1 @deployParameters

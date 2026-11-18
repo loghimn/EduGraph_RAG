@@ -14,8 +14,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.DefaultOAuth2User;
@@ -32,8 +35,9 @@ class OAuth2ApprovalTest {
     private final UserSessionRepository sessions = mock(UserSessionRepository.class);
     private final JwtService jwt = mock(JwtService.class);
     private final OAuth2LoginFailureHandler failure = mock(OAuth2LoginFailureHandler.class);
+    private final MockEnvironment environment = new MockEnvironment();
     private final OAuth2LoginSuccessHandler handler = new OAuth2LoginSuccessHandler(users, sessions, jwt,
-            new CustomUserDetailsService(users), mock(PasswordEncoder.class), failure);
+            new CustomUserDetailsService(users), mock(PasswordEncoder.class), failure, environment);
 
     @AfterEach void cleanup() { SecurityContextHolder.clearContext(); }
 
@@ -48,18 +52,68 @@ class OAuth2ApprovalTest {
                 .approvalStatus(ApprovalStatus.APPROVED).isActive(false).build());
     }
 
-    @Test void approvedGoogleInstructorReceivesTokens() throws Exception {
-        var user = User.builder().userId(1L).email("teacher@test.local").passwordHash("hash")
-                .role(UserRole.INSTRUCTOR).approvalStatus(ApprovalStatus.APPROVED).build();
-        when(users.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
-        when(jwt.generateAccessToken(any(), any(), any())).thenReturn("access");
-        when(jwt.generateRefreshToken(any(), any(), any())).thenReturn("refresh");
+    @ParameterizedTest
+    @ValueSource(strings = {"default", "prod"})
+    void approvedGoogleInstructorReceivesTokens(String profile) throws Exception {
+        environment.setActiveProfiles(profile);
+        stubApprovedUser();
         ReflectionTestUtils.setField(handler, "frontendSuccessUrl", "http://localhost/auth/callback");
         var response = new MockHttpServletResponse();
         handler.onAuthenticationSuccess(new MockHttpServletRequest(), response, authentication());
         assertThat(response.getRedirectedUrl()).contains("accessToken=access", "refreshToken=refresh");
         verify(sessions).save(any());
         verifyNoInteractions(failure);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"prod,true", "prod,false", "dev,false"})
+    void disabledSwaggerFlowIgnoresStaleSessionRedirect(String profile, boolean swaggerEnabled) throws Exception {
+        environment.setActiveProfiles(profile);
+        environment.setProperty("springdoc.swagger-ui.enabled", Boolean.toString(swaggerEnabled));
+        stubApprovedUser();
+        ReflectionTestUtils.setField(handler, "frontendSuccessUrl", "https://edugraph-rag.io.vn/auth/callback");
+        var request = swaggerRequest();
+        var response = new MockHttpServletResponse();
+        handler.onAuthenticationSuccess(request, response, authentication());
+        assertThat(response.getRedirectedUrl()).isEqualTo(
+                "https://edugraph-rag.io.vn/auth/callback?accessToken=access&refreshToken=refresh&tokenType=Bearer");
+        assertSwaggerStateCleared(request);
+        verify(sessions).save(any());
+    }
+
+    @Test
+    void developmentSwaggerFlowUsesFixedCallbackAndEncodesState() throws Exception {
+        stubApprovedUser();
+        var request = swaggerRequest();
+        request.getSession().setAttribute("swagger_state", "original&access_token=attacker#fragment");
+        var response = new MockHttpServletResponse();
+        handler.onAuthenticationSuccess(request, response, authentication());
+        assertThat(response.getRedirectedUrl()).isEqualTo(
+                "/swagger-ui/oauth2-redirect.html#access_token=access&token_type=Bearer&expires_in=0"
+                        + "&state=original%26access_token%3Dattacker%23fragment");
+        assertSwaggerStateCleared(request);
+    }
+
+    private MockHttpServletRequest swaggerRequest() {
+        var request = new MockHttpServletRequest();
+        request.getSession().setAttribute("fromSwagger", true);
+        request.getSession().setAttribute("swagger_state", "state");
+        request.getSession().setAttribute("swagger_redirect_uri", "https://attacker.example/collect");
+        return request;
+    }
+
+    private void assertSwaggerStateCleared(MockHttpServletRequest request) {
+        assertThat(request.getSession().getAttribute("fromSwagger")).isNull();
+        assertThat(request.getSession().getAttribute("swagger_state")).isNull();
+        assertThat(request.getSession().getAttribute("swagger_redirect_uri")).isNull();
+    }
+
+    private void stubApprovedUser() {
+        var user = User.builder().userId(1L).email("teacher@test.local").passwordHash("hash")
+                .role(UserRole.INSTRUCTOR).approvalStatus(ApprovalStatus.APPROVED).build();
+        when(users.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(jwt.generateAccessToken(any(), any(), any())).thenReturn("access");
+        when(jwt.generateRefreshToken(any(), any(), any())).thenReturn("refresh");
     }
 
     private void checkBlocked(User user) throws Exception {
