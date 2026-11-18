@@ -1,3 +1,7 @@
+function Get-DockerExecutable {
+    return (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+}
+
 function Invoke-DeploymentProcess {
     [CmdletBinding()]
     param(

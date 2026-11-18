@@ -47,7 +47,7 @@ function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
         $waitIndex = [Array]::IndexOf($Arguments, '--wait-timeout')
         if ($waitIndex -ge 0) { $Arguments[$waitIndex + 1] = [string][Math]::Min(1200, $timeout - 5) }
     }
-    $dockerPath = (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $dockerPath = Get-DockerExecutable
     $result = Invoke-DeploymentProcess -FilePath $dockerPath -Arguments $Arguments -TimeoutSeconds $timeout
     $script:dockerExitCode = $result.ExitCode
     if ($CaptureOutput) {
@@ -150,23 +150,24 @@ function Get-NormalizedRepository([string]$Reference) {
     return $repository
 }
 
-function Get-PulledImages($Configuration, [bool]$UseTunnel) {
-    $images = @{}
-    foreach ($service in $Configuration.services.PSObject.Properties) {
-        if ($service.Name -eq 'cloudflared' -and -not $UseTunnel) { continue }
-        $image = [string]$service.Value.image
-        $repository = Get-NormalizedRepository $image
-        $output = Invoke-Docker @('image', 'inspect', '--format', '{{json .RepoDigests}}', $image) -CaptureOutput
-        if ($dockerExitCode -ne 0) { throw "Cannot inspect pulled image: $image" }
-        $digests = @($output | ConvertFrom-Json)
-        $reference = $digests | Where-Object {
-            $_ -cmatch '@sha256:[a-f0-9]{64}$' -and
-                (Get-NormalizedRepository $_) -ceq $repository
-        } | Select-Object -First 1
-        if (-not $reference) { throw "No repository digest found for pulled image: $image" }
-        $images[$service.Name] = $reference
-    }
-    return $images
+function Get-PulledConnectorImage([string]$Image, [string[]]$PullOutput) {
+    # A successful digest pull already identifies the exact requested manifest.
+    if ($Image -cmatch '@sha256:[a-f0-9]{64}$') { return $Image }
+    if ($Image.Contains('@')) { throw "Invalid configured connector digest: $Image" }
+    $pullDigests = @($PullOutput | ForEach-Object {
+        if ($_ -cmatch '^Digest:\s+(sha256:[a-f0-9]{64})\s*$') { $Matches[1] }
+    } | Select-Object -Unique)
+    if ($pullDigests.Count -ne 1) { throw "Cannot determine the digest reported by connector pull: $Image" }
+    $repository = Get-NormalizedRepository $Image
+    $output = Invoke-Docker @('image', 'inspect', '--format', '{{json .RepoDigests}}', $Image) -CaptureOutput
+    if ($dockerExitCode -ne 0) { throw "Cannot inspect pulled image: $Image" }
+    $digests = @($output | ConvertFrom-Json)
+    $reference = $digests | Where-Object {
+        $_.EndsWith("@$($pullDigests[0])", [StringComparison]::Ordinal) -and
+            (Get-NormalizedRepository $_) -ceq $repository
+    } | Select-Object -First 1
+    if (-not $reference) { throw "No repository digest found for pulled image: $Image" }
+    return $reference
 }
 
 function Test-RunningImages([System.Collections.IDictionary]$Images) {
@@ -298,7 +299,6 @@ try {
     }
     # Quiet validation: rendered Compose output contains credentials.
     Invoke-Compose @('config', '--quiet')
-    if ($ValidateOnly) { Write-Host 'Compose configuration is valid.'; return }
     # Keep rendered secrets in memory only; do not print this configuration.
     $rendered = Invoke-Docker ($composeArgs + @('config', '--format', 'json')) -CaptureOutput
     if ($dockerExitCode -ne 0) { throw 'Cannot read Compose configuration.' }
@@ -311,6 +311,7 @@ try {
             }
         }
     }
+    if ($ValidateOnly) { Write-Host 'Compose configuration is valid.'; return }
     foreach ($service in $configuration.services.PSObject.Properties) {
         if ($service.Value.image -match 'CHANGE_ME') { throw 'Replace image registry placeholders in the environment file.' }
         foreach ($setting in $service.Value.environment.PSObject.Properties) {
@@ -353,10 +354,9 @@ try {
     if ($null -eq $selectedRelease) {
         if ($Tunnel) {
             # Third-party connector is outside the application CI build set.
-            Invoke-Docker @('pull', $configuration.services.cloudflared.image)
+            $connectorPull = @(Invoke-Docker @('pull', $configuration.services.cloudflared.image) -CaptureOutput)
             if ($dockerExitCode -ne 0) { throw 'Docker Compose failed: pull' }
-            $connector = [pscustomobject]@{ services = [pscustomobject]@{ cloudflared = $configuration.services.cloudflared } }
-            $images.cloudflared = (Get-PulledImages $connector $true).cloudflared
+            $images.cloudflared = Get-PulledConnectorImage $configuration.services.cloudflared.image $connectorPull
         }
         $composeArgs += @('-f', (New-ImageOverride $images $Tunnel))
     }
@@ -414,12 +414,22 @@ try {
                 Write-Warning "Runtime/state reconciliation failed; restoration could not be confirmed: $($_.Exception.Message)" -WarningAction Continue
             }
         } else {
-            # A first release has no recorded runtime to restore; stop its services.
+            # The project was confirmed empty before activation. Remove only this
+            # attempt's service containers, keeping all volumes for the next retry.
             try {
                 Invoke-Compose (@('stop') + @($images.Keys))
                 Stop-InactiveTunnel $false
-                $remaining = @(Invoke-Docker ($composeArgs + @('--profile', 'tunnel', 'ps', '--status', 'running', '-q')) -CaptureOutput)
-                if ($dockerExitCode -ne 0 -or $remaining.Count -gt 0) { throw 'Cannot confirm the first release was stopped.' }
+                foreach ($name in $images.Keys) {
+                    $created = @(Invoke-Docker @('ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=edugraph',
+                        '--filter', "label=com.docker.compose.service=$name", '--filter', 'label=com.docker.compose.oneoff=False') -CaptureOutput)
+                    if ($dockerExitCode -ne 0) { throw "Cannot find failed first-release containers for service: $name" }
+                    if ($created.Count -gt 0) {
+                        Invoke-Docker (@('rm', '--force') + $created)
+                        if ($dockerExitCode -ne 0) { throw "Cannot remove failed first-release containers for service: $name" }
+                    }
+                }
+                $remaining = @(Invoke-Docker @('ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=edugraph') -CaptureOutput)
+                if ($dockerExitCode -ne 0 -or $remaining.Count -gt 0) { throw 'Cannot confirm the failed first-release project is empty.' }
             } catch {
                 $preserveOverrideFiles = $true
                 $failure.Exception.Data['RollbackFailure'] = $_.Exception.Message

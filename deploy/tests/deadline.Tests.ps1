@@ -31,22 +31,25 @@ Start-Sleep -Seconds 30
         try { $alive = -not $child.HasExited } finally { $child.Dispose() }
     } catch [ArgumentException] { $alive = $false }
     if ($alive) { throw 'Timed-out deployment command must not remain running.' }
+    $expectedBody = '<html><script src="/assets/test.js"></script></html>'
     foreach ($mode in @('fast', 'unauthorized', 'redirect', 'stall', 'drip')) {
         $readyFile = Join-Path $testRoot "$mode.port"
         $headersFile = Join-Path $testRoot "$mode.headers"
-        $server = Start-Job -ArgumentList $readyFile, $headersFile, $mode -ScriptBlock {
-            param($ReadyFile, $HeadersFile, $Mode)
+        $server = Start-Job -ArgumentList $readyFile, $headersFile, $mode, $expectedBody -ScriptBlock {
+            param($ReadyFile, $HeadersFile, $Mode, $ExpectedBody)
             $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
             $connection = $null
             try {
                 $listener.Start()
-                [IO.File]::WriteAllText($ReadyFile, [string]$listener.LocalEndpoint.Port)
+                $stagedPortFile = "$ReadyFile.tmp"
+                [IO.File]::WriteAllText($stagedPortFile, [string]$listener.LocalEndpoint.Port)
+                [IO.File]::Move($stagedPortFile, $ReadyFile)
                 $connection = $listener.AcceptTcpClient()
                 $stream = $connection.GetStream()
                 $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::ASCII, $false, 1024, $true)
                 while ($reader.ReadLine() -ne '') { }
                 $status = if ($Mode -eq 'unauthorized') { '401 Unauthorized' } elseif ($Mode -eq 'redirect') { '302 Found' } else { '200 OK' }
-                $body = '<html><script src="/assets/test.js"></script></html>'
+                $body = $ExpectedBody
                 $length = if ($Mode -in @('stall', 'drip')) { 100 } else { $body.Length }
                 $location = if ($Mode -eq 'redirect') { "Location: http://127.0.0.1:1/wrong`r`n" } else { '' }
                 $headers = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status`r`nContent-Length: $length`r`nContent-Type: text/html; charset=utf-8`r`n${location}Connection: close`r`n`r`n")
@@ -86,7 +89,7 @@ Start-Sleep -Seconds 30
                 if (-not (Test-Path -LiteralPath $headersFile)) { throw 'The stalled body test must receive headers before timing out.' }
             } else {
                 $expectedStatus = if ($mode -eq 'unauthorized') { 401 } elseif ($mode -eq 'redirect') { 302 } else { 200 }
-                if ($timedOut -or $response.StatusCode -ne $expectedStatus -or $response.Content -notlike '<html>*') { throw 'Fast smoke responses must retain status and the complete body without following redirects.' }
+                if ($timedOut -or $response.StatusCode -ne $expectedStatus -or $response.Content -cne $expectedBody) { throw 'Fast smoke responses must retain status and the complete body without following redirects.' }
             }
         } finally {
             Stop-Job -Job $server

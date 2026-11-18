@@ -82,12 +82,12 @@ jobs:
           }
           $deployParameters = @{
             EnvFile = $env:DEPLOY_ENV_FILE
-            BackendTag = $env:BACKEND_RELEASE
-            FrontendTag = $env:FRONTEND_RELEASE
             BackendManifest = $env:BACKEND_MANIFEST
             FrontendManifest = $env:FRONTEND_MANIFEST
             DeadlineUtc = $env:DEPLOY_DEADLINE_UTC
             Gpu = ($env:USE_GPU -eq 'true')
             Tunnel = ($env:USE_TUNNEL -eq 'true')
           }
+          if ($env:BACKEND_RELEASE) { $deployParameters.BackendTag = $env:BACKEND_RELEASE }
+          if ($env:FRONTEND_RELEASE) { $deployParameters.FrontendTag = $env:FRONTEND_RELEASE }
           ./deploy/deploy.ps1 @deployParameters

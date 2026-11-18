@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.Hidden;
 import fu.coreservice.config.SwaggerOAuthCondition;
 import fu.coreservice.security.LoginAuthorizationRequestRepository;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -30,7 +31,16 @@ public class SwaggerOAuthController {
     @GetMapping("/api/auth/google/authorize")
     public void authorize(@RequestParam(value = "state", required = false) String state,
                           HttpServletRequest request, HttpServletResponse response) throws IOException {
-        var resolved = resolver.resolve(request, "google");
+        // The explicit-registration overload defaults {action} to "authorize";
+        // match the normal login resolver's "login" default without altering the caller's request.
+        var loginRequest = new HttpServletRequestWrapper(request) {
+            @Override
+            public String getParameter(String name) {
+                String value = super.getParameter(name);
+                return "action".equals(name) && value == null ? "login" : value;
+            }
+        };
+        var resolved = resolver.resolve(loginRequest, "google");
         if (resolved == null) { throw new IllegalStateException("Google authorization request is unavailable"); }
         var authorizationRequest = OAuth2AuthorizationRequest.from(resolved).attributes(attributes -> {
             attributes.put(LoginAuthorizationRequestRepository.SWAGGER_MODE, true);

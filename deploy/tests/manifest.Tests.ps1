@@ -15,9 +15,12 @@ function Write-TestRecord([string]$Directory, [string]$Component, [string]$Attem
         component = $Component; image = "ghcr.io/test/edugraph/$Component"; digest = 'sha256:' + ('b' * 64)
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Directory 'image-release.json')
 }
-function Assert-Rejected([string]$Reason) {
+function Assert-Rejected([string]$Reason, [string]$ExpectedMessage = '') {
     $failed = $false
-    try { & $scriptPath @parameters } catch { $failed = $true }
+    try { & $scriptPath @parameters } catch {
+        if ($ExpectedMessage -and $_.Exception.Message -cne $ExpectedMessage) { throw }
+        $failed = $true
+    }
     if (-not $failed) { throw "Manifest accepted invalid build set: $Reason" }
 }
 try {
@@ -33,6 +36,25 @@ try {
     Assert-Rejected 'duplicate component'
     Write-TestRecord $gpuDirectory 'unexpected-service'
     Assert-Rejected 'unexpected component'
+    foreach ($field in @('image', 'digest')) {
+        $valid = if ($field -eq 'image') { 'ghcr.io/test/edugraph/edugraph-ai-core-gpu' } else { 'sha256:' + ('b' * 64) }
+        foreach ($case in @(
+            @{ name = 'array of two valid strings'; value = @($valid, $valid) },
+            @{ name = 'array of one valid string'; value = @($valid) },
+            @{ name = 'empty array'; value = @() },
+            @{ name = 'object'; value = @{ reference = $valid } },
+            @{ name = 'null'; value = $null },
+            @{ name = 'number'; value = 42 }
+        )) {
+            Write-TestRecord $gpuDirectory 'edugraph-ai-core-gpu'
+            $recordPath = Join-Path $gpuDirectory 'image-release.json'
+            $record = Get-Content $recordPath -Raw | ConvertFrom-Json -AsHashtable
+            $record[$field] = $case.value
+            $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $recordPath
+            Assert-Rejected "$field is $($case.name)" 'Invalid published backend image reference.'
+            if (Test-Path -LiteralPath $parameters.OutputFile) { throw 'Invalid records must not publish a manifest.' }
+        }
+    }
     Write-TestRecord $gpuDirectory 'edugraph-ai-core-gpu'
     & $scriptPath @parameters
     $manifest = Get-Content $parameters.OutputFile -Raw | ConvertFrom-Json -AsHashtable

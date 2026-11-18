@@ -9,11 +9,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.env.Environment;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.test.context.support.TestPropertySourceUtils;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -75,10 +77,49 @@ class SwaggerOAuthControllerTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "http://localhost:8080/login/oauth2/code/google",
+            "http://localhost:8080/{action}/oauth2/code/{registrationId}",
+            "{baseUrl}/{action}/oauth2/code/{registrationId}"
+    })
+    void providerCallbackMatchesNormalGoogleLoginForRedirectTemplates(String redirectTemplate) throws Exception {
+        try (var context = context("dev", "true", redirectTemplate)) {
+            var result = MockMvcBuilders.webAppContextSetup(context).build()
+                    .perform(get("/api/auth/google/authorize").param("state", "swagger-state")
+                            .with(request -> { request.setServerPort(8080); return request; }))
+                    .andExpect(status().isFound()).andReturn();
+            var query = UriComponentsBuilder.fromUriString(result.getResponse().getRedirectedUrl())
+                    .build().getQueryParams();
+            String providerCallback = UriUtils.decode(query.getFirst("redirect_uri"), java.nio.charset.StandardCharsets.UTF_8);
+            var normalRequest = new MockHttpServletRequest("GET", "/oauth2/authorization/google");
+            normalRequest.setServletPath("/oauth2/authorization/google");
+            normalRequest.setServerPort(8080);
+            var normal = new DefaultOAuth2AuthorizationRequestResolver(
+                    context.getBean(ClientRegistrationRepository.class), "/oauth2/authorization").resolve(normalRequest);
+            assertNotNull(normal);
+            assertEquals("http://localhost:8080/login/oauth2/code/google", providerCallback);
+            assertEquals(normal.getRedirectUri(), providerCallback);
+            var callback = new MockHttpServletRequest();
+            callback.setSession(result.getRequest().getSession(false));
+            callback.setParameter("state", UriUtils.decode(query.getFirst("state"), java.nio.charset.StandardCharsets.UTF_8));
+            var saved = context.getBean(LoginAuthorizationRequestRepository.class).loadAuthorizationRequest(callback);
+            assertNotNull(saved);
+            assertEquals(providerCallback, saved.getRedirectUri());
+            assertEquals(Boolean.TRUE, saved.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_MODE));
+            assertEquals("swagger-state", saved.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_STATE));
+        }
+    }
+
     private AnnotationConfigWebApplicationContext context(String profile, String swaggerEnabled) {
+        return context(profile, swaggerEnabled, "http://localhost/login/oauth2/code/google");
+    }
+
+    private AnnotationConfigWebApplicationContext context(String profile, String swaggerEnabled, String redirectTemplate) {
         var context = new AnnotationConfigWebApplicationContext();
         context.setServletContext(new MockServletContext());
         context.getEnvironment().setActiveProfiles(profile.split(","));
+        TestPropertySourceUtils.addInlinedPropertiesToEnvironment(context, "test.google.redirect-uri=" + redirectTemplate);
         if (swaggerEnabled != null) {
             TestPropertySourceUtils.addInlinedPropertiesToEnvironment(context,
                     "springdoc.swagger-ui.enabled=" + swaggerEnabled);
@@ -94,10 +135,10 @@ class SwaggerOAuthControllerTest {
     static class TestConfig {
         @Bean AuthService authService() { return mock(AuthService.class); }
         @Bean LoginAuthorizationRequestRepository authorizationRequests() { return new LoginAuthorizationRequestRepository(); }
-        @Bean ClientRegistrationRepository registrations() {
+        @Bean ClientRegistrationRepository registrations(Environment environment) {
             return new InMemoryClientRegistrationRepository(ClientRegistration.withRegistrationId("google")
                     .clientId("test").clientSecret("test").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-                    .redirectUri("http://localhost/login/oauth2/code/google").authorizationUri("https://accounts.example/authorize")
+                    .redirectUri(environment.getRequiredProperty("test.google.redirect-uri")).authorizationUri("https://accounts.example/authorize")
                     .tokenUri("https://accounts.example/token").userInfoUri("https://accounts.example/userinfo")
                     .userNameAttributeName("email").scope("email").build());
         }

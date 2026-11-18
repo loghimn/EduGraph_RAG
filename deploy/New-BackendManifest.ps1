@@ -22,7 +22,8 @@ foreach ($file in $records) {
     }
     $component = [string]$record.component
     if ($component -notin $required -or $images.ContainsKey($component)) { throw 'Unexpected or duplicate backend component.' }
-    if ($record.image -cne "ghcr.io/$owner/edugraph/$component" -or $record.digest -cnotmatch '^sha256:[a-f0-9]{64}$') {
+    if ($record.image -isnot [string] -or $record.digest -isnot [string] -or
+        $record.image -cne "ghcr.io/$owner/edugraph/$component" -or $record.digest -cnotmatch '^sha256:[a-f0-9]{64}$') {
         throw 'Invalid published backend image reference.'
     }
     $images[$component] = "$($record.image)@$($record.digest)"
