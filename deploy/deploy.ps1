@@ -38,15 +38,30 @@ function Get-OperationTimeout([int]$MaximumSeconds) {
     return [int][Math]::Floor([Math]::Min($MaximumSeconds, $remaining))
 }
 
-function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
-    $maximum = if ($Arguments -contains 'pull') { if ($recovering) { 120 } else { 900 } }
-        elseif ($Arguments -contains 'up') { 1205 } else { 30 }
-    $timeout = Get-OperationTimeout $maximum
-    if ($Arguments -contains 'up') {
-        if ($timeout -le 5) { throw [TimeoutException]::new('Insufficient deployment time remaining for activation.') }
-        $waitIndex = [Array]::IndexOf($Arguments, '--wait-timeout')
-        if ($waitIndex -ge 0) { $Arguments[$waitIndex + 1] = [string][Math]::Min(1200, $timeout - 5) }
+function Get-DockerOperationLimit([string[]]$Arguments) {
+    if ($Arguments -contains 'pull') {
+        if ($recovering) { return 120 }
+        return 900
     }
+    if ($Arguments -contains 'up') { return 1205 }
+    return 30
+}
+
+function Set-ActivationWaitTimeout([string[]]$Arguments, [int]$TimeoutSeconds) {
+    if ($Arguments -notcontains 'up') { return }
+    if ($TimeoutSeconds -le 5) { throw [TimeoutException]::new('Insufficient deployment time remaining for activation.') }
+    $waitIndex = [Array]::IndexOf($Arguments, '--wait-timeout')
+    if ($waitIndex -ge 0) { $Arguments[$waitIndex + 1] = [string][Math]::Min(1200, $TimeoutSeconds - 5) }
+}
+
+function Show-DeploymentProcessResult($Result) {
+    if ($Result.Output) { Write-Information $Result.Output.TrimEnd() -InformationAction Continue }
+    if ($Result.Error) { Write-Information $Result.Error.TrimEnd() -InformationAction Continue }
+}
+
+function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
+    $timeout = Get-OperationTimeout (Get-DockerOperationLimit $Arguments)
+    Set-ActivationWaitTimeout $Arguments $timeout
     $dockerPath = Get-DockerExecutable
     $result = Invoke-DeploymentProcess -FilePath $dockerPath -Arguments $Arguments -TimeoutSeconds $timeout
     $script:dockerExitCode = $result.ExitCode
@@ -54,10 +69,9 @@ function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
     if ($CaptureOutput) {
         # Rendered Compose JSON can contain secrets; never print captured output.
         if ($result.Output) { return $result.Output -split '\r?\n' | Where-Object { $_ -ne '' } }
-    } else {
-        if ($result.Output) { Write-Host $result.Output.TrimEnd() }
-        if ($result.Error) { Write-Host $result.Error.TrimEnd() }
+        return
     }
+    Show-DeploymentProcessResult $result
 }
 
 function Get-ConnectorPullDiagnostic([string]$Diagnostic, $Configuration) {
@@ -129,12 +143,7 @@ function Publish-ReleaseMetadata([string]$Stage, [string]$Destination) {
     [IO.File]::Move($Stage, $Destination, $true)
 }
 
-function Read-CIManifest([string]$Path, [string]$Kind) {
-    if (-not $Path) { throw 'Fresh deployments require both BackendManifest and FrontendManifest from selected successful CI builds; commit tags alone are not sufficient.' }
-    $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
-    $required = if ($Kind -eq 'backend') {
-        @('core-service', 'gateway-service', 'edugraph-ai-core', 'edugraph-ai-core-gpu')
-    } else { @('frontend') }
+function Assert-ManifestIdentity($Manifest, [string]$Kind) {
     if ($manifest -isnot [System.Collections.IDictionary]) { throw "Invalid or incomplete $Kind CI release manifest." }
     foreach ($field in @('kind', 'repository', 'commit', 'tag', 'runId', 'attempt')) {
         if ($manifest[$field] -isnot [string]) { throw "Invalid or incomplete $Kind CI release manifest." }
@@ -142,8 +151,13 @@ function Read-CIManifest([string]$Path, [string]$Kind) {
     if ($manifest.schemaVersion -ne 1 -or $manifest.kind -cne $Kind -or
         $manifest.repository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or
         $manifest.commit -cnotmatch '^[a-f0-9]{40}$' -or $manifest.tag -cne "sha-$($manifest.commit)" -or
-        [string]$manifest.runId -cnotmatch '^[1-9][0-9]*$' -or [string]$manifest.attempt -cnotmatch '^[1-9][0-9]*$' -or
-        $manifest.images -isnot [System.Collections.IDictionary] -or $manifest.images.Count -ne $required.Count) {
+        [string]$manifest.runId -cnotmatch '^[1-9][0-9]*$' -or [string]$manifest.attempt -cnotmatch '^[1-9][0-9]*$') {
+        throw "Invalid or incomplete $Kind CI release manifest."
+    }
+}
+
+function Assert-ManifestImages($Manifest, [string]$Kind, [string[]]$Required) {
+    if ($manifest.images -isnot [System.Collections.IDictionary] -or $manifest.images.Count -ne $required.Count) {
         throw "Invalid or incomplete $Kind CI release manifest."
     }
     foreach ($name in $required) {
@@ -152,19 +166,32 @@ function Read-CIManifest([string]$Path, [string]$Kind) {
             throw "Missing or invalid digest for $Kind component: $name"
         }
     }
-    if ($manifest.Contains('componentAttempts')) {
-        if ($manifest.componentAttempts -isnot [System.Collections.IDictionary] -or
-            $manifest.componentAttempts.Count -ne $required.Count) {
-            throw "Invalid producing attempts for $Kind CI manifest."
-        }
-        foreach ($name in $required) {
-            $producingAttempt = $manifest.componentAttempts[$name]
-            if ($producingAttempt -isnot [string] -or $producingAttempt -cnotmatch '^[1-9][0-9]*$' -or
-                [bigint]$producingAttempt -gt [bigint]$manifest.attempt) {
-                throw "Invalid producing attempt for $Kind component: $name"
-            }
+}
+
+function Assert-ManifestProducingAttempts($Manifest, [string]$Kind, [string[]]$Required) {
+    if (-not $manifest.Contains('componentAttempts')) { return }
+    if ($manifest.componentAttempts -isnot [System.Collections.IDictionary] -or
+        $manifest.componentAttempts.Count -ne $required.Count) {
+        throw "Invalid producing attempts for $Kind CI manifest."
+    }
+    foreach ($name in $required) {
+        $producingAttempt = $manifest.componentAttempts[$name]
+        if ($producingAttempt -isnot [string] -or $producingAttempt -cnotmatch '^[1-9][0-9]*$' -or
+            [bigint]$producingAttempt -gt [bigint]$manifest.attempt) {
+            throw "Invalid producing attempt for $Kind component: $name"
         }
     }
+}
+
+function Read-CIManifest([string]$Path, [string]$Kind) {
+    if (-not $Path) { throw 'Fresh deployments require both BackendManifest and FrontendManifest from selected successful CI builds; commit tags alone are not sufficient.' }
+    $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
+    $required = if ($Kind -eq 'backend') {
+        @('core-service', 'gateway-service', 'edugraph-ai-core', 'edugraph-ai-core-gpu')
+    } else { @('frontend') }
+    Assert-ManifestIdentity $manifest $Kind
+    Assert-ManifestImages $manifest $Kind $required
+    Assert-ManifestProducingAttempts $manifest $Kind $required
     return $manifest
 }
 
@@ -251,25 +278,32 @@ function Test-Origin {
     return $assets
 }
 
+function Assert-PublicProbeResponse($Response, [string]$Path, [string[]]$FrontendAssets) {
+    $expectedStatus = if ($Path -eq '/api/users/me') { 401 } else { 200 }
+    if ($Response.StatusCode -ne $expectedStatus) { throw "Unexpected public status for $Path" }
+    if ($Path -eq '/healthz' -and $Response.Content.Trim() -ne 'ok') { throw 'Unexpected public health response.' }
+    if ($Path -ne '/courses') { return }
+    if ($Response.Content -notmatch '<html') { throw 'Public SPA fallback did not return HTML.' }
+    foreach ($asset in $FrontendAssets) {
+        if (-not $Response.Content.Contains($asset)) { throw 'Public route did not return the deployed frontend assets.' }
+    }
+}
+
+function Invoke-PublicRouteProbes([string]$Origin, [string[]]$FrontendAssets) {
+    foreach ($path in @('/healthz', '/courses', '/api/users/me')) {
+        $probe = "$Origin${path}?deploy-check=$([guid]::NewGuid().ToString('N'))"
+        $response = Invoke-DeploymentWebRequest $probe -TimeoutSec (Get-OperationTimeout 10) -SkipHttpErrorCheck -MaximumRedirection 0 -Headers @{ 'Cache-Control' = 'no-cache' }
+        Assert-PublicProbeResponse $response $path $FrontendAssets
+    }
+}
+
 function Test-PublicRoute([bool]$UseTunnel, [string[]]$FrontendAssets) {
     if (-not $UseTunnel) { return }
     $publicOrigin = 'https://edugraph-rag.io.vn'
     # Finite retries let a newly connected tunnel settle without waiting indefinitely.
     for ($attempt = 1; $attempt -le 4; $attempt++) {
         try {
-            foreach ($path in @('/healthz', '/courses', '/api/users/me')) {
-                $probe = "$publicOrigin${path}?deploy-check=$([guid]::NewGuid().ToString('N'))"
-                $response = Invoke-DeploymentWebRequest $probe -TimeoutSec (Get-OperationTimeout 10) -SkipHttpErrorCheck -MaximumRedirection 0 -Headers @{ 'Cache-Control' = 'no-cache' }
-                $expectedStatus = if ($path -eq '/api/users/me') { 401 } else { 200 }
-                if ($response.StatusCode -ne $expectedStatus) { throw "Unexpected public status for $path" }
-                if ($path -eq '/healthz' -and $response.Content.Trim() -ne 'ok') { throw 'Unexpected public health response.' }
-                if ($path -eq '/courses') {
-                    if ($response.Content -notmatch '<html') { throw 'Public SPA fallback did not return HTML.' }
-                    foreach ($asset in $FrontendAssets) {
-                        if (-not $response.Content.Contains($asset)) { throw 'Public route did not return the deployed frontend assets.' }
-                    }
-                }
-            }
+            Invoke-PublicRouteProbes $publicOrigin $FrontendAssets
             return
         } catch {
             if ($attempt -eq 4) { throw "Public route check failed for $publicOrigin after 4 attempts: $($_.Exception.Message)" }

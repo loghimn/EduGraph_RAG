@@ -60,6 +60,18 @@ $global:edugraphTestAdvanceAtOrigin = 0
 function Invoke-TestDeploymentElapsedSeconds { return $global:edugraphTestElapsedSeconds }
 function Get-TestDockerExecutable { return 'test-docker-executable' }
 
+function Test-SimulatedDockerTimeout([string[]]$Arguments) {
+    if ($Arguments -contains 'up') { return -not $recovering -and $global:edugraphTestTimeoutActivation }
+    if ($Arguments -notcontains 'pull') { return $false }
+    if ($recovering) { return $global:edugraphTestTimeoutRecoveryPull }
+    return $global:edugraphTestTimeoutForwardPull
+}
+function Reset-SimulatedDockerTimeout([string[]]$Arguments) {
+    if ($Arguments -contains 'up') { $global:edugraphTestTimeoutActivation = $false; return }
+    if ($recovering) { $global:edugraphTestTimeoutRecoveryPull = $false; return }
+    $global:edugraphTestTimeoutForwardPull = $false
+}
+
 function Invoke-TestDockerProcess([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds) {
     Assert-True ($FilePath -ceq 'test-docker-executable') 'tests must use mocked Docker executable discovery'
     $global:edugraphTestProcessCalls.Add(@{ arguments = $Arguments; timeout = $TimeoutSeconds; recovering = [bool]$recovering })
@@ -78,13 +90,8 @@ function Invoke-TestDockerProcess([string]$FilePath, [string[]]$Arguments, [int]
         $global:edugraphTestElapsedSeconds += $global:edugraphTestAdvanceAfterPull
         $global:edugraphTestAdvanceAfterPull = 0
     }
-    $timeout = ($Arguments -contains 'up' -and -not $recovering -and $global:edugraphTestTimeoutActivation) -or
-        ($Arguments -contains 'pull' -and -not $recovering -and $global:edugraphTestTimeoutForwardPull) -or
-        ($Arguments -contains 'pull' -and $recovering -and $global:edugraphTestTimeoutRecoveryPull)
-    if ($timeout) {
-        if ($Arguments -contains 'up') { $global:edugraphTestTimeoutActivation = $false }
-        if ($Arguments -contains 'pull' -and $recovering) { $global:edugraphTestTimeoutRecoveryPull = $false }
-        if ($Arguments -contains 'pull' -and -not $recovering) { $global:edugraphTestTimeoutForwardPull = $false }
+    if (Test-SimulatedDockerTimeout $Arguments) {
+        Reset-SimulatedDockerTimeout $Arguments
         $global:edugraphTestElapsedSeconds += $TimeoutSeconds
         throw [TimeoutException]::new('Simulated Docker command budget exceeded')
     }
@@ -103,147 +110,215 @@ function Get-TestImageId([string]$Reference) {
     } finally { $sha256.Dispose() }
 }
 
-function docker {
+function Get-TestOverrideImages([string[]]$Arguments) {
     $images = @{}
-    for ($index = 0; $index -lt $args.Count - 1; $index++) {
-        if ($args[$index] -eq '-f' -and [IO.Path]::GetExtension($args[$index + 1]) -eq '.tmp') {
-            $override = Get-Content -LiteralPath $args[$index + 1] -Raw | ConvertFrom-Json -AsHashtable
+    for ($index = 0; $index -lt $Arguments.Count - 1; $index++) {
+        if ($Arguments[$index] -eq '-f' -and [IO.Path]::GetExtension($Arguments[$index + 1]) -eq '.tmp') {
+            $override = Get-Content -LiteralPath $Arguments[$index + 1] -Raw | ConvertFrom-Json -AsHashtable
             foreach ($name in $override.services.Keys) { $images[$name] = $override.services[$name].image }
         }
     }
-    $global:edugraphTestCalls.Add(@{ arguments = @($args); backend = $env:BACKEND_TAG; frontend = $env:FRONTEND_TAG; images = $images })
-    $global:LASTEXITCODE = 0
-    if ($args[0] -eq 'ps' -and $args -contains 'label=com.docker.compose.project=edugraph') {
-        Assert-True ($args -contains '-a') 'missing-state protection must include stopped containers'
-        if ($global:edugraphTestFailProjectQuery) { $global:LASTEXITCODE = 1; return }
-        if ($global:edugraphTestStoppedProjectContainer) { 'stopped-project-container' }
-        $serviceFilter = @($args | Where-Object { $_ -like 'label=com.docker.compose.service=*' })
-        $oneOffFilter = @($args | Where-Object { $_ -like 'label=com.docker.compose.oneoff=*' })
-        if ($serviceFilter.Count -gt 0) {
-            Assert-True ($serviceFilter.Count -eq 1 -and $oneOffFilter.Count -eq 1 -and
-                $oneOffFilter[0] -ceq 'label=com.docker.compose.oneoff=False') 'per-service cleanup lookup must require the exact one-off filter False'
-        } else {
-            Assert-True ($oneOffFilter.Count -eq 0) 'project-wide verification must not exclude one-off containers'
-        }
-        foreach ($name in @($global:edugraphTestRunningImages.Keys) + @($global:edugraphTestStoppedImages.Keys)) {
-            if ($serviceFilter.Count -eq 0 -or $serviceFilter[0] -eq "label=com.docker.compose.service=$name") { "container-$name" }
-        }
+    return $images
+}
+
+function Get-TestProjectContainers([string[]]$Arguments) {
+    Assert-True ($Arguments -contains 'label=com.docker.compose.project=edugraph') 'project lookup must be scoped to edugraph'
+    Assert-True ($Arguments -contains '-a') 'missing-state protection must include stopped containers'
+    if ($global:edugraphTestFailProjectQuery) { $global:LASTEXITCODE = 1; return }
+    if ($global:edugraphTestStoppedProjectContainer) { 'stopped-project-container' }
+    $serviceFilter = @($Arguments | Where-Object { $_ -like 'label=com.docker.compose.service=*' })
+    $oneOffFilter = @($Arguments | Where-Object { $_ -like 'label=com.docker.compose.oneoff=*' })
+    if ($serviceFilter.Count -gt 0) {
+        Assert-True ($serviceFilter.Count -eq 1 -and $oneOffFilter.Count -eq 1 -and
+            $oneOffFilter[0] -ceq 'label=com.docker.compose.oneoff=False') 'per-service cleanup lookup must require the exact one-off filter False'
+    } else {
+        Assert-True ($oneOffFilter.Count -eq 0) 'project-wide verification must not exclude one-off containers'
+    }
+    foreach ($name in @($global:edugraphTestRunningImages.Keys) + @($global:edugraphTestStoppedImages.Keys)) {
+        if ($serviceFilter.Count -eq 0 -or $serviceFilter[0] -eq "label=com.docker.compose.service=$name") { "container-$name" }
+    }
+    return
+}
+
+function Remove-TestContainers([string[]]$Arguments) {
+    Assert-True ($Arguments -notcontains '-v' -and $Arguments -notcontains '--volumes') 'failed first-release recovery must preserve all volumes'
+    if ($global:edugraphTestIgnoreNextRemove) { $global:edugraphTestIgnoreNextRemove = $false; return }
+    foreach ($reference in $Arguments | Select-Object -Skip 2) {
+        $name = $reference -replace '^container-', ''
+        $global:edugraphTestRunningImages.Remove($name)
+        $global:edugraphTestStoppedImages.Remove($name)
+    }
+    return
+}
+
+function Get-TestRepositoryDigests([string]$Reference) {
+    if ($global:edugraphTestNoDigest) { return '[]' }
+    $repository = $reference -replace ':[^/:]+$', ''
+    if ($global:edugraphTestConnectorImage -eq $reference -and $global:edugraphTestConnectorDigestRepository) {
+        $repository = $global:edugraphTestConnectorDigestRepository
+    }
+    $digest = Get-TestImageId "$reference-$global:edugraphTestTagGeneration"
+    if ($global:edugraphTestConnectorPullDigest) { $digest = $global:edugraphTestConnectorPullDigest }
+    $references = @("$repository@$digest")
+    if ($global:edugraphTestConnectorExtraDigest) { $references = @("$repository@$global:edugraphTestConnectorExtraDigest") + $references }
+    $global:edugraphTestInspectedRepoDigests[$reference] = $references
+    return ConvertTo-Json -InputObject $references -Compress
+}
+
+function Get-TestImageInspection([string[]]$Arguments) {
+    $reference = [string]$Arguments[-1]
+    if ($Arguments -contains '{{json .RepoDigests}}') { return Get-TestRepositoryDigests $reference }
+    if ($global:edugraphTestMissingImages.Contains($reference)) { $global:LASTEXITCODE = 1; return }
+    return Get-TestImageId $reference
+}
+
+function Get-TestContainerInspection([string[]]$Arguments) {
+    if ($global:edugraphTestWrongImage) {
+        $global:edugraphTestWrongImage = $false
+        return 'sha256:wrong-image'
+    }
+    $name = $Arguments[-1] -replace '^container-', ''
+    return Get-TestImageId $global:edugraphTestRunningImages[$name]
+}
+
+function Stop-TestContainers([string[]]$Arguments) {
+    if ($global:edugraphTestFailNextStop) {
+        $global:edugraphTestFailNextStop = $false
+        $global:LASTEXITCODE = 1
         return
     }
-    if ($args[0] -eq 'rm') {
-        Assert-True ($args -notcontains '-v' -and $args -notcontains '--volumes') 'failed first-release recovery must preserve all volumes'
-        if ($global:edugraphTestIgnoreNextRemove) { $global:edugraphTestIgnoreNextRemove = $false; return }
-        foreach ($reference in $args | Select-Object -Skip 2) {
-            $name = $reference -replace '^container-', ''
-            $global:edugraphTestRunningImages.Remove($name)
-            $global:edugraphTestStoppedImages.Remove($name)
-        }
+    if ($global:edugraphTestIgnoreNextStop) {
+        $global:edugraphTestIgnoreNextStop = $false
         return
     }
-    if ($args[0] -eq 'image') {
-        $reference = [string]$args[-1]
-        if ($args -contains '{{json .RepoDigests}}') {
-            if ($global:edugraphTestNoDigest) { return '[]' }
-            $repository = $reference -replace ':[^/:]+$', ''
-            if ($global:edugraphTestConnectorImage -eq $reference -and $global:edugraphTestConnectorDigestRepository) {
-                $repository = $global:edugraphTestConnectorDigestRepository
-            }
-            $digest = Get-TestImageId "$reference-$global:edugraphTestTagGeneration"
-            if ($global:edugraphTestConnectorPullDigest) { $digest = $global:edugraphTestConnectorPullDigest }
-            $references = @("$repository@$digest")
-            if ($global:edugraphTestConnectorExtraDigest) { $references = @("$repository@$global:edugraphTestConnectorExtraDigest") + $references }
-            $global:edugraphTestInspectedRepoDigests[$reference] = $references
-            return ConvertTo-Json -InputObject $references -Compress
+    $stopIndex = [Array]::IndexOf($Arguments, 'stop')
+    foreach ($name in $Arguments[($stopIndex + 1)..($Arguments.Count - 1)]) {
+        if ($global:edugraphTestRunningImages.ContainsKey([string]$name)) {
+            $global:edugraphTestStoppedImages[[string]$name] = $global:edugraphTestRunningImages[[string]$name]
+            $global:edugraphTestRunningImages.Remove([string]$name)
         }
-        if ($global:edugraphTestMissingImages.Contains($reference)) { $global:LASTEXITCODE = 1; return }
-        return Get-TestImageId $reference
     }
-    if ($args[0] -eq 'inspect') {
-        if ($global:edugraphTestWrongImage) {
-            $global:edugraphTestWrongImage = $false
-            return 'sha256:wrong-image'
-        }
-        $name = $args[-1] -replace '^container-', ''
-        return Get-TestImageId $global:edugraphTestRunningImages[$name]
-    }
-    if ($args -contains 'stop') {
-        if ($global:edugraphTestFailNextStop) {
-            $global:edugraphTestFailNextStop = $false
-            $global:LASTEXITCODE = 1
-            return
-        }
-        if ($global:edugraphTestIgnoreNextStop) {
-            $global:edugraphTestIgnoreNextStop = $false
-            return
-        }
-        $stopIndex = [Array]::IndexOf($args, 'stop')
-        foreach ($name in $args[($stopIndex + 1)..($args.Count - 1)]) {
-            if ($global:edugraphTestRunningImages.ContainsKey([string]$name)) {
-                $global:edugraphTestStoppedImages[[string]$name] = $global:edugraphTestRunningImages[[string]$name]
-                $global:edugraphTestRunningImages.Remove([string]$name)
-            }
-        }
+    return
+}
+
+function Get-TestRunningContainers([string[]]$Arguments) {
+    if ($Arguments[-1] -eq '-q') {
+        foreach ($name in $global:edugraphTestRunningImages.Keys) { "container-$name" }
         return
     }
-    if ($args -contains 'ps') {
-        if ($args[-1] -eq '-q') {
-            foreach ($name in $global:edugraphTestRunningImages.Keys) { "container-$name" }
-            return
-        }
-        if ($global:edugraphTestRunningImages.ContainsKey([string]$args[-1])) { return "container-$($args[-1])" }
-        return
+    if ($global:edugraphTestRunningImages.ContainsKey([string]$Arguments[-1])) { return "container-$($Arguments[-1])" }
+    return
+}
+
+function Get-TestComposeConfiguration([string[]]$Arguments, [hashtable]$Images) {
+    $configuration = @{ services = @{} }
+    foreach ($name in @('ai-core', 'core-service', 'gateway-service', 'frontend', 'cloudflared')) {
+        $tag = if ($name -eq 'frontend') { $env:FRONTEND_TAG } else { $env:BACKEND_TAG }
+        $variant = if ($name -eq 'ai-core' -and ($Arguments -join ' ') -match 'compose.gpu.yml') { '-gpu' } else { '' }
+        $configuration.services[$name] = @{ image = "ghcr.io/test/$name${variant}:$tag"; environment = @{} }
+        if ($images.ContainsKey($name)) { $configuration.services[$name].image = $images[$name] }
     }
-    if ($args -contains 'config' -and $args -contains '--format') {
-        $configuration = @{ services = @{} }
-        foreach ($name in @('ai-core', 'core-service', 'gateway-service', 'frontend', 'cloudflared')) {
-            $tag = if ($name -eq 'frontend') { $env:FRONTEND_TAG } else { $env:BACKEND_TAG }
-            $variant = if ($name -eq 'ai-core' -and ($args -join ' ') -match 'compose.gpu.yml') { '-gpu' } else { '' }
-            $configuration.services[$name] = @{ image = "ghcr.io/test/$name${variant}:$tag"; environment = @{} }
-            if ($images.ContainsKey($name)) { $configuration.services[$name].image = $images[$name] }
-        }
-        $configuration.services['core-service'].environment.JWT_SECRET = 'dGVzdC1vbmx5LWp3dC1zZWNyZXQtdGhhdC1pcy1hdC1sZWFzdC0zMi1ieXRlcw=='
-        $configuration.services.cloudflared.environment.TUNNEL_TOKEN = 'test-token'
-        if ($global:edugraphTestConnectorImage -and -not $images.ContainsKey('cloudflared')) {
-            $configuration.services.cloudflared.image = $global:edugraphTestConnectorImage
-        }
-        if ($global:edugraphTestFrontendImage) { $configuration.services.frontend.image = $global:edugraphTestFrontendImage }
-        return $configuration | ConvertTo-Json -Depth 5
+    $configuration.services['core-service'].environment.JWT_SECRET = 'dGVzdC1vbmx5LWp3dC1zZWNyZXQtdGhhdC1pcy1hdC1sZWFzdC0zMi1ieXRlcw=='
+    $configuration.services.cloudflared.environment.TUNNEL_TOKEN = 'test-token'
+    if ($global:edugraphTestConnectorImage -and -not $images.ContainsKey('cloudflared')) {
+        $configuration.services.cloudflared.image = $global:edugraphTestConnectorImage
     }
-    if ($global:edugraphTestFailPull -and $args -contains 'pull') { $global:LASTEXITCODE = 1 }
-    if ($args -contains 'pull' -and $recovering -and $global:edugraphTestRecoveryRegistryDown) { $global:LASTEXITCODE = 1 }
-    if ($args[0] -eq 'pull' -and $global:LASTEXITCODE -eq 0) {
-        $null = $global:edugraphTestMissingImages.Remove([string]$args[-1])
+    if ($global:edugraphTestFrontendImage) { $configuration.services.frontend.image = $global:edugraphTestFrontendImage }
+    return $configuration | ConvertTo-Json -Depth 5
+}
+
+function Invoke-TestImagePull([string[]]$Arguments) {
+    if ($global:edugraphTestFailPull -and $Arguments -contains 'pull') { $global:LASTEXITCODE = 1 }
+    if ($Arguments -contains 'pull' -and $recovering -and $global:edugraphTestRecoveryRegistryDown) { $global:LASTEXITCODE = 1 }
+    if ($Arguments[0] -eq 'pull' -and $global:LASTEXITCODE -eq 0) {
+        $null = $global:edugraphTestMissingImages.Remove([string]$Arguments[-1])
         if (-not $global:edugraphTestNoPullDigest) {
-            $pulledDigest = if ($global:edugraphTestConnectorPullDigest) { $global:edugraphTestConnectorPullDigest } else { Get-TestImageId "$($args[-1])-$global:edugraphTestTagGeneration" }
+            $pulledDigest = if ($global:edugraphTestConnectorPullDigest) { $global:edugraphTestConnectorPullDigest } else { Get-TestImageId "$($Arguments[-1])-$global:edugraphTestTagGeneration" }
             "Digest: $pulledDigest"
         }
     }
-    if ($args -contains 'up' -and $global:edugraphTestCheckStageAtUp) {
+}
+
+function Start-TestContainers([hashtable]$Images) {
+    if ($global:edugraphTestCheckStageAtUp) {
         $global:edugraphTestCheckStageAtUp = $false
         Assert-True (Test-Path -LiteralPath $global:edugraphTestCurrentStage) 'new metadata must be staged before any container replacement'
         $staged = Get-Content -LiteralPath $global:edugraphTestCurrentStage -Raw | ConvertFrom-Json
         Assert-True ($staged.backendTag -eq $env:BACKEND_TAG) 'staged metadata must describe the target release before up'
     }
-    if ($args -contains 'up') {
-        foreach ($name in $images.Keys) { $global:edugraphTestStoppedImages.Remove($name) }
-    }
-    if (($global:edugraphTestFailNextUp -or $global:edugraphTestRemainingUpFailures -gt 0) -and $args -contains 'up') {
+
+    foreach ($name in $Images.Keys) { $global:edugraphTestStoppedImages.Remove($name) }
+    if ($global:edugraphTestFailNextUp -or $global:edugraphTestRemainingUpFailures -gt 0) {
         $global:edugraphTestFailNextUp = $false
         if ($global:edugraphTestRemainingUpFailures -gt 0) { $global:edugraphTestRemainingUpFailures-- }
-        # up may fail after starting services, including a newly enabled connector.
-        $global:edugraphTestRunningImages = $images.Clone()
+        $global:edugraphTestRunningImages = $Images.Clone()
         $global:LASTEXITCODE = 1
         return
     }
-    if ($args -contains 'up') {
-        $connector = $global:edugraphTestRunningImages['cloudflared']
-        $global:edugraphTestRunningImages = $images.Clone()
-        # Model Compose retaining a connector whose profile is now disabled.
-        if ($connector -and -not $images.ContainsKey('cloudflared')) {
-            $global:edugraphTestRunningImages['cloudflared'] = $connector
-        }
+    $connector = $global:edugraphTestRunningImages['cloudflared']
+    $global:edugraphTestRunningImages = $Images.Clone()
+    # Compose retains an existing connector when its profile becomes disabled.
+    if ($connector -and -not $Images.ContainsKey('cloudflared')) {
+        $global:edugraphTestRunningImages['cloudflared'] = $connector
     }
 }
+
+function docker {
+    $images = Get-TestOverrideImages $args
+    $global:edugraphTestCalls.Add(@{ arguments = @($args); backend = $env:BACKEND_TAG; frontend = $env:FRONTEND_TAG; images = $images })
+    $global:LASTEXITCODE = 0
+    switch ($args[0]) {
+        'ps' { Get-TestProjectContainers $args; return }
+        'rm' { Remove-TestContainers $args; return }
+        'image' { Get-TestImageInspection $args; return }
+        'inspect' { Get-TestContainerInspection $args; return }
+        'pull' { Invoke-TestImagePull $args; return }
+    }
+    if ($args -contains 'stop') { Stop-TestContainers $args; return }
+    if ($args -contains 'ps') { Get-TestRunningContainers $args; return }
+    if ($args -contains 'config' -and $args -contains '--format') { Get-TestComposeConfiguration $args $images; return }
+    if ($args -contains 'pull') { Invoke-TestImagePull $args; return }
+    if ($args -contains 'up') { Start-TestContainers $images }
+}
+function Get-TestPublicFaultResponse([string]$Path) {
+    if ($path -eq '/courses' -and $global:edugraphTestPublicBodyTimeouts -gt 0) {
+        $global:edugraphTestPublicBodyTimeouts--
+        throw [TimeoutException]::new('Smoke request exceeded its full-response deadline.')
+    }
+
+    if ($global:edugraphTestPublicFailures -gt 0) {
+        $global:edugraphTestPublicFailures--
+        return @{ StatusCode = $global:edugraphTestPublicStatus; Content = '<html>Wrong upstream or unavailable tunnel</html>' }
+    }
+    if ($path -eq '/courses' -and $global:edugraphTestPublicWrongAssets -gt 0) {
+        $global:edugraphTestPublicWrongAssets--
+        return @{ StatusCode = 200; Content = '<html><script src="/assets/wrong-frontend.js"></script></html>' }
+    }
+}
+
+function Get-TestOriginFaultResponse([string]$Path, [bool]$SkipHttpErrorCheck) {
+    if ($path -eq $global:edugraphTestOriginRedirectPath) {
+        $global:edugraphTestOriginRedirectPath = ''
+        if (-not $SkipHttpErrorCheck) { throw 'Response status code does not indicate success: 302 (Found).' }
+        return @{ StatusCode = 302; Content = '<html><script src="/assets/index-test.js"></script></html>'; Headers = @{ Location = 'https://edugraph-rag.io.vn/courses' } }
+    }
+    if ($path -eq '/healthz' -and $global:edugraphTestAdvanceAtOrigin -gt 0) {
+        $global:edugraphTestElapsedSeconds = $global:edugraphTestAdvanceAtOrigin
+        $global:edugraphTestAdvanceAtOrigin = 0
+    }
+}
+
+function Assert-TestOriginLock([string]$Uri) {
+    if ($Uri.EndsWith('/api/users/me') -and $global:edugraphTestCheckLockAtOrigin) {
+        $global:edugraphTestCheckLockAtOrigin = $false
+        $global:edugraphTestLockCheckCount++
+        $marker = Join-Path $testRoot "origin-lock-probe-$global:edugraphTestLockCheckCount.txt"
+        $result = Invoke-DeploymentLockProbe $testEnv $marker
+        Assert-True ($result -like 'Another edugraph deployment is already running*') 'the project lock must remain held during deployment and rollback health checks'
+        Assert-True (-not (Test-Path -LiteralPath $marker)) 'concurrent validation must not reach Docker during health checks'
+    }
+}
+
 function Invoke-TestWebRequest {
     param([string]$Uri, [int]$TimeoutSec, [switch]$SkipHttpErrorCheck, [int]$MaximumRedirection, [hashtable]$Headers)
     $url = [uri]$Uri
@@ -254,36 +329,10 @@ function Invoke-TestWebRequest {
         redirects = $MaximumRedirection; redirectsSpecified = $PSBoundParameters.ContainsKey('MaximumRedirection')
         headers = $Headers; skipHttpErrorCheck = [bool]$SkipHttpErrorCheck
     })
-    if (-not $public -and $path -eq $global:edugraphTestOriginRedirectPath) {
-        $global:edugraphTestOriginRedirectPath = ''
-        if (-not $SkipHttpErrorCheck) { throw 'Response status code does not indicate success: 302 (Found).' }
-        return @{ StatusCode = 302; Content = '<html><script src="/assets/index-test.js"></script></html>'; Headers = @{ Location = 'https://edugraph-rag.io.vn/courses' } }
-    }
-    if ($public -and $path -eq '/courses' -and $global:edugraphTestPublicBodyTimeouts -gt 0) {
-        $global:edugraphTestPublicBodyTimeouts--
-        throw [TimeoutException]::new('Smoke request exceeded its full-response deadline.')
-    }
-    if (-not $public -and $path -eq '/healthz' -and $global:edugraphTestAdvanceAtOrigin -gt 0) {
-        $global:edugraphTestElapsedSeconds = $global:edugraphTestAdvanceAtOrigin
-        $global:edugraphTestAdvanceAtOrigin = 0
-    }
-    if ($public -and $global:edugraphTestPublicFailures -gt 0) {
-        $global:edugraphTestPublicFailures--
-        return @{ StatusCode = $global:edugraphTestPublicStatus; Content = '<html>Wrong upstream or unavailable tunnel</html>' }
-    }
-    if ($public -and $path -eq '/courses' -and $global:edugraphTestPublicWrongAssets -gt 0) {
-        $global:edugraphTestPublicWrongAssets--
-        return @{ StatusCode = 200; Content = '<html><script src="/assets/wrong-frontend.js"></script></html>' }
-    }
+    $fault = if ($public) { Get-TestPublicFaultResponse $path } else { Get-TestOriginFaultResponse $path ([bool]$SkipHttpErrorCheck) }
+    if ($null -ne $fault) { return $fault }
     if ($global:edugraphTestBadOrigin) { throw 'Simulated origin failure' }
-    if ($Uri.EndsWith('/api/users/me') -and $global:edugraphTestCheckLockAtOrigin) {
-        $global:edugraphTestCheckLockAtOrigin = $false
-        $global:edugraphTestLockCheckCount++
-        $marker = Join-Path $testRoot "origin-lock-probe-$global:edugraphTestLockCheckCount.txt"
-        $result = Invoke-DeploymentLockProbe $testEnv $marker
-        Assert-True ($result -like 'Another edugraph deployment is already running*') 'the project lock must remain held during deployment and rollback health checks'
-        Assert-True (-not (Test-Path -LiteralPath $marker)) 'concurrent validation must not reach Docker during health checks'
-    }
+    Assert-TestOriginLock $Uri
     @{ StatusCode = $(if ($path -eq '/api/users/me') { 401 } else { 200 }); Content = $(if ($path -eq '/healthz') { 'ok' } else { '<html><script src="/assets/index-test.js"></script></html>' }) }
 }
 function Invoke-TestRetryDelay {

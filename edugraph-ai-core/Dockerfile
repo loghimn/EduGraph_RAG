@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     HF_HOME=/data/huggingface RAW_DATA_DIR=/data/raw
 WORKDIR /app
 COPY requirements-cpu.lock requirements-cu121.lock ./
-RUN pip install --no-cache-dir --only-binary=:all: --require-hashes --extra-index-url "${TORCH_INDEX_URL}" -r "${REQUIREMENTS_LOCK}" \
+RUN pip install --no-cache-dir --only-binary=:all: --require-hashes \
+        --extra-index-url "${TORCH_INDEX_URL}" -r "${REQUIREMENTS_LOCK}" \
     && pip check \
     && useradd --system --uid 10001 --create-home app \
     && mkdir -p /data/raw /data/huggingface /app/.cache \
