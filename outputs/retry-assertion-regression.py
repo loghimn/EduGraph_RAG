@@ -37,10 +37,14 @@ def prepare_fixture(fixture, script, mutation):
     before, after = MUTATIONS[mutation]
     for name in sources:
         target = confined_path(fixture, name)
-        original = target.read_text(encoding="utf-8")
-        if original.count(before) != 1:
-            raise AssertionError(f"Cannot inject {mutation} into {name}")
-        target.write_text(original.replace(before, after), encoding="utf-8")
+        # Keep the checked path separate from payload data and reuse one handle.
+        with target.open("r+", encoding="utf-8", newline="\n") as stream:
+            original = stream.read()
+            if original.count(before) != 1:
+                raise AssertionError(f"Cannot inject {mutation} into {name}")
+            stream.seek(0)
+            stream.write(original.replace(before, after))
+            stream.truncate()
 
 
 def run_fixture(fixture, script):

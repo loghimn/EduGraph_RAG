@@ -3,14 +3,35 @@ from pathlib import Path
 import runpy
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
-confined_path = runpy.run_path(
+fixture_helpers = runpy.run_path(
     str(Path(__file__).with_name("retry-assertion-regression.py"))
-)["confined_path"]
+)
+confined_path = fixture_helpers["confined_path"]
+prepare_fixture = fixture_helpers["prepare_fixture"]
 
 
 class FixturePathTests(unittest.TestCase):
+    def test_path_like_payload_is_only_written_as_content(self):
+        with tempfile.TemporaryDirectory(prefix="edugraph-path-tests-") as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            fixture = root / "fixture"
+            (repository / "outputs").mkdir(parents=True)
+            fixture.mkdir()
+            (repository / "outputs/maven-bootstrap-tests.sh").write_text("# retry test\n", encoding="utf-8")
+            payload = '# ../../escaped.txt\nfor attempt in 1 2 3; do\n'
+            source = repository / "outputs/maven-bootstrap-command.sh"
+            source.write_text(payload, encoding="utf-8")
+            with patch.dict(prepare_fixture.__globals__, {"ROOT": repository}):
+                prepare_fixture(fixture, "maven-bootstrap-tests.sh", "wrong-count")
+            target = fixture / "outputs/maven-bootstrap-command.sh"
+            self.assertEqual(target.read_text(encoding="utf-8"), '# ../../escaped.txt\nfor attempt in 1 2; do\n')
+            self.assertEqual(source.read_text(encoding="utf-8"), payload)
+            self.assertFalse((root / "escaped.txt").exists())
+
     def test_nested_file_stays_inside_fixture(self):
         with tempfile.TemporaryDirectory(prefix="edugraph-path-tests-") as directory:
             root = Path(directory)
