@@ -136,7 +136,11 @@ function New-ImageOverride([System.Collections.IDictionary]$Images, [bool]$UseTu
 function Get-BackendReleaseId([System.Collections.IDictionary]$Images) {
     $references = foreach ($name in @('ai-core', 'core-service', 'gateway-service')) { "$name=$($Images[$name])" }
     $bytes = [Text.Encoding]::UTF8.GetBytes($references -join "`n")
-    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash($bytes)
+        return [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+    } finally { $sha256.Dispose() }
 }
 
 function Invoke-Compose([string[]]$Arguments) {
