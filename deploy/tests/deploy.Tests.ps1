@@ -252,10 +252,11 @@ function Invoke-TestWebRequest {
     $global:edugraphTestHttpCalls.Add(@{
         uri = $Uri; public = $public; path = $path; timeout = $TimeoutSec
         redirects = $MaximumRedirection; redirectsSpecified = $PSBoundParameters.ContainsKey('MaximumRedirection')
-        headers = $Headers
+        headers = $Headers; skipHttpErrorCheck = [bool]$SkipHttpErrorCheck
     })
     if (-not $public -and $path -eq $global:edugraphTestOriginRedirectPath) {
         $global:edugraphTestOriginRedirectPath = ''
+        if (-not $SkipHttpErrorCheck) { throw 'Response status code does not indicate success: 302 (Found).' }
         return @{ StatusCode = 302; Content = '<html><script src="/assets/index-test.js"></script></html>'; Headers = @{ Location = 'https://edugraph-rag.io.vn/courses' } }
     }
     if ($public -and $path -eq '/courses' -and $global:edugraphTestPublicBodyTimeouts -gt 0) {
@@ -553,6 +554,39 @@ try {
         Assert-True ($image -match '@sha256:[a-f0-9]{64}$') 'release images must use immutable digests'
     }
     $originalImages = $state.images | ConvertTo-Json -Compress
+    $validStateText = Get-Content $statePath -Raw
+    $malformedRelease = Join-Path $testRoot 'malformed-release.json'
+    foreach ($mode in @('gpu', 'tunnel')) {
+        foreach ($value in @('false', 'true', 0, 1, $null, @($false))) {
+            $corrupt = $validStateText | ConvertFrom-Json -AsHashtable
+            $corrupt[$mode] = $value
+            $corrupt | ConvertTo-Json -Depth 8 | Set-Content $malformedRelease
+            $before = $global:edugraphTestCalls.Count
+            $rejected = $false
+            try { & $deployScript -EnvFile $testEnv -ReleaseFile $malformedRelease -ValidateOnly } catch {
+                Assert-True ($_.Exception.Message -like 'Selected release must contain Boolean*') 'saved modes must be JSON Booleans'
+                $rejected = $true
+            }
+            Assert-True $rejected 'non-Boolean rollback modes must fail'
+            Assert-True ($global:edugraphTestCalls.Count -eq $before) 'bad rollback modes must fail before Docker'
+        }
+    }
+    foreach ($value in @(@('ghcr.io/test/core@sha256:' + ('a' * 64)),
+        @('ghcr.io/test/core@sha256:' + ('a' * 64), 'ghcr.io/test/core@sha256:' + ('a' * 64)),
+        @{ reference = 'invalid' }, 42, $null)) {
+        $corrupt = $validStateText | ConvertFrom-Json -AsHashtable
+        $corrupt.images['core-service'] = $value
+        $corrupt | ConvertTo-Json -Depth 8 | Set-Content $statePath
+        $before = $global:edugraphTestCalls.Count
+        $rejected = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -Gpu -Tunnel } catch {
+            Assert-True ($_.Exception.Message -like 'Missing or invalid image digest*') 'saved image values must be scalar strings'
+            $rejected = $true
+        }
+        Assert-True $rejected 'malformed current images must fail before activation'
+        Assert-True (@($global:edugraphTestCalls | Select-Object -Skip $before | Where-Object { $_.arguments -contains 'up' -or $_.arguments -contains 'pull' }).Count -eq 0) 'invalid recovery images must not change runtime'
+    }
+    Set-Content $statePath $validStateText -NoNewline
     Assert-True ($env:BACKEND_TAG -eq 'original-value') 'caller environment must be restored'
     $up = @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' })[-1]
     Assert-True (($up.arguments -join ' ') -match 'compose.gpu.yml') 'GPU override must be used'
@@ -713,6 +747,7 @@ try {
     }
     foreach ($call in @($global:edugraphTestHttpCalls | Where-Object { -not $_.public })) {
         Assert-True ($call.redirectsSpecified -and $call.redirects -eq 0) 'loopback checks must explicitly disable redirects'
+        Assert-True $call.skipHttpErrorCheck 'loopback probes must inspect HTTP status explicitly'
     }
 
     $publicCount = @($global:edugraphTestHttpCalls | Where-Object public).Count
@@ -990,6 +1025,24 @@ try {
     Assert-True ($global:edugraphTestCalls.Count -eq $callCount) 'missing build selection must fail before Docker'
 
     $chosen = New-TestCIManifests $first $second
+    $validFrontendManifest = Get-Content $chosen.frontend -Raw
+    $validFrontendImage = ($validFrontendManifest | ConvertFrom-Json -AsHashtable).images.frontend
+    foreach ($value in @(@($validFrontendImage), @($validFrontendImage, $validFrontendImage), @(), @{ image = $validFrontendImage }, 42, $null)) {
+        $corrupt = $validFrontendManifest | ConvertFrom-Json -AsHashtable
+        $corrupt.images.frontend = $value
+        $corrupt | ConvertTo-Json -Depth 8 | Set-Content $chosen.frontend
+        foreach ($validateOnly in @($true, $false)) {
+            $before = $global:edugraphTestCalls.Count
+            $rejected = $false
+            try { & $deployScript -EnvFile $testEnv -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend -ValidateOnly:$validateOnly } catch {
+                Assert-True ($_.Exception.Message -like 'Missing or invalid digest for frontend*') 'manifest image values must be scalar strings'
+                $rejected = $true
+            }
+            Assert-True $rejected 'malformed manifest must fail validation and deployment'
+            Assert-True ($global:edugraphTestCalls.Count -eq $before) 'malformed manifests must fail before Docker'
+        }
+    }
+    Set-Content $chosen.frontend $validFrontendManifest -NoNewline
     $backendManifest = Get-Content $chosen.backend -Raw | ConvertFrom-Json -AsHashtable
     $gpuReference = $backendManifest.images['edugraph-ai-core-gpu']
     $backendManifest.images.Remove('edugraph-ai-core-gpu')
@@ -1002,6 +1055,21 @@ try {
     Assert-True $incompleteFailed 'CPU deployments must also require the complete backend build set'
     Assert-True ($global:edugraphTestCalls.Count -eq $callCount) 'incomplete manifests must fail before Docker'
     $backendManifest.images['edugraph-ai-core-gpu'] = $gpuReference
+    $backendManifest.componentAttempts = @{}
+    foreach ($component in $backendManifest.images.Keys) { $backendManifest.componentAttempts[$component] = '1' }
+    foreach ($invalidAttempt in @('2', '0', @('1', '1'), $null)) {
+        $backendManifest.componentAttempts['core-service'] = $invalidAttempt
+        $backendManifest | ConvertTo-Json -Depth 6 | Set-Content $chosen.backend
+        $before = $global:edugraphTestCalls.Count
+        $rejected = $false
+        try { & $deployScript -EnvFile $testEnv -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend -ValidateOnly } catch {
+            Assert-True ($_.Exception.Message -like 'Invalid producing attempt*') 'producing attempts must be valid scalar attempts not newer than the manifest'
+            $rejected = $true
+        }
+        Assert-True $rejected 'invalid provenance must not pass validation'
+        Assert-True ($global:edugraphTestCalls.Count -eq $before) 'invalid provenance must fail before Docker'
+    }
+    $backendManifest.componentAttempts['core-service'] = '1'
     $backendManifest | ConvertTo-Json -Depth 4 | Set-Content $chosen.backend
     $tagMismatchFailed = $false
     try { & $deployScript -EnvFile $testEnv -BackendTag $third -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend } catch {
@@ -1025,6 +1093,7 @@ try {
     Assert-True ($chosenUp.images.frontend -eq $frontendManifest.images.frontend) 'frontend must also use the exact selected build digest'
     $chosenState = Get-Content $statePath -Raw | ConvertFrom-Json
     Assert-True ($chosenState.builds.backend.runId -eq '123' -and $chosenState.builds.backend.attempt -eq '1') 'release state must preserve selected CI build identity'
+    Assert-True ($chosenState.builds.backend.componentAttempts.'core-service' -eq '1') 'release state must preserve each image producing attempt'
 
     $deadlineBaseline = Get-Content $statePath -Raw
     $deadlineImages = ($deadlineBaseline | ConvertFrom-Json -AsHashtable).images

@@ -99,7 +99,8 @@ function New-ImageOverride([System.Collections.IDictionary]$Images, [bool]$UseTu
     }
     $services = @{}
     foreach ($name in $requiredServices) {
-        if ($Images[$name] -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$') {
+        if ($Images[$name] -isnot [string] -or
+            $Images[$name] -cnotmatch '^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$') {
             throw "Missing or invalid image digest for service: $name"
         }
         $services[$name] = @{ image = $Images[$name] }
@@ -134,6 +135,10 @@ function Read-CIManifest([string]$Path, [string]$Kind) {
     $required = if ($Kind -eq 'backend') {
         @('core-service', 'gateway-service', 'edugraph-ai-core', 'edugraph-ai-core-gpu')
     } else { @('frontend') }
+    if ($manifest -isnot [System.Collections.IDictionary]) { throw "Invalid or incomplete $Kind CI release manifest." }
+    foreach ($field in @('kind', 'repository', 'commit', 'tag', 'runId', 'attempt')) {
+        if ($manifest[$field] -isnot [string]) { throw "Invalid or incomplete $Kind CI release manifest." }
+    }
     if ($manifest.schemaVersion -ne 1 -or $manifest.kind -cne $Kind -or
         $manifest.repository -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or
         $manifest.commit -cnotmatch '^[a-f0-9]{40}$' -or $manifest.tag -cne "sha-$($manifest.commit)" -or
@@ -142,8 +147,22 @@ function Read-CIManifest([string]$Path, [string]$Kind) {
         throw "Invalid or incomplete $Kind CI release manifest."
     }
     foreach ($name in $required) {
-        if ($manifest.images[$name] -cnotmatch '^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$') {
+        if ($manifest.images[$name] -isnot [string] -or
+            $manifest.images[$name] -cnotmatch '^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$') {
             throw "Missing or invalid digest for $Kind component: $name"
+        }
+    }
+    if ($manifest.Contains('componentAttempts')) {
+        if ($manifest.componentAttempts -isnot [System.Collections.IDictionary] -or
+            $manifest.componentAttempts.Count -ne $required.Count) {
+            throw "Invalid producing attempts for $Kind CI manifest."
+        }
+        foreach ($name in $required) {
+            $producingAttempt = $manifest.componentAttempts[$name]
+            if ($producingAttempt -isnot [string] -or $producingAttempt -cnotmatch '^[1-9][0-9]*$' -or
+                [bigint]$producingAttempt -gt [bigint]$manifest.attempt) {
+                throw "Invalid producing attempt for $Kind component: $name"
+            }
         }
     }
     return $manifest
@@ -218,7 +237,7 @@ function Ensure-ReleaseImages([System.Collections.IDictionary]$Images) {
 
 function Test-Origin {
     foreach ($path in @('/healthz', '/courses')) {
-        $response = Invoke-DeploymentWebRequest "http://127.0.0.1:8088$path" -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
+        $response = Invoke-DeploymentWebRequest "http://127.0.0.1:8088$path" -SkipHttpErrorCheck -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
         if ($response.StatusCode -ne 200) { throw "Origin check failed: $path" }
         if ($path -eq '/courses' -and $response.Content -notmatch '<html') {
             throw 'SPA fallback did not return HTML'
@@ -283,6 +302,10 @@ try {
         Get-Content -LiteralPath $ReleaseFile -Raw | ConvertFrom-Json -AsHashtable
     } else { $null }
     if ($null -ne $selectedRelease) {
+        if ($selectedRelease -isnot [System.Collections.IDictionary] -or
+            $selectedRelease.gpu -isnot [bool] -or $selectedRelease.tunnel -isnot [bool]) {
+            throw 'Selected release must contain Boolean gpu and tunnel modes.'
+        }
         $BackendTag = $selectedRelease.backendTag
         $FrontendTag = $selectedRelease.frontendTag
         $Gpu = [bool]$selectedRelease.gpu
@@ -310,9 +333,13 @@ try {
                 repository = $build.repository; commit = $build.commit
                 runId = $build.runId; attempt = $build.attempt
             }
+            if ($build.Contains('componentAttempts')) {
+                $builds[$build.kind].componentAttempts = $build.componentAttempts
+            }
         }
     }
-    if ($BackendTag -notmatch '^sha-[0-9a-f]{40}$' -or $FrontendTag -notmatch '^sha-[0-9a-f]{40}$') {
+    if ($BackendTag -isnot [string] -or $FrontendTag -isnot [string] -or
+        $BackendTag -cnotmatch '^sha-[0-9a-f]{40}$' -or $FrontendTag -cnotmatch '^sha-[0-9a-f]{40}$') {
         throw 'Provide both commit tags, or a release file containing valid tags and image digests.'
     }
     $composeArgs = @(Get-ComposeArguments $Gpu $Tunnel)
@@ -355,6 +382,7 @@ try {
         try {
             $previous = $currentRecord | ConvertFrom-Json -AsHashtable
             if ($previous -isnot [System.Collections.IDictionary] -or
+                $previous.backendTag -isnot [string] -or $previous.frontendTag -isnot [string] -or
                 $previous.backendTag -cnotmatch '^sha-[0-9a-f]{40}$' -or
                 $previous.frontendTag -cnotmatch '^sha-[0-9a-f]{40}$' -or
                 $previous.gpu -isnot [bool] -or $previous.tunnel -isnot [bool]) {

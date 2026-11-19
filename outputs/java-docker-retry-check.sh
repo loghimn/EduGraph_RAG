@@ -21,9 +21,9 @@ for scenario in immediate transient permanent; do
     count=$(cat "$scenario_state")
     rm "$scenario_state"
     case "$scenario" in
-      immediate) [ "$result" -eq 0 ] && [ "$count" -eq 1 ] ;;
-      transient) [ "$result" -eq 0 ] && [ "$count" -eq 3 ] ;;
-      permanent) [ "$result" -ne 0 ] && [ "$count" -eq 3 ] ;;
+      immediate) { [ "$result" -eq 0 ] && [ "$count" -eq 1 ]; } || exit 1 ;;
+      transient) { [ "$result" -eq 0 ] && [ "$count" -eq 3 ]; } || exit 1 ;;
+      permanent) { [ "$result" -ne 0 ] && [ "$count" -eq 3 ]; } || exit 1 ;;
     esac
     printf '%s: %s passed\n' "$dockerfile" "$scenario"
   done

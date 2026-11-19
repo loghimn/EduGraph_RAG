@@ -52,8 +52,8 @@ try {
     foreach ($component in $components[0..2]) { Write-TestRecord (Join-Path $testRoot $component) $component }
     Assert-Rejected 'missing GPU image'
     $gpuDirectory = Join-Path $testRoot 'edugraph-ai-core-gpu'
-    Write-TestRecord $gpuDirectory 'edugraph-ai-core-gpu' '1'
-    Assert-Rejected 'mixed run attempts'
+    Write-TestRecord $gpuDirectory 'edugraph-ai-core-gpu' '3'
+    Assert-Rejected 'future producing attempt'
     Write-TestRecord $gpuDirectory 'edugraph-ai-core-gpu' '2' '456'
     Assert-Rejected 'mixed workflow runs'
     Write-TestRecord $gpuDirectory 'core-service'
@@ -95,6 +95,27 @@ try {
     foreach ($component in $components) {
         if ($manifest.images[$component] -ne "ghcr.io/test/edugraph/$component@sha256:$('b' * 64)") { throw 'Published digest was changed.' }
     }
+    # Rerunning only the manifest or one component must retain all other records.
+    foreach ($component in $components) { Write-TestRecord (Join-Path $testRoot $component) $component '1' }
+    & $scriptPath @parameters
+    $manifest = Get-Content $parameters.OutputFile -Raw | ConvertFrom-Json -AsHashtable
+    if ($manifest.attempt -ne '2' -or @($manifest.componentAttempts.Values | Where-Object { $_ -ne '1' }).Count) {
+        throw 'Manifest-only reruns must preserve earlier producing attempts.'
+    }
+    $newGpuDirectory = Join-Path $testRoot 'gpu-rerun'
+    Write-TestRecord $newGpuDirectory 'edugraph-ai-core-gpu' '2'
+    $newGpuPath = Join-Path $newGpuDirectory 'image-release.json'
+    $newGpu = Get-Content $newGpuPath -Raw | ConvertFrom-Json -AsHashtable
+    $newGpu.digest = 'sha256:' + ('c' * 64)
+    $newGpu | ConvertTo-Json | Set-Content $newGpuPath
+    & $scriptPath @parameters
+    $manifest = Get-Content $parameters.OutputFile -Raw | ConvertFrom-Json -AsHashtable
+    if ($manifest.images['edugraph-ai-core-gpu'] -notlike '*@sha256:cccc*' -or
+        $manifest.componentAttempts['edugraph-ai-core-gpu'] -ne '2' -or $manifest.componentAttempts['core-service'] -ne '1') {
+        throw 'Partial component reruns must select the latest verified record for each component.'
+    }
+    Write-TestRecord (Join-Path $testRoot 'duplicate-rerun') 'edugraph-ai-core-gpu' '2'
+    Assert-Rejected 'duplicate records for the same component and attempt'
     Write-Host 'Complete CI manifest tests passed.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($testRoot)

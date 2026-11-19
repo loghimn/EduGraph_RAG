@@ -34,6 +34,11 @@ jobs:
           ./deploy/tests/deadline.Tests.ps1
           ./deploy/tests/manifest.Tests.ps1
           ./deploy/tests/deploy.Tests.ps1
+      - name: Test bounded Maven retries
+        run: |
+          bash outputs/java-docker-retry-check.sh
+          bash outputs/maven-bootstrap-tests.sh
+          python3 outputs/retry-assertion-regression.py
 
   java:
     runs-on: ubuntu-latest
@@ -182,7 +187,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: image-*-${{ github.sha }}-${{ github.run_attempt }}
+          pattern: image-*-${{ github.sha }}-*
           path: image-records
       - name: Assemble complete backend release
         shell: pwsh
