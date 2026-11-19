@@ -34,6 +34,8 @@ Máy kiểm tra hiện có Quadro M620 2 GB VRAM. Chưa xác nhận tương thí
 
 Backend kiểm tra Maven `verify`, Python unit/API tests không gọi dịch vụ bên ngoài, Compose CPU/GPU và script deploy. Frontend chạy `npm ci`, lint, toàn bộ `tests/*.test.mjs` và production build. Image chỉ publish sau các job kiểm tra pass trên push vào nhánh mặc định. Build PR không publish.
 
+Hai Java image dùng target `ci-runtime`: lấy đúng JAR từ job Maven `verify` đã thành công trong cùng workflow run/commit, kiểm tra SHA-256, rồi đóng gói vào JRE. Không chạy `dependency:go-offline`/Maven lần nữa trong Docker CI. Artifact `java-package-<service>-<commit>` được thay thế khi job Java rerun thành công; nếu chỉ rerun container thì dùng lại package đã test. Thiếu artifact hoặc checksum sai làm job dừng, không fallback sang build chưa kiểm tra. Dockerfile vẫn mặc định target `source-runtime` để build từ source trên máy local; target này cần truy cập Maven Central.
+
 Tên image (owner phải viết thường):
 
 ```text

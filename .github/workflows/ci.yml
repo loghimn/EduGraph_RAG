@@ -39,6 +39,7 @@ jobs:
           bash outputs/java-docker-retry-check.sh
           bash outputs/maven-bootstrap-tests.sh
           python3 outputs/retry-assertion-regression.py
+          python3 -m unittest discover -s outputs -p test_retry_fixture_paths.py
 
   java:
     runs-on: ubuntu-latest
@@ -67,10 +68,24 @@ jobs:
       - name: Test and package
         working-directory: ${{ matrix.service }}
         run: bash mvnw -B -ntp verify
+      - name: Prepare verified runtime package
+        working-directory: ${{ matrix.service }}
+        run: |
+          mapfile -t jars < <(find target -maxdepth 1 -type f -name '*.jar')
+          if [ "${#jars[@]}" -ne 1 ]; then echo 'Expected exactly one packaged application JAR.' >&2; exit 1; fi
+          mkdir -p ci-artifacts
+          cp "${jars[0]}" ci-artifacts/app.jar
+          (cd ci-artifacts && sha256sum app.jar > app.jar.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: java-package-${{ matrix.service }}-${{ github.sha }}
+          path: ${{ matrix.service }}/ci-artifacts/
+          if-no-files-found: error
+          overwrite: true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: java-tests-${{ matrix.service }}
+          name: java-tests-${{ matrix.service }}-${{ github.run_attempt }}
           path: ${{ matrix.service }}/target/surefire-reports/
 
   python:
@@ -98,7 +113,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: python-tests
+          name: python-tests-${{ github.run_attempt }}
           path: edugraph-ai-core/test-results.xml
 
   containers:
@@ -113,27 +128,41 @@ jobs:
       matrix:
         include:
           - service: core-service
+            target: ci-runtime
             variant: cpu
             suffix: ''
             torch-index: https://download.pytorch.org/whl/cpu
             requirements-lock: requirements-cpu.lock
           - service: gateway-service
+            target: ci-runtime
             variant: cpu
             suffix: ''
             torch-index: https://download.pytorch.org/whl/cpu
             requirements-lock: requirements-cpu.lock
           - service: edugraph-ai-core
+            target: ''
             variant: cpu
             suffix: ''
             torch-index: https://download.pytorch.org/whl/cpu
             requirements-lock: requirements-cpu.lock
           - service: edugraph-ai-core
+            target: ''
             variant: gpu
             suffix: '-gpu'
             torch-index: https://download.pytorch.org/whl/cu121
             requirements-lock: requirements-cu121.lock
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download verified Java package from this workflow run
+        if: matrix.target == 'ci-runtime'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: java-package-${{ matrix.service }}-${{ github.sha }}
+          path: ${{ matrix.service }}/ci-artifacts
+      - name: Verify Java package integrity
+        if: matrix.target == 'ci-runtime'
+        working-directory: ${{ matrix.service }}/ci-artifacts
+        run: sha256sum --check app.jar.sha256
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Image name
         id: image
@@ -152,6 +181,7 @@ jobs:
         id: build
         with:
           context: ./${{ matrix.service }}
+          target: ${{ matrix.target }}
           push: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
           tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}

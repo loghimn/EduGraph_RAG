@@ -17,15 +17,26 @@ MUTATIONS = {
 }
 
 
+def confined_path(root, relative):
+    root = root.resolve(strict=True)
+    relative = Path(relative)
+    if relative.is_absolute() or relative.drive or ".." in relative.parts:
+        raise ValueError("Fixture paths must be relative and cannot contain traversal")
+    target = (root / relative).resolve()
+    if target == root or not target.is_relative_to(root):
+        raise ValueError("Fixture path escapes its root")
+    return target
+
+
 def prepare_fixture(fixture, script, mutation):
     sources = SCRIPTS[script]
     for name in [f"outputs/{script}", *sources]:
-        target = fixture / name
+        target = confined_path(fixture, name)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / name, target)
+        shutil.copyfile(confined_path(ROOT, name), target)
     before, after = MUTATIONS[mutation]
     for name in sources:
-        target = fixture / name
+        target = confined_path(fixture, name)
         original = target.read_text(encoding="utf-8")
         if original.count(before) != 1:
             raise AssertionError(f"Cannot inject {mutation} into {name}")

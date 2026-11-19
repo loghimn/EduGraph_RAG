@@ -2,3 +2,5 @@
 !pom.xml
 !src/
 !src/**
+!ci-artifacts/
+!ci-artifacts/app.jar
