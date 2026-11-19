@@ -68,8 +68,9 @@ async def test_embed_batch_real():
     assert len(res[0]) == 1024
 
 @pytest.mark.asyncio
-async def test_llm_stream_error_after_first_token():
+async def test_llm_stream_error_after_first_token(monkeypatch):
     # Test lỗi xảy ra SAU token đầu thì không fallback mà raise/yield lỗi
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", "configured-test-key")
     client = LLMClient()
     
     async def mock_stream_openai():
@@ -99,6 +100,7 @@ async def test_llm_stream_error_after_first_token():
 
 @pytest.mark.asyncio
 async def test_llm_stream_first_token_timeout_uses_fallback(monkeypatch):
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", "configured-test-key")
     client = LLMClient()
     stalled = asyncio.Event()
 
@@ -117,7 +119,6 @@ async def test_llm_stream_first_token_timeout_uses_fallback(monkeypatch):
 
     client.openai_client.chat.completions.create = AsyncMock(return_value=openai_stream())
     client.gemini_client.chat.completions.create = AsyncMock(return_value=gemini_stream())
-    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", "configured-test-key")
     monkeypatch.setattr("app.core.llm.settings.STREAM_FIRST_TOKEN_TIMEOUT", 0.01)
     monkeypatch.setattr(
         "app.core.rate_limiter.token_limiter.wait_and_deduct",

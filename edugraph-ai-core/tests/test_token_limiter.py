@@ -233,6 +233,41 @@ def test_llm_client_rejects_missing_openai_key(monkeypatch):
         LLMClient()
 
 
+@pytest.mark.parametrize("gemini_key", ["", " ", "dummy_key"])
+def test_llm_client_does_not_construct_unconfigured_gemini(monkeypatch, gemini_key):
+    from app.core.llm import LLMClient
+
+    monkeypatch.setattr("app.core.llm.settings.OPENAI_API_KEY", "test-openai-api-key")
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", gemini_key)
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEYS", "")
+    with patch("app.core.llm.AsyncOpenAI") as sdk:
+        client = LLMClient()
+
+    sdk.assert_called_once_with(api_key="test-openai-api-key")
+    assert client.gemini_clients == []
+    assert client.gemini_client is None
+
+
+@pytest.mark.asyncio
+async def test_llm_without_gemini_preserves_primary_failure(monkeypatch):
+    from app.core.errors import LLMUnavailableError
+    from app.core.llm import LLMClient
+
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEY", "")
+    monkeypatch.setattr("app.core.llm.settings.GEMINI_API_KEYS", "")
+    client = LLMClient()
+    provider_call = AsyncMock(side_effect=RuntimeError("primary unavailable"))
+    with (
+        patch("app.core.llm.cache", {}),
+        patch.object(client, "_call_provider", new=provider_call),
+    ):
+        with pytest.raises(LLMUnavailableError, match="primary unavailable") as failure:
+            await client.generate("prompt", "no-gemini", {"input": "data"})
+
+    assert isinstance(failure.value.__cause__, RuntimeError)
+    provider_call.assert_awaited_once()
+
+
 def test_gpt5_json_request_uses_completion_tokens_without_reasoning():
     from app.core.llm import _completion_request_kwargs
 

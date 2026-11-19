@@ -1,0 +1,238 @@
+name: Backend CI and images
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: backend-ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deployment-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate GitHub Actions workflows
+        run: |
+          curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck=
+      - name: Validate CPU and GPU Compose configurations
+        env:
+          BACKEND_TAG: sha-0000000000000000000000000000000000000000
+          FRONTEND_TAG: sha-0000000000000000000000000000000000000000
+        run: |
+          docker compose --env-file deploy/.env.example -f deploy/compose.yml config --quiet
+          docker compose --env-file deploy/.env.example -f deploy/compose.yml -f deploy/compose.gpu.yml --profile tunnel config --quiet
+      - name: Test deployment failure and rollback handling
+        shell: pwsh
+        run: |
+          ./deploy/tests/deadline.Tests.ps1
+          ./deploy/tests/manifest.Tests.ps1
+          ./deploy/tests/deploy.Tests.ps1
+      - name: Test bounded Maven retries
+        run: |
+          bash outputs/java-docker-retry-check.sh
+          bash outputs/maven-bootstrap-tests.sh
+          python3 outputs/retry-assertion-regression.py
+          python3 -m unittest discover -s outputs -p test_retry_fixture_paths.py
+
+  java:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [core-service, gateway-service]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Download Maven with bounded retries
+        working-directory: ${{ matrix.service }}
+        timeout-minutes: 5
+        run: |
+          for attempt in 1 2 3; do
+            if MVNW_VERBOSE=true bash mvnw -v; then exit 0; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Maven bootstrap failed; retrying in 5 seconds ($attempt/3)." >&2
+            sleep 5
+          done
+      - name: Test and package
+        working-directory: ${{ matrix.service }}
+        run: bash mvnw -B -ntp verify
+      - name: Prepare verified runtime package
+        working-directory: ${{ matrix.service }}
+        run: |
+          mapfile -t jars < <(find target -maxdepth 1 -type f -name '*.jar')
+          if [ "${#jars[@]}" -ne 1 ]; then echo 'Expected exactly one packaged application JAR.' >&2; exit 1; fi
+          mkdir -p ci-artifacts
+          cp "${jars[0]}" ci-artifacts/app.jar
+          (cd ci-artifacts && sha256sum app.jar > app.jar.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: java-package-${{ matrix.service }}-${{ github.sha }}
+          path: ${{ matrix.service }}/ci-artifacts/
+          if-no-files-found: error
+          overwrite: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: java-tests-${{ matrix.service }}-${{ github.run_attempt }}
+          path: ${{ matrix.service }}/target/surefire-reports/
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: edugraph-ai-core
+    env:
+      INTERNAL_API_KEY: ci-test-only
+      EMBEDDING_DEVICE: cpu
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: edugraph-ai-core/requirements-cpu.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-cpu.lock
+          python -m pip check
+      - name: Unit and API tests without external services
+        run: python -m pytest -q -m "not integration and not slow" --junitxml=test-results.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: python-tests-${{ github.run_attempt }}
+          path: edugraph-ai-core/test-results.xml
+
+  containers:
+    needs: [java, python, deployment-config]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: core-service
+            target: ci-runtime
+            variant: cpu
+            suffix: ''
+            torch-index: https://download.pytorch.org/whl/cpu
+            requirements-lock: requirements-cpu.lock
+          - service: gateway-service
+            target: ci-runtime
+            variant: cpu
+            suffix: ''
+            torch-index: https://download.pytorch.org/whl/cpu
+            requirements-lock: requirements-cpu.lock
+          - service: edugraph-ai-core
+            target: ''
+            variant: cpu
+            suffix: ''
+            torch-index: https://download.pytorch.org/whl/cpu
+            requirements-lock: requirements-cpu.lock
+          - service: edugraph-ai-core
+            target: ''
+            variant: gpu
+            suffix: '-gpu'
+            torch-index: https://download.pytorch.org/whl/cu121
+            requirements-lock: requirements-cu121.lock
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download verified Java package from this workflow run
+        if: matrix.target == 'ci-runtime'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: java-package-${{ matrix.service }}-${{ github.sha }}
+          path: ${{ matrix.service }}/ci-artifacts
+      - name: Verify Java package integrity
+        if: matrix.target == 'ci-runtime'
+        working-directory: ${{ matrix.service }}/ci-artifacts
+        run: sha256sum --check app.jar.sha256
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Image name
+        id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SERVICE: ${{ matrix.service }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: echo "name=ghcr.io/${OWNER,,}/edugraph/${SERVICE}${SUFFIX}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: build
+        with:
+          context: ./${{ matrix.service }}
+          target: ${{ matrix.target }}
+          push: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            TORCH_INDEX_URL=${{ matrix.torch-index }}
+            REQUIREMENTS_LOCK=${{ matrix.requirements-lock }}
+          cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.variant }},ignore-error=true
+      - name: Record published image digest
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_COMPONENT: ${{ matrix.service }}${{ matrix.suffix }}
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'Missing published image digest'; exit 1; }
+          jq -n --arg image "$IMAGE_NAME" --arg digest "$IMAGE_DIGEST" --arg commit "$GITHUB_SHA" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg runId "$GITHUB_RUN_ID" --arg repository "$GITHUB_REPOSITORY" --arg component "$IMAGE_COMPONENT" \
+            '{image: $image, digest: $digest, component: $component, repository: $repository, commit: $commit, runId: $runId, attempt: $attempt}' > image-release.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        with:
+          name: image-${{ matrix.service }}${{ matrix.suffix }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: image-release.json
+          if-no-files-found: error
+
+  release-manifest:
+    needs: containers
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: image-*-${{ github.sha }}-*
+          path: image-records
+      - name: Assemble complete backend release
+        shell: pwsh
+        run: |
+          $manifestParameters = @{
+            RecordsDirectory = 'image-records'
+            Repository = $env:GITHUB_REPOSITORY
+            Commit = $env:GITHUB_SHA
+            RunId = $env:GITHUB_RUN_ID
+            Attempt = $env:GITHUB_RUN_ATTEMPT
+            OutputFile = 'backend-release.json'
+          }
+          ./deploy/New-BackendManifest.ps1 @manifestParameters
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backend-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backend-release.json
+          if-no-files-found: error

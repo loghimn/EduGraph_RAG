@@ -97,14 +97,9 @@ class LLMClient:
             )
             for key in _configured_gemini_keys()
         ]
-        if not self.gemini_clients:
-            self.gemini_clients.append(
-                AsyncOpenAI(
-                    api_key=settings.GEMINI_API_KEY,
-                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-                )
-            )
-        self.gemini_client = self.gemini_clients[0]
+        # Gemini is optional: constructing an SDK client with an empty key can
+        # fail at import time even when the primary OpenAI provider is configured.
+        self.gemini_client = self.gemini_clients[0] if self.gemini_clients else None
         self.semaphore = asyncio.Semaphore(settings.LLM_CONCURRENCY)
 
     @retry(
@@ -208,7 +203,7 @@ class LLMClient:
                 )
             except Exception as e:
                 logger.warning(f"OpenAI failed: {e}.")
-                if not _configured_gemini_keys():
+                if not self.gemini_clients:
                     # Không gọi Gemini khi key chưa cấu hình — tránh400 "invalid API key"
                     # làm lu mờ lỗi gốc từ primary.
                     logger.error(
@@ -314,7 +309,7 @@ class LLMClient:
                 return
             logger.warning(f"OpenAI stream failed before first token: {e}.")
 
-            if not _configured_gemini_keys():
+            if not self.gemini_clients:
                 logger.error(
                     "Gemini stream fallback bị bỏ qua vì chưa cấu hình Gemini API key."
                 )

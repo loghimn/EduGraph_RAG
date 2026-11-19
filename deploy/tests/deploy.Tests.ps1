@@ -1,0 +1,1524 @@
+#requires -Version 7.0
+# Dependency-free orchestration tests. No Docker daemon, secrets or network used.
+$ErrorActionPreference = 'Stop'
+$callerBackendTag = $env:BACKEND_TAG
+$callerComposeProfiles = $env:COMPOSE_PROFILES
+$env:COMPOSE_PROFILES = 'tunnel'
+$deployScript = Join-Path $PSScriptRoot '../deploy.ps1'
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ("edugraph-deploy-tests-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $testRoot | Out-Null
+$testEnv = Join-Path $testRoot 'production.env'
+Set-Content -LiteralPath $testEnv -Value '# isolated deployment test'
+$global:edugraphTestCalls = [Collections.Generic.List[object]]::new()
+$global:edugraphTestFailNextUp = $false
+$global:edugraphTestRemainingUpFailures = 0
+$global:edugraphTestFailPull = $false
+$global:edugraphTestConnectorPullError = ''
+$global:edugraphTestRecoveryRegistryDown = $false
+$global:edugraphTestMissingImages = [Collections.Generic.HashSet[string]]::new()
+$global:edugraphTestBadOrigin = $false
+$global:edugraphTestOriginRedirectPath = ''
+$global:edugraphTestTagGeneration = 'original'
+$global:edugraphTestRunningImages = @{}
+$global:edugraphTestStoppedImages = @{}
+$global:edugraphTestStoppedProjectContainer = $false
+$global:edugraphTestFailProjectQuery = $false
+$global:edugraphTestNoDigest = $false
+$global:edugraphTestConnectorImage = $null
+$global:edugraphTestFrontendImage = $null
+$global:edugraphTestConnectorDigestRepository = $null
+$global:edugraphTestInspectedRepoDigests = @{}
+$global:edugraphTestConnectorPullDigest = $null
+$global:edugraphTestConnectorExtraDigest = $null
+$global:edugraphTestNoPullDigest = $false
+$global:edugraphTestWrongImage = $false
+$global:edugraphTestFailNextStop = $false
+$global:edugraphTestFailRecoveryStop = $false
+$global:edugraphTestTimeoutRecoveryStop = $false
+$global:edugraphTestIgnoreNextRemove = $false
+$global:edugraphTestIgnoreNextStop = $false
+$global:edugraphTestCheckLockAtOrigin = $true
+$global:edugraphTestLockCheckCount = 0
+$global:edugraphTestHttpCalls = [Collections.Generic.List[object]]::new()
+$global:edugraphTestPublicFailures = 0
+$global:edugraphTestPublicBodyTimeouts = 0
+$global:edugraphTestPublicWrongAssets = 0
+$global:edugraphTestPublicStatus = 503
+$global:edugraphTestRetryDelays = 0
+$preservedOverrides = [Collections.Generic.HashSet[string]]::new()
+$global:edugraphTestCreatedOverrides = [Collections.Generic.List[string]]::new()
+$global:edugraphTestFailMetadataStage = $false
+$global:edugraphTestPublicationFailures = [Collections.Generic.Queue[string]]::new()
+$global:edugraphTestFailRollbackOnPublish = $false
+$global:edugraphTestCurrentStage = $null
+$global:edugraphTestCheckStageAtUp = $false
+$global:edugraphTestProcessCalls = [Collections.Generic.List[object]]::new()
+$global:edugraphTestElapsedSeconds = 0
+$global:edugraphTestAdvanceAfterPull = 0
+$global:edugraphTestTimeoutActivation = $false
+$global:edugraphTestTimeoutForwardPull = $false
+$global:edugraphTestTimeoutRecoveryPull = $false
+$global:edugraphTestAdvanceAtOrigin = 0
+$global:edugraphTestConfigSecretError = ''
+$global:edugraphTestWrongBackendResponses = 0
+$global:edugraphTestOldBackendReleaseId = ''
+$global:edugraphTestFailBeforeStart = $false
+
+function Invoke-TestDeploymentElapsedSeconds { return $global:edugraphTestElapsedSeconds }
+function Get-TestDockerExecutable { return 'test-docker-executable' }
+
+function Test-SimulatedDockerTimeout([string[]]$Arguments) {
+    if ($Arguments -contains 'up') { return -not $recovering -and $global:edugraphTestTimeoutActivation }
+    if ($Arguments -notcontains 'pull') { return $false }
+    if ($recovering) { return $global:edugraphTestTimeoutRecoveryPull }
+    return $global:edugraphTestTimeoutForwardPull
+}
+function Reset-SimulatedDockerTimeout([string[]]$Arguments) {
+    if ($Arguments -contains 'up') { $global:edugraphTestTimeoutActivation = $false; return }
+    if ($recovering) { $global:edugraphTestTimeoutRecoveryPull = $false; return }
+    $global:edugraphTestTimeoutForwardPull = $false
+}
+
+function Assert-TestProcessLaunch([string[]]$Arguments) {
+    if ($Arguments -contains 'up' -and $global:edugraphTestFailBeforeStart) {
+        $global:edugraphTestFailBeforeStart = $false
+        throw 'Simulated process start failure'
+    }
+}
+
+function Get-TestConfigurationFailure([string[]]$Arguments) {
+    if ($Arguments -notcontains 'config' -or $Arguments -notcontains '--quiet' -or -not $global:edugraphTestConfigSecretError) { return }
+    return @{ ExitCode = 1; Output = $global:edugraphTestConfigSecretError; Error = $global:edugraphTestConfigSecretError }
+}
+
+function Get-TestRecoveryStopFailure([string[]]$Arguments) {
+    if (-not $recovering -or $Arguments -notcontains 'stop') { return }
+    if ($global:edugraphTestTimeoutRecoveryStop) {
+        $global:edugraphTestTimeoutRecoveryStop = $false
+        throw [TimeoutException]::new('Simulated graceful stop timeout')
+    }
+    if ($global:edugraphTestFailRecoveryStop) {
+        $global:edugraphTestFailRecoveryStop = $false
+        return @{ ExitCode = 1; Output = ''; Error = 'Simulated graceful stop failure' }
+    }
+}
+
+function Invoke-TestDockerProcess([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds, [scriptblock]$OnStarted) {
+    Assert-True ($FilePath -ceq 'test-docker-executable') 'tests must use mocked Docker executable discovery'
+    $global:edugraphTestProcessCalls.Add(@{ arguments = $Arguments; timeout = $TimeoutSeconds; recovering = [bool]$recovering })
+    Assert-TestProcessLaunch $Arguments
+    if ($null -ne $OnStarted) { & $OnStarted }
+    $configurationFailure = Get-TestConfigurationFailure $Arguments
+    if ($null -ne $configurationFailure) { return $configurationFailure }
+    $stopFailure = Get-TestRecoveryStopFailure $Arguments
+    if ($null -ne $stopFailure) { return $stopFailure }
+    $output = @(& docker @Arguments) -join [Environment]::NewLine
+    if ($Arguments -contains 'pull' -and -not $recovering -and $global:edugraphTestAdvanceAfterPull -gt 0) {
+        $global:edugraphTestElapsedSeconds += $global:edugraphTestAdvanceAfterPull
+        $global:edugraphTestAdvanceAfterPull = 0
+    }
+    if (Test-SimulatedDockerTimeout $Arguments) {
+        Reset-SimulatedDockerTimeout $Arguments
+        $global:edugraphTestElapsedSeconds += $TimeoutSeconds
+        throw [TimeoutException]::new('Simulated Docker command budget exceeded')
+    }
+    if ($Arguments[0] -eq 'pull' -and $global:edugraphTestConnectorPullError) {
+        return @{ ExitCode = 17; Output = $output; Error = $global:edugraphTestConnectorPullError }
+    }
+    return @{ ExitCode = $global:LASTEXITCODE; Output = $output; Error = '' }
+}
+
+function Get-TestImageId([string]$Reference) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Reference)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash($bytes)
+        return 'sha256:' + [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+    } finally { $sha256.Dispose() }
+}
+
+function Get-TestBackendReleaseId([System.Collections.IDictionary]$Images) {
+    $references = foreach ($name in @('ai-core', 'core-service', 'gateway-service')) { "$name=$($Images[$name])" }
+    return (Get-TestImageId ($references -join "`n")).Substring(7)
+}
+
+function Get-TestOverrideImages([string[]]$Arguments) {
+    $images = @{}
+    for ($index = 0; $index -lt $Arguments.Count - 1; $index++) {
+        if ($Arguments[$index] -eq '-f' -and [IO.Path]::GetExtension($Arguments[$index + 1]) -eq '.tmp') {
+            $override = Get-Content -LiteralPath $Arguments[$index + 1] -Raw | ConvertFrom-Json -AsHashtable
+            foreach ($name in $override.services.Keys) { $images[$name] = $override.services[$name].image }
+        }
+    }
+    return $images
+}
+
+function Get-TestProjectContainers([string[]]$Arguments) {
+    Assert-True ($Arguments -contains 'label=com.docker.compose.project=edugraph') 'project lookup must be scoped to edugraph'
+    Assert-True ($Arguments -contains '-a') 'missing-state protection must include stopped containers'
+    if ($global:edugraphTestFailProjectQuery) { $global:LASTEXITCODE = 1; return }
+    if ($global:edugraphTestStoppedProjectContainer) { 'stopped-project-container' }
+    $serviceFilter = @($Arguments | Where-Object { $_ -like 'label=com.docker.compose.service=*' })
+    $oneOffFilter = @($Arguments | Where-Object { $_ -like 'label=com.docker.compose.oneoff=*' })
+    if ($serviceFilter.Count -gt 0) {
+        Assert-True ($serviceFilter.Count -eq 1 -and $oneOffFilter.Count -eq 1 -and
+            $oneOffFilter[0] -ceq 'label=com.docker.compose.oneoff=False') 'per-service cleanup lookup must require the exact one-off filter False'
+    } else {
+        Assert-True ($oneOffFilter.Count -eq 0) 'project-wide verification must not exclude one-off containers'
+    }
+    foreach ($name in @($global:edugraphTestRunningImages.Keys) + @($global:edugraphTestStoppedImages.Keys)) {
+        if ($serviceFilter.Count -eq 0 -or $serviceFilter[0] -eq "label=com.docker.compose.service=$name") { "container-$name" }
+    }
+    return
+}
+
+function Remove-TestContainers([string[]]$Arguments) {
+    Assert-True ($Arguments -notcontains '-v' -and $Arguments -notcontains '--volumes') 'failed first-release recovery must preserve all volumes'
+    if ($global:edugraphTestIgnoreNextRemove) { $global:edugraphTestIgnoreNextRemove = $false; return }
+    foreach ($reference in $Arguments | Select-Object -Skip 2) {
+        $name = $reference -replace '^container-', ''
+        $global:edugraphTestRunningImages.Remove($name)
+        $global:edugraphTestStoppedImages.Remove($name)
+    }
+    return
+}
+
+function Get-TestRepositoryDigests([string]$Reference) {
+    if ($global:edugraphTestNoDigest) { return '[]' }
+    $repository = $reference -replace ':[^/:]+$', ''
+    if ($global:edugraphTestConnectorImage -eq $reference -and $global:edugraphTestConnectorDigestRepository) {
+        $repository = $global:edugraphTestConnectorDigestRepository
+    }
+    $digest = Get-TestImageId "$reference-$global:edugraphTestTagGeneration"
+    if ($global:edugraphTestConnectorPullDigest) { $digest = $global:edugraphTestConnectorPullDigest }
+    $references = @("$repository@$digest")
+    if ($global:edugraphTestConnectorExtraDigest) { $references = @("$repository@$global:edugraphTestConnectorExtraDigest") + $references }
+    $global:edugraphTestInspectedRepoDigests[$reference] = $references
+    return ConvertTo-Json -InputObject $references -Compress
+}
+
+function Get-TestImageInspection([string[]]$Arguments) {
+    $reference = [string]$Arguments[-1]
+    if ($Arguments -contains '{{json .RepoDigests}}') { return Get-TestRepositoryDigests $reference }
+    if ($global:edugraphTestMissingImages.Contains($reference)) { $global:LASTEXITCODE = 1; return }
+    return Get-TestImageId $reference
+}
+
+function Get-TestContainerInspection([string[]]$Arguments) {
+    if ($global:edugraphTestWrongImage) {
+        $global:edugraphTestWrongImage = $false
+        return 'sha256:wrong-image'
+    }
+    $name = $Arguments[-1] -replace '^container-', ''
+    return Get-TestImageId $global:edugraphTestRunningImages[$name]
+}
+
+function Stop-TestContainers([string[]]$Arguments) {
+    if ($global:edugraphTestFailNextStop) {
+        $global:edugraphTestFailNextStop = $false
+        $global:LASTEXITCODE = 1
+        return
+    }
+    if ($global:edugraphTestIgnoreNextStop) {
+        $global:edugraphTestIgnoreNextStop = $false
+        return
+    }
+    $stopIndex = [Array]::IndexOf($Arguments, 'stop')
+    foreach ($name in $Arguments[($stopIndex + 1)..($Arguments.Count - 1)]) {
+        if ($global:edugraphTestRunningImages.ContainsKey([string]$name)) {
+            $global:edugraphTestStoppedImages[[string]$name] = $global:edugraphTestRunningImages[[string]$name]
+            $global:edugraphTestRunningImages.Remove([string]$name)
+        }
+    }
+    return
+}
+
+function Get-TestRunningContainers([string[]]$Arguments) {
+    if ($Arguments[-1] -eq '-q') {
+        foreach ($name in $global:edugraphTestRunningImages.Keys) { "container-$name" }
+        return
+    }
+    if ($global:edugraphTestRunningImages.ContainsKey([string]$Arguments[-1])) { return "container-$($Arguments[-1])" }
+    return
+}
+
+function Get-TestComposeConfiguration([string[]]$Arguments, [hashtable]$Images) {
+    $configuration = @{ services = @{} }
+    foreach ($name in @('ai-core', 'core-service', 'gateway-service', 'frontend', 'cloudflared')) {
+        $tag = if ($name -eq 'frontend') { $env:FRONTEND_TAG } else { $env:BACKEND_TAG }
+        $variant = if ($name -eq 'ai-core' -and ($Arguments -join ' ') -match 'compose.gpu.yml') { '-gpu' } else { '' }
+        $configuration.services[$name] = @{ image = "ghcr.io/test/$name${variant}:$tag"; environment = @{} }
+        if ($images.ContainsKey($name)) { $configuration.services[$name].image = $images[$name] }
+    }
+    $configuration.services['core-service'].environment.JWT_SECRET = 'dGVzdC1vbmx5LWp3dC1zZWNyZXQtdGhhdC1pcy1hdC1sZWFzdC0zMi1ieXRlcw=='
+    $configuration.services.cloudflared.environment.TUNNEL_TOKEN = 'test-token'
+    if ($global:edugraphTestConnectorImage -and -not $images.ContainsKey('cloudflared')) {
+        $configuration.services.cloudflared.image = $global:edugraphTestConnectorImage
+    }
+    if ($global:edugraphTestFrontendImage) { $configuration.services.frontend.image = $global:edugraphTestFrontendImage }
+    return $configuration | ConvertTo-Json -Depth 5
+}
+
+function Invoke-TestImagePull([string[]]$Arguments) {
+    if ($global:edugraphTestFailPull -and $Arguments -contains 'pull') { $global:LASTEXITCODE = 1 }
+    if ($Arguments -contains 'pull' -and $recovering -and $global:edugraphTestRecoveryRegistryDown) { $global:LASTEXITCODE = 1 }
+    if ($Arguments[0] -eq 'pull' -and $global:LASTEXITCODE -eq 0) {
+        $null = $global:edugraphTestMissingImages.Remove([string]$Arguments[-1])
+        if (-not $global:edugraphTestNoPullDigest) {
+            $pulledDigest = if ($global:edugraphTestConnectorPullDigest) { $global:edugraphTestConnectorPullDigest } else { Get-TestImageId "$($Arguments[-1])-$global:edugraphTestTagGeneration" }
+            "Digest: $pulledDigest"
+        }
+    }
+}
+
+function Start-TestContainers([hashtable]$Images, [string[]]$Arguments) {
+    $serviceIndex = [Array]::IndexOf($Arguments, '--remove-orphans') + 1
+    $selected = @($Arguments | Select-Object -Skip $serviceIndex)
+    Assert-True ($serviceIndex -gt 0 -and $selected.Count -eq $Images.Count) 'activation must explicitly select only pinned services'
+    foreach ($name in $selected) { Assert-True $Images.ContainsKey($name) 'inherited profiles must not activate an unpinned service' }
+    if ($global:edugraphTestCheckStageAtUp) {
+        $global:edugraphTestCheckStageAtUp = $false
+        Assert-True (Test-Path -LiteralPath $global:edugraphTestCurrentStage) 'new metadata must be staged before any container replacement'
+        $staged = Get-Content -LiteralPath $global:edugraphTestCurrentStage -Raw | ConvertFrom-Json
+        Assert-True ($staged.backendTag -eq $env:BACKEND_TAG) 'staged metadata must describe the target release before up'
+    }
+
+    foreach ($name in $Images.Keys) { $global:edugraphTestStoppedImages.Remove($name) }
+    if ($global:edugraphTestFailNextUp -or $global:edugraphTestRemainingUpFailures -gt 0) {
+        $global:edugraphTestFailNextUp = $false
+        if ($global:edugraphTestRemainingUpFailures -gt 0) { $global:edugraphTestRemainingUpFailures-- }
+        $global:edugraphTestRunningImages = $Images.Clone()
+        $global:LASTEXITCODE = 1
+        return
+    }
+    $connector = $global:edugraphTestRunningImages['cloudflared']
+    $global:edugraphTestRunningImages = $Images.Clone()
+    # Compose retains an existing connector when its profile becomes disabled.
+    if ($connector -and -not $Images.ContainsKey('cloudflared')) {
+        $global:edugraphTestRunningImages['cloudflared'] = $connector
+    }
+}
+
+function docker {
+    $images = Get-TestOverrideImages $args
+    $global:edugraphTestCalls.Add(@{ arguments = @($args); backend = $env:BACKEND_TAG; frontend = $env:FRONTEND_TAG; images = $images })
+    $global:LASTEXITCODE = 0
+    switch ($args[0]) {
+        'ps' { Get-TestProjectContainers $args; return }
+        'rm' { Remove-TestContainers $args; return }
+        'image' { Get-TestImageInspection $args; return }
+        'inspect' { Get-TestContainerInspection $args; return }
+        'pull' { Invoke-TestImagePull $args; return }
+    }
+    if ($args -contains 'stop') { Stop-TestContainers $args; return }
+    if ($args -contains 'ps') { Get-TestRunningContainers $args; return }
+    if ($args -contains 'config' -and $args -contains '--format') { Get-TestComposeConfiguration $args $images; return }
+    if ($args -contains 'pull') { Invoke-TestImagePull $args; return }
+    if ($args -contains 'up') { Start-TestContainers $images $args }
+}
+function Get-TestPublicFaultResponse([string]$Path) {
+    if ($path -eq '/courses' -and $global:edugraphTestPublicBodyTimeouts -gt 0) {
+        $global:edugraphTestPublicBodyTimeouts--
+        throw [TimeoutException]::new('Smoke request exceeded its full-response deadline.')
+    }
+
+    if ($global:edugraphTestPublicFailures -gt 0) {
+        $global:edugraphTestPublicFailures--
+        return @{ StatusCode = $global:edugraphTestPublicStatus; Content = '<html>Wrong upstream or unavailable tunnel</html>' }
+    }
+    if ($path -eq '/courses' -and $global:edugraphTestPublicWrongAssets -gt 0) {
+        $global:edugraphTestPublicWrongAssets--
+        return @{ StatusCode = 200; Content = '<html><script src="/assets/wrong-frontend.js"></script></html>' }
+    }
+}
+
+function Get-TestOriginFaultResponse([string]$Path, [bool]$SkipHttpErrorCheck) {
+    if ($path -eq $global:edugraphTestOriginRedirectPath) {
+        $global:edugraphTestOriginRedirectPath = ''
+        if (-not $SkipHttpErrorCheck) { throw 'Response status code does not indicate success: 302 (Found).' }
+        return @{ StatusCode = 302; Content = '<html><script src="/assets/index-test.js"></script></html>'; Headers = @{ Location = 'https://edugraph-rag.io.vn/courses' } }
+    }
+    if ($path -eq '/healthz' -and $global:edugraphTestAdvanceAtOrigin -gt 0) {
+        $global:edugraphTestElapsedSeconds = $global:edugraphTestAdvanceAtOrigin
+        $global:edugraphTestAdvanceAtOrigin = 0
+    }
+}
+
+function Assert-TestOriginLock([string]$Uri) {
+    if ($Uri.EndsWith('/api/users/me') -and $global:edugraphTestCheckLockAtOrigin) {
+        $global:edugraphTestCheckLockAtOrigin = $false
+        $global:edugraphTestLockCheckCount++
+        $marker = Join-Path $testRoot "origin-lock-probe-$global:edugraphTestLockCheckCount.txt"
+        $result = Invoke-DeploymentLockProbe $testEnv $marker
+        Assert-True ($result -like 'Another edugraph deployment is already running*') 'the project lock must remain held during deployment and rollback health checks'
+        Assert-True (-not (Test-Path -LiteralPath $marker)) 'concurrent validation must not reach Docker during health checks'
+    }
+}
+
+function Get-TestReleaseProbeResponse([bool]$Public) {
+    $expected = Get-BackendReleaseId $global:edugraphTestRunningImages
+    if ($Public -and $global:edugraphTestWrongBackendResponses -gt 0) {
+        $global:edugraphTestWrongBackendResponses--
+        $expected = $global:edugraphTestOldBackendReleaseId
+    }
+    return @{ StatusCode = 200; Content = (@{ backendReleaseId = $expected } | ConvertTo-Json -Compress) }
+}
+
+function Invoke-TestWebRequest {
+    param([string]$Uri, [int]$TimeoutSec, [switch]$SkipHttpErrorCheck, [int]$MaximumRedirection, [hashtable]$Headers)
+    $url = [uri]$Uri
+    $path = $url.AbsolutePath
+    $public = $url.Scheme -eq 'https'
+    $global:edugraphTestHttpCalls.Add(@{
+        uri = $Uri; public = $public; path = $path; timeout = $TimeoutSec
+        redirects = $MaximumRedirection; redirectsSpecified = $PSBoundParameters.ContainsKey('MaximumRedirection')
+        headers = $Headers; skipHttpErrorCheck = [bool]$SkipHttpErrorCheck
+    })
+    $fault = if ($public) { Get-TestPublicFaultResponse $path } else { Get-TestOriginFaultResponse $path ([bool]$SkipHttpErrorCheck) }
+    if ($null -ne $fault) { return $fault }
+    if ($global:edugraphTestBadOrigin) { throw 'Simulated origin failure' }
+    Assert-TestOriginLock $Uri
+    if ($path -eq '/api/deployment/release') {
+        return Get-TestReleaseProbeResponse $public
+    }
+    @{ StatusCode = $(if ($path -eq '/api/users/me') { 401 } else { 200 }); Content = $(if ($path -eq '/healthz') { 'ok' } else { '<html><script src="/assets/index-test.js"></script></html>' }) }
+}
+function Invoke-TestRetryDelay {
+    param([int]$Seconds)
+    Assert-True ($Seconds -eq 2) 'public route retries must use the bounded delay'
+    $global:edugraphTestRetryDelays++
+}
+function Assert-True($Condition, [string]$Message) {
+    if (-not $Condition) { throw "Assertion failed: $Message" }
+}
+
+function New-TestCIManifests([string]$BackendTag, [string]$FrontendTag) {
+    $backendImages = @{}
+    foreach ($component in @('core-service', 'gateway-service', 'edugraph-ai-core', 'edugraph-ai-core-gpu')) {
+        $name = $component -replace '^edugraph-ai-core', 'ai-core'
+        $source = "ghcr.io/test/${name}:$BackendTag"
+        $backendImages[$component] = "ghcr.io/test/$name@$(Get-TestImageId "$source-$global:edugraphTestTagGeneration")"
+    }
+    $source = "ghcr.io/test/frontend:$FrontendTag"
+    $manifests = @{}
+    foreach ($kind in @('backend', 'frontend')) {
+        $tag = if ($kind -eq 'backend') { $BackendTag } else { $FrontendTag }
+        $images = if ($kind -eq 'backend') { $backendImages } else {
+            @{ frontend = "ghcr.io/test/frontend@$(Get-TestImageId "$source-$global:edugraphTestTagGeneration")" }
+        }
+        $manifest = @{
+            schemaVersion = 1; kind = $kind; repository = "test/$kind"; tag = $tag
+            commit = $tag.Substring(4); runId = '123'; attempt = '1'; images = $images
+        }
+        $path = Join-Path $testRoot "$kind-$([guid]::NewGuid().ToString('N')).json"
+        $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path
+        $manifests[$kind] = $path
+    }
+    return $manifests
+}
+
+function Invoke-TestDeployment {
+    [CmdletBinding()]
+    param([string]$EnvFile, [string]$BackendTag, [string]$FrontendTag, [string]$ReleaseFile, [DateTimeOffset]$DeadlineUtc,
+          [switch]$Gpu, [switch]$Tunnel, [switch]$ValidateOnly)
+    $parameters = @{} + $PSBoundParameters
+    if (-not $ReleaseFile) {
+        $manifests = New-TestCIManifests $BackendTag $FrontendTag
+        $parameters.BackendManifest = $manifests.backend
+        $parameters.FrontendManifest = $manifests.frontend
+    }
+    & $deployScript @parameters
+}
+
+function Assert-RecoveryOverrides($Calls) {
+    $paths = @($Calls.arguments | Where-Object { [IO.Path]::GetExtension([string]$_) -eq '.tmp' } | Select-Object -Unique)
+    Assert-True ($paths.Count -ge 2) 'both forward and rollback image overrides must remain available'
+    foreach ($path in $paths) {
+        Assert-True (Test-Path -LiteralPath $path) 'failed rollback must preserve its image override files'
+        [void]$preservedOverrides.Add($path)
+        $content = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+        Assert-True ($content.Keys.Count -eq 1 -and $content.ContainsKey('services')) 'recovery override must contain only image configuration'
+    }
+}
+
+function Invoke-TestImageOverride([System.Collections.IDictionary]$Images, [bool]$UseTunnel) {
+    $path = & (Get-Command New-ImageOverride -CommandType Function) $Images $UseTunnel
+    $global:edugraphTestCreatedOverrides.Add($path)
+    return $path
+}
+
+function Assert-CreatedRecoveryOverrides([int]$StartIndex, [System.Collections.IDictionary]$PreviousImages) {
+    $paths = @($global:edugraphTestCreatedOverrides | Select-Object -Skip $StartIndex)
+    Assert-RecoveryOverrides @($paths | ForEach-Object { @{ arguments = @($_) } })
+    $previousFound = $false
+    foreach ($path in $paths) {
+        $content = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+        $matchesPrevious = $content.services.Count -eq $PreviousImages.Count
+        foreach ($name in $PreviousImages.Keys) {
+            if ($content.services[$name].image -cne $PreviousImages[$name]) { $matchesPrevious = $false }
+        }
+        if ($matchesPrevious) { $previousFound = $true }
+    }
+    Assert-True $previousFound 'the preserved rollback override must contain the previous release exact digests for every service'
+}
+
+function Invoke-TestMetadataStage([string]$Destination, [string]$Content) {
+    if ($global:edugraphTestFailMetadataStage) {
+        $global:edugraphTestFailMetadataStage = $false
+        throw 'Simulated metadata staging failure'
+    }
+    $path = & (Get-Command New-MetadataStage -CommandType Function) $Destination $Content
+    if ((Split-Path $Destination -Leaf) -eq 'current-release.json') {
+        $global:edugraphTestCurrentStage = $path
+        $global:edugraphTestCheckStageAtUp = $true
+    }
+    return $path
+}
+
+function Invoke-TestMetadataPublish([string]$Stage, [string]$Destination) {
+    $name = Split-Path $Destination -Leaf
+    if ($global:edugraphTestPublicationFailures.Count -gt 0 -and $global:edugraphTestPublicationFailures.Peek() -eq $name) {
+        [void]$global:edugraphTestPublicationFailures.Dequeue()
+        if ($global:edugraphTestFailRollbackOnPublish) {
+            $global:edugraphTestFailRollbackOnPublish = $false
+            $global:edugraphTestFailNextUp = $true
+        }
+        throw "Simulated publication failure: $name"
+    }
+    [IO.File]::Move($Stage, $Destination, $true)
+}
+
+function Assert-TestRuntime([System.Collections.IDictionary]$Images) {
+    Assert-True ($global:edugraphTestRunningImages.Count -eq $Images.Count) 'runtime must restore exactly the previous active services'
+    foreach ($name in $Images.Keys) {
+        Assert-True ($global:edugraphTestRunningImages[$name] -eq $Images[$name]) 'runtime must restore the previous tested image digests'
+    }
+}
+
+function Invoke-TestCleanup {
+    [CmdletBinding()]
+    param([string[]]$LiteralPath, [switch]$Force, [switch]$Recurse)
+    foreach ($path in $LiteralPath) {
+        if ($path.EndsWith('.tmp', [StringComparison]::Ordinal)) {
+            $global:edugraphTestCleanupAttempts.Add($path)
+            $metadata = $path -like '*.json.*.tmp'
+            if (($metadata -and $global:edugraphTestLockMetadataCleanup) -or
+                (-not $metadata -and $global:edugraphTestLockOverrideCleanup)) {
+                if ($metadata) { $global:edugraphTestLockMetadataCleanup = $false }
+                else { $global:edugraphTestLockOverrideCleanup = $false }
+                $global:edugraphTestCleanupBlocked.Add($path)
+                throw [IO.IOException]::new('Simulated locked temporary file')
+            }
+        }
+    }
+    Microsoft.PowerShell.Management\Remove-Item @PSBoundParameters
+}
+
+function Invoke-DeploymentLockProbe([string]$ProbeEnv, [string]$Marker, [string]$ProbeRelease = '') {
+    $manifests = New-TestCIManifests ('sha-' + ('a' * 40)) ('sha-' + ('b' * 40))
+    $job = Start-Job -ScriptBlock {
+        param($DeployScript, $EnvFile, $MarkerPath, $ReleasePath, $BackendManifest, $FrontendManifest)
+        $ErrorActionPreference = 'Stop'
+        function docker {
+            Set-Content -LiteralPath $MarkerPath -Value 'Docker called'
+            $global:LASTEXITCODE = 0
+            if ($args -contains 'config' -and $args -contains '--format') {
+                $services = @{}
+                foreach ($name in @('ai-core', 'core-service', 'gateway-service', 'frontend')) {
+                    $tag = if ($name -eq 'frontend') { $env:FRONTEND_TAG } else { $env:BACKEND_TAG }
+                    $services[$name] = @{ image = "ghcr.io/test/${name}:$tag" }
+                }
+                return @{ services = $services } | ConvertTo-Json -Depth 4
+            }
+        }
+        function Invoke-TestDockerProcess {
+            param($FilePath, $Arguments, $TimeoutSeconds)
+            if ($FilePath -cne 'test-docker-executable') { throw 'Lock probe must use mocked Docker executable discovery.' }
+            $output = @(& docker @Arguments) -join [Environment]::NewLine
+            return @{ ExitCode = $global:LASTEXITCODE; Output = $output; Error = '' }
+        }
+        Set-Alias -Name Invoke-DeploymentProcess -Value Invoke-TestDockerProcess
+        function Get-TestDockerExecutable { return 'test-docker-executable' }
+        Set-Alias -Name Get-DockerExecutable -Value Get-TestDockerExecutable
+        $parameters = @{
+            EnvFile = $EnvFile; BackendTag = 'sha-' + ('a' * 40)
+            FrontendTag = 'sha-' + ('b' * 40); ValidateOnly = $true
+            BackendManifest = $BackendManifest; FrontendManifest = $FrontendManifest
+        }
+        if ($ReleasePath) { $parameters.ReleaseFile = $ReleasePath }
+        try {
+            & $DeployScript @parameters
+            'Probe completed'
+        } catch { $_.Exception.Message }
+    } -ArgumentList $deployScript, $ProbeEnv, $Marker, $ProbeRelease, $manifests.backend, $manifests.frontend
+    try {
+        $completed = Wait-Job -Job $job -Timeout 30
+        Assert-True ($null -ne $completed) 'deployment lock probe must complete promptly'
+        return Receive-Job -Job $job -ErrorAction Stop
+    } finally {
+        Stop-Job -Job $job
+        Remove-Job -Job $job
+    }
+}
+
+try {
+    # Intercept HTTP only in this test scope; never call the real origin.
+    Set-Alias -Name Invoke-DeploymentWebRequest -Value Invoke-TestWebRequest -Scope Script
+    Set-Alias -Name Start-Sleep -Value Invoke-TestRetryDelay -Scope Script
+    Set-Alias -Name Invoke-DeploymentProcess -Value Invoke-TestDockerProcess -Scope Script
+    Set-Alias -Name Get-DockerExecutable -Value Get-TestDockerExecutable -Scope Script
+    Set-Alias -Name New-ImageOverride -Value Invoke-TestImageOverride -Scope Script
+    Set-Alias -Name Get-DeploymentElapsedSeconds -Value Invoke-TestDeploymentElapsedSeconds -Scope Script
+    $first = 'sha-' + ('a' * 40)
+    $second = 'sha-' + ('b' * 40)
+    $third = 'sha-' + ('c' * 40)
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $first -ValidateOnly
+    Assert-True ($global:edugraphTestCalls.Count -eq 2) 'ValidateOnly must check Compose and manifest repositories'
+    Assert-True (@($global:edugraphTestCalls | Where-Object { $_.arguments -notcontains 'config' }).Count -eq 0) 'ValidateOnly must not pull or change containers'
+
+    $global:edugraphTestConfigSecretError = 'Invalid dotenv quote: password-secret-must-never-be-logged'
+    $validationOutput = @(& {
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $first } catch { $_.Exception.Message }
+    } *>&1) -join "`n"
+    Assert-True ($validationOutput -like '*Inspect production.env locally*') 'invalid secrets must report a safe local diagnostic'
+    Assert-True (-not $validationOutput.Contains('password-secret-must-never-be-logged')) 'neither validation stream may leak secrets'
+    $global:edugraphTestConfigSecretError = ''
+
+    $rootManifests = New-TestCIManifests $first $second
+    foreach ($kind in @('backend', 'frontend')) {
+        $path = $rootManifests[$kind]
+        $validText = Get-Content $path -Raw
+        $validObject = $validText | ConvertFrom-Json -AsHashtable
+        ConvertTo-Json -InputObject @($validObject) -Depth 8 | Set-Content $path
+        $before = $global:edugraphTestCalls.Count
+        $rejected = $false
+        try { & $deployScript -EnvFile $testEnv -BackendManifest $rootManifests.backend -FrontendManifest $rootManifests.frontend -ValidateOnly } catch {
+            $rejected = $_.Exception.Message -like 'Invalid or incomplete*'
+        }
+        Assert-True $rejected 'single-object array manifests must be rejected'
+        Assert-True ($global:edugraphTestCalls.Count -eq $before) 'array manifest roots must fail before Docker'
+        Set-Content $path $validText -NoNewline
+    }
+
+    $global:edugraphTestFrontendImage = "ghcr.io/another-owner/frontend:$first"
+    foreach ($validateOnly in @($true, $false)) {
+        $callCount = $global:edugraphTestCalls.Count
+        $mismatchFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $first -ValidateOnly:$validateOnly } catch {
+            Assert-True ($_.Exception.Message -eq 'CI manifest image repository does not match deployment configuration: frontend') 'validation and deployment must report the same manifest repository mismatch'
+            $mismatchFailed = $true
+        }
+        Assert-True $mismatchFailed 'a frontend owner mismatch must fail even in ValidateOnly mode'
+        $mismatchCalls = @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+        Assert-True (@($mismatchCalls | Where-Object { $_.arguments -notcontains 'config' }).Count -eq 0) 'repository checks must finish before pulls or container changes'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $testRoot 'current-release.json'))) 'validation must not publish release state'
+    }
+    $global:edugraphTestFrontendImage = $null
+
+    foreach ($invalidFilter in @('', 'label=com.docker.compose.oneoff=false')) {
+        $lookup = @('ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=edugraph',
+            '--filter', 'label=com.docker.compose.service=frontend')
+        if ($invalidFilter) { $lookup += @('--filter', $invalidFilter) }
+        $filterRejected = $false
+        try { $null = docker @lookup } catch {
+            Assert-True ($_.Exception.Message -like '*exact one-off filter False*') 'mock must reject missing or incorrectly cased one-off filters'
+            $filterRejected = $true
+        }
+        Assert-True $filterRejected 'mock must enforce the Docker one-off label value exactly'
+    }
+    $projectFilterRejected = $false
+    try { $null = docker ps -a -q --filter 'label=com.docker.compose.project=edugraph' --filter 'label=com.docker.compose.oneoff=False' } catch {
+        Assert-True ($_.Exception.Message -like '*project-wide verification must not exclude one-off containers*') 'final project verification must inspect every container'
+        $projectFilterRejected = $true
+    }
+    Assert-True $projectFilterRejected 'project-wide checks must reject a one-off filter'
+
+    foreach ($mode in @('running', 'stopped', 'query-failed')) {
+        $global:edugraphTestRunningImages = if ($mode -eq 'running') { @{ frontend = 'existing-live-image' } } else { @{} }
+        $global:edugraphTestStoppedProjectContainer = $mode -eq 'stopped'
+        $global:edugraphTestFailProjectQuery = $mode -eq 'query-failed'
+        $callCount = $global:edugraphTestCalls.Count
+        $missingStateFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $first } catch {
+            Assert-True ($_.Exception.Message -like 'Existing edugraph containers have no current release record*' -or
+                $_.Exception.Message -eq 'Cannot determine whether the edugraph project is empty.') 'missing metadata must explain why deployment cannot proceed'
+            $missingStateFailed = $true
+        }
+        Assert-True $missingStateFailed 'an existing or uninspectable project must not be treated as empty'
+        $unsafeCalls = @($global:edugraphTestCalls | Select-Object -Skip $callCount | Where-Object { $_.arguments -contains 'up' -or $_.arguments -contains 'pull' -or $_.arguments -contains 'stop' -or $_.arguments -contains 'rm' })
+        Assert-True ($unsafeCalls.Count -eq 0) 'missing metadata protection must run before runtime changes or pulls'
+        if ($mode -eq 'running') { Assert-True ($global:edugraphTestRunningImages.frontend -eq 'existing-live-image') 'missing metadata must preserve the live containers' }
+    }
+    $global:edugraphTestStoppedProjectContainer = $false
+    $global:edugraphTestFailProjectQuery = $false
+    $global:edugraphTestRunningImages = @{}
+    $invalidStatePath = Join-Path $testRoot 'current-release.json'
+    foreach ($invalidState in @(' ', 'null', '{}', 'invalid-json')) {
+        Set-Content -LiteralPath $invalidStatePath -Value $invalidState
+        $invalidStateFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $first } catch {
+            Assert-True ($_.Exception.Message -like 'Cannot use current release record*') 'invalid metadata must fail explicitly'
+            $invalidStateFailed = $true
+        }
+        Assert-True $invalidStateFailed 'an invalid record must not select first-deploy recovery'
+    }
+    Remove-Item -LiteralPath $invalidStatePath
+
+    $env:BACKEND_TAG = 'original-value'
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -Gpu -Tunnel
+    $statePath = Join-Path $testRoot 'current-release.json'
+    $state = Get-Content $statePath -Raw | ConvertFrom-Json
+    Assert-True ($state.backendTag -eq $first -and $state.frontendTag -eq $second) 'successful release must be persisted'
+    Assert-True ($state.gpu -and $state.tunnel) 'deployment modes must be persisted'
+    Assert-True (@($state.images.PSObject.Properties).Count -eq 5) 'every active service must persist its digest'
+    foreach ($image in $state.images.PSObject.Properties.Value) {
+        Assert-True ($image -match '@sha256:[a-f0-9]{64}$') 'release images must use immutable digests'
+    }
+    $originalImages = $state.images | ConvertTo-Json -Compress
+    $rootStateText = Get-Content $statePath -Raw
+    $rootStateObject = $rootStateText | ConvertFrom-Json -AsHashtable
+    $rootRelease = Join-Path $testRoot 'array-release.json'
+    foreach ($selection in @('null', (ConvertTo-Json -InputObject @($rootStateObject) -Depth 8))) {
+        Set-Content $rootRelease $selection
+        $before = $global:edugraphTestCalls.Count
+        $rejected = $false
+        try { & $deployScript -EnvFile $testEnv -ReleaseFile $rootRelease -BackendManifest $rootManifests.backend -FrontendManifest $rootManifests.frontend -ValidateOnly } catch {
+            $rejected = $_.Exception.Message -like 'Selected release must contain Boolean*'
+        }
+        Assert-True $rejected 'explicit rollback selections must reject null and array roots even with valid manifests'
+        Assert-True ($global:edugraphTestCalls.Count -eq $before) 'invalid rollback selection must fail before Docker'
+    }
+    ConvertTo-Json -InputObject @($rootStateObject) -Depth 8 | Set-Content $statePath
+    $rejected = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second } catch {
+        $rejected = $_.Exception.Message -like 'Cannot use current release record*'
+    }
+    Assert-True $rejected 'current-release array roots must be rejected'
+    Set-Content $statePath $rootStateText -NoNewline
+    $validStateText = Get-Content $statePath -Raw
+    $malformedRelease = Join-Path $testRoot 'malformed-release.json'
+    foreach ($mode in @('gpu', 'tunnel')) {
+        foreach ($value in @('false', 'true', 0, 1, $null, @($false))) {
+            $corrupt = $validStateText | ConvertFrom-Json -AsHashtable
+            $corrupt[$mode] = $value
+            $corrupt | ConvertTo-Json -Depth 8 | Set-Content $malformedRelease
+            $before = $global:edugraphTestCalls.Count
+            $rejected = $false
+            try { & $deployScript -EnvFile $testEnv -ReleaseFile $malformedRelease -ValidateOnly } catch {
+                Assert-True ($_.Exception.Message -like 'Selected release must contain Boolean*') 'saved modes must be JSON Booleans'
+                $rejected = $true
+            }
+            Assert-True $rejected 'non-Boolean rollback modes must fail'
+            Assert-True ($global:edugraphTestCalls.Count -eq $before) 'bad rollback modes must fail before Docker'
+        }
+    }
+    foreach ($value in @(@('ghcr.io/test/core@sha256:' + ('a' * 64)),
+        @('ghcr.io/test/core@sha256:' + ('a' * 64), 'ghcr.io/test/core@sha256:' + ('a' * 64)),
+        @{ reference = 'invalid' }, 42, $null)) {
+        $corrupt = $validStateText | ConvertFrom-Json -AsHashtable
+        $corrupt.images['core-service'] = $value
+        $corrupt | ConvertTo-Json -Depth 8 | Set-Content $statePath
+        $before = $global:edugraphTestCalls.Count
+        $rejected = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -Gpu -Tunnel } catch {
+            Assert-True ($_.Exception.Message -like 'Missing or invalid image digest*') 'saved image values must be scalar strings'
+            $rejected = $true
+        }
+        Assert-True $rejected 'malformed current images must fail before activation'
+        Assert-True (@($global:edugraphTestCalls | Select-Object -Skip $before | Where-Object { $_.arguments -contains 'up' -or $_.arguments -contains 'pull' }).Count -eq 0) 'invalid recovery images must not change runtime'
+    }
+    Set-Content $statePath $validStateText -NoNewline
+    Assert-True ($env:BACKEND_TAG -eq 'original-value') 'caller environment must be restored'
+    $up = @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' })[-1]
+    Assert-True (($up.arguments -join ' ') -match 'compose.gpu.yml') 'GPU override must be used'
+
+    $scenarioStart = $global:edugraphTestCalls.Count
+    $global:edugraphTestFailNextUp = $true
+    $global:edugraphTestCheckLockAtOrigin = $true
+    $failed = $false
+    # A rerun can move the old tags; rollback must still use the original digests.
+    $global:edugraphTestTagGeneration = 'rerun'
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Docker Compose failed: up') 'rollback must preserve the original deployment error'
+        $failed = $true
+    }
+    Assert-True $failed 'a failed release must fail the job even after successful rollback'
+    Assert-True ($global:edugraphTestLockCheckCount -eq 2) 'both successful deploy and automatic rollback must retain the project lock'
+    $scenarioUps = @($global:edugraphTestCalls | Select-Object -Skip $scenarioStart | Where-Object { $_.arguments -contains 'up' })
+    Assert-True ($scenarioUps.Count -eq 2) 'this failure scenario must attempt the new release and then invoke rollback'
+    $attempt = $scenarioUps[0]
+    Assert-True ($attempt.backend -eq $third -and $attempt.frontend -eq $third) 'the first up must attempt the third release'
+    Assert-True (($attempt.arguments -join ' ') -notmatch 'compose.gpu.yml|--profile tunnel') 'the first up must use the requested CPU/tunnel-off modes'
+    $up = $scenarioUps[1]
+    Assert-True ($up.backend -eq $first -and $up.frontend -eq $second) 'rollback must use the last successful tags'
+    Assert-True (($up.arguments -join ' ') -match 'compose.gpu.yml.*--profile tunnel') 'rollback must restore GPU/tunnel modes'
+    foreach ($image in $state.images.PSObject.Properties) {
+        Assert-True ($up.images[$image.Name] -eq $image.Value) 'rollback must restore the tested digest even when its tag has moved'
+    }
+    $state = Get-Content $statePath -Raw | ConvertFrom-Json
+    Assert-True ($state.backendTag -eq $first) 'failed release must not overwrite state'
+    Assert-True (($state.images | ConvertTo-Json -Compress) -eq $originalImages) 'failed release must not overwrite saved digests'
+
+    $upCount = @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count
+    $global:edugraphTestFailPull = $true
+    $pullFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Docker Compose failed: pull') 'pull must report its original error'
+        $pullFailed = $true
+    }
+    Assert-True $pullFailed 'a failed pull must fail the job'
+    Assert-True (@($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count -eq $upCount) 'failed pulls must not replace containers'
+    $global:edugraphTestFailPull = $false
+
+    $global:edugraphTestConnectorPullError = "denied: registry rejected request https://registry-user:registry-pass@registry.example/v2/?token=query-secret`nAuthorization: Bearer header-secret`nconfigured=test-token"
+    $connectorFailureStart = $global:edugraphTestCalls.Count
+    $connectorFailureState = Get-Content $statePath -Raw
+    $connectorPullFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        $message = $_.Exception.Message
+        Assert-True ($message -like 'Cloudflare connector image pull failed (exit code 17):*denied: registry rejected request*') 'connector pull must preserve a useful Docker diagnostic and exit code'
+        foreach ($secret in @('registry-user', 'registry-pass', 'query-secret', 'header-secret', 'test-token')) {
+            Assert-True (-not $message.Contains($secret)) 'connector diagnostics must redact credentials and configured secrets'
+        }
+        Assert-True ($message.Contains('[REDACTED]') -and $message -notmatch '[\r\n]') 'connector diagnostic must be sanitized for a single log line'
+        $connectorPullFailed = $true
+    }
+    $global:edugraphTestConnectorPullError = ''
+    Assert-True $connectorPullFailed 'a failed connector pull must fail deployment'
+    Assert-True ((Get-Content $statePath -Raw) -eq $connectorFailureState) 'connector pull failure must not change release state'
+    Assert-True (@($global:edugraphTestCalls | Select-Object -Skip $connectorFailureStart | Where-Object { $_.arguments -contains 'up' }).Count -eq 0) 'connector pull failure must occur before activation'
+
+    $global:edugraphTestNoDigest = $true
+    $digestFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like 'No repository digest found*') 'missing digest must report its cause'
+        $digestFailed = $true
+    }
+    $global:edugraphTestNoDigest = $false
+    Assert-True $digestFailed 'images without digests must not deploy'
+    Assert-True (@($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count -eq $upCount) 'digest resolution must finish before replacing containers'
+
+    $global:edugraphTestWrongImage = $true
+    $imageFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -like 'Running image differs*') 'unexpected running image must report its cause'
+        $imageFailed = $true
+    }
+    Assert-True $imageFailed 'a healthy container with the wrong image must not become a successful release'
+
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third
+    $previous = Get-Content (Join-Path $testRoot 'previous-release.json') -Raw | ConvertFrom-Json
+    Assert-True ($previous.backendTag -eq $first) 'successful update must retain rollback state'
+    Assert-True (($previous.images | ConvertTo-Json -Compress) -eq $originalImages) 'previous release must retain exact tested digests'
+    $offState = Get-Content $statePath -Raw | ConvertFrom-Json
+    Assert-True (-not $offState.tunnel) 'tunnel-off release must record its target mode'
+    Assert-True (-not $global:edugraphTestRunningImages.ContainsKey('cloudflared')) 'on-to-off deployment must explicitly stop the existing connector'
+    $offReleasePath = Join-Path $testRoot 'saved-tunnel-off-release.json'
+    Copy-Item -LiteralPath $statePath -Destination $offReleasePath
+
+    $callCount = $global:edugraphTestCalls.Count
+    $global:edugraphTestFailPull = $true
+    Invoke-TestDeployment -EnvFile $testEnv -ReleaseFile (Join-Path $testRoot 'previous-release.json')
+    $global:edugraphTestFailPull = $false
+    $manualCalls = @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+    Assert-True (@($manualCalls | Where-Object { $_.arguments -contains 'pull' }).Count -eq 0) 'manual rollback must use cached digests without registry access'
+    Assert-True (@($manualCalls | Where-Object { $_.arguments -contains '{{json .RepoDigests}}' }).Count -eq 0) 'manual rollback must not resolve mutable tags'
+    $state = Get-Content $statePath -Raw | ConvertFrom-Json
+    Assert-True (($state.images | ConvertTo-Json -Compress) -eq $originalImages) 'manual rollback must restore exact saved digests'
+    Assert-True ($state.gpu -and $state.tunnel) 'manual rollback must restore saved modes'
+    Assert-True ($global:edugraphTestRunningImages.ContainsKey('cloudflared')) 'off-to-on rollback must restart the connector through up'
+
+    Invoke-TestDeployment -EnvFile $testEnv -ReleaseFile $offReleasePath
+    Assert-True (-not $global:edugraphTestRunningImages.ContainsKey('cloudflared')) 'manual rollback to tunnel-off must stop the connector'
+    $offStateJson = Get-Content $statePath -Raw
+    $global:edugraphTestFailNextUp = $true
+    $tunnelFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -Tunnel } catch {
+        Assert-True ($_.Exception.Message -eq 'Docker Compose failed: up') 'failed tunnel-on release must preserve its original error'
+        $tunnelFailed = $true
+    }
+    Assert-True $tunnelFailed 'partially started tunnel-on release must fail'
+    Assert-True (-not $global:edugraphTestRunningImages.ContainsKey('cloudflared')) 'automatic rollback to tunnel-off must stop a partially started connector'
+    Assert-True ((Get-Content $statePath -Raw) -eq $offStateJson) 'failed tunnel-on release must preserve the tunnel-off state'
+
+    $global:edugraphTestFailNextStop = $true
+    $stopFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second } catch {
+        Assert-True ($_.Exception.Message -eq 'Cannot stop project Cloudflare connector.') 'connector stop failure must remain visible'
+        $stopFailed = $true
+    }
+    Assert-True $stopFailed 'failed connector stop must fail deployment'
+    Assert-True ((Get-Content $statePath -Raw) -eq $offStateJson) 'failed connector stop must not persist a new release'
+
+    $global:edugraphTestRunningImages['cloudflared'] = 'stale-connector'
+    $global:edugraphTestIgnoreNextStop = $true
+    $stillRunningFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second } catch {
+        Assert-True ($_.Exception.Message -eq 'Cloudflare connector is still running in tunnel-off mode.') 'still-running connector must be detected'
+        $stillRunningFailed = $true
+    }
+    Assert-True $stillRunningFailed 'stop exit code alone must not prove the connector is stopped'
+    Assert-True (-not $global:edugraphTestRunningImages.ContainsKey('cloudflared')) 'rollback must reconcile a connector left running after stop'
+    Assert-True ((Get-Content $statePath -Raw) -eq $offStateJson) 'still-running connector must not persist a new release'
+    foreach ($call in @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'stop' })) {
+        Assert-True (($call.arguments -join ' ') -match '--project-name edugraph') 'connector stop must remain scoped to this Compose project'
+        Assert-True (($call.arguments -join ' ') -match '--profile tunnel stop cloudflared') 'connector stop must explicitly target its disabled profile service'
+    }
+    foreach ($call in @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' })) {
+        Assert-True (($call.arguments -join ' ') -match '--pull never') 'up must never re-resolve tags'
+        Assert-True ($call.images.Count -ge 4) 'every deployment and rollback must use a digest override'
+    }
+
+    $originBaseline = Get-Content $statePath -Raw
+    $originImages = (Get-Content $statePath -Raw | ConvertFrom-Json -AsHashtable).images
+    foreach ($redirectPath in @('/healthz', '/courses', '/api/users/me')) {
+        $global:edugraphTestOriginRedirectPath = $redirectPath
+        $originCallStart = $global:edugraphTestCalls.Count
+        $originRedirectFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+            $expectedError = if ($redirectPath -eq '/api/users/me') { 'Protected gateway API did not return 401' } else { "Origin check failed: $redirectPath" }
+            Assert-True ($_.Exception.Message -eq $expectedError) 'loopback redirect must fail its status check even with qualifying HTML'
+            Assert-True (-not $_.Exception.Data.Contains('RollbackFailure')) 'loopback redirect failure must allow rollback'
+            $originRedirectFailed = $true
+        }
+        Assert-True $originRedirectFailed 'origin probes must reject redirects to a public page'
+        Assert-True (@($global:edugraphTestCalls | Select-Object -Skip $originCallStart | Where-Object { $_.arguments -contains 'up' }).Count -eq 2) 'origin redirect must trigger rollback'
+        Assert-True ((Get-Content $statePath -Raw) -eq $originBaseline) 'origin redirect must preserve the previous release record'
+        Assert-TestRuntime $originImages
+    }
+    foreach ($call in @($global:edugraphTestHttpCalls | Where-Object { -not $_.public })) {
+        Assert-True ($call.redirectsSpecified -and $call.redirects -eq 0) 'loopback checks must explicitly disable redirects'
+        Assert-True $call.skipHttpErrorCheck 'loopback probes must inspect HTTP status explicitly'
+    }
+
+    $publicCount = @($global:edugraphTestHttpCalls | Where-Object public).Count
+    $global:edugraphTestPublicFailures = 4
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third
+    Assert-True (@($global:edugraphTestHttpCalls | Where-Object public).Count -eq $publicCount) 'tunnel-off mode must use loopback checks only'
+    Assert-True ($global:edugraphTestPublicFailures -eq 4) 'tunnel-off mode must not depend on public connectivity'
+
+    $global:edugraphTestPublicFailures = 2
+    $delayCount = $global:edugraphTestRetryDelays
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -Tunnel
+    Assert-True ($global:edugraphTestRetryDelays -eq $delayCount + 2) 'transient public failures must retry before accepting the release'
+    $publicState = Get-Content $statePath -Raw
+    $global:edugraphTestOldBackendReleaseId = Get-TestBackendReleaseId (($publicState | ConvertFrom-Json -AsHashtable).images)
+    $global:edugraphTestWrongBackendResponses = 4
+    $wrongBackendFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $second -Tunnel } catch {
+        $wrongBackendFailed = $_.Exception.Message -like '*Backend release identifier does not match*'
+    }
+    Assert-True $wrongBackendFailed 'identical frontend assets must not hide a stale public backend'
+    Assert-True ((Get-Content $statePath -Raw) -eq $publicState) 'stale public backend must restore the selected prior release'
+    $httpCount = $global:edugraphTestHttpCalls.Count
+    $global:edugraphTestPublicFailures = 4
+    $publicFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like 'Public route check failed*after 4 attempts*') 'unavailable public route must report bounded failure'
+        $publicFailed = $true
+    }
+    Assert-True $publicFailed 'loopback success must not accept an unavailable public route'
+    Assert-True ((Get-Content $statePath -Raw) -eq $publicState) 'public failure must not overwrite the last successful release'
+    $publicCalls = @($global:edugraphTestHttpCalls | Select-Object -Skip $httpCount | Where-Object public)
+    Assert-True ($publicCalls.Count -eq 8) 'four failed attempts must be followed by all four public rollback probes'
+    Assert-True ($publicCalls[-1].path -eq '/api/deployment/release') 'tunnel-enabled rollback must verify its backend release identifier'
+
+    $global:edugraphTestPublicBodyTimeouts = 4
+    $callCount = $global:edugraphTestCalls.Count
+    $delayCount = $global:edugraphTestRetryDelays
+    $bodyTimeoutFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like 'Public route check failed*full-response deadline*') 'body timeout must report the failed smoke check'
+        $bodyTimeoutFailed = $true
+    }
+    Assert-True $bodyTimeoutFailed 'stalled public bodies must not be accepted'
+    Assert-True ($global:edugraphTestRetryDelays -eq $delayCount + 3) 'body timeouts must advance through bounded retries'
+    $bodyUps = @($global:edugraphTestCalls | Select-Object -Skip $callCount | Where-Object { $_.arguments -contains 'up' })
+    Assert-True ($bodyUps.Count -eq 2 -and $bodyUps[-1].backend -eq $first) 'exhausted body retries must restore the prior runtime'
+    Assert-True ((Get-Content $statePath -Raw) -eq $publicState) 'body timeout must preserve release records'
+
+    $global:edugraphTestPublicWrongAssets = 4
+    $wrongUpstreamFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like '*deployed frontend assets*') 'wrong frontend upstream must explain the asset mismatch'
+        $wrongUpstreamFailed = $true
+    }
+    Assert-True $wrongUpstreamFailed 'public HTTP 200 alone must not prove the correct frontend is served'
+    Assert-True ((Get-Content $statePath -Raw) -eq $publicState) 'wrong public upstream must not become the current release'
+
+    $global:edugraphTestPublicStatus = 302
+    $global:edugraphTestPublicFailures = 4
+    $redirectFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like 'Public route check failed*') 'public redirect must fail the route check'
+        $redirectFailed = $true
+    }
+    Assert-True $redirectFailed 'redirects to login or another site must not pass the public probe'
+    $global:edugraphTestPublicStatus = 503
+
+    $global:edugraphTestWrongImage = $true
+    $global:edugraphTestPublicFailures = 4
+    $rollbackPublicFailed = $false
+    $previousState = Get-Content (Join-Path $testRoot 'previous-release.json') -Raw
+    $callCount = $global:edugraphTestCalls.Count
+    $rollbackWarnings = @()
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -WarningVariable rollbackWarnings } catch {
+        Assert-True ($_.Exception.Message -like 'Running image differs*') 'rollback failure must not replace the original deployment error'
+        Assert-True ($_.Exception.Data['RollbackFailure'] -like 'Public route check failed*') 'secondary rollback error must remain available separately'
+        $rollbackPublicFailed = $true
+    }
+    Assert-True $rollbackPublicFailed 'tunnel-enabled rollback cannot succeed with only loopback checks'
+    Assert-True (($rollbackWarnings -join ' ') -like '*restoration could not be confirmed*') 'failed rollback must report uncertain restoration'
+    Assert-True ((Get-Content $statePath -Raw) -eq $publicState) 'failed public rollback must not publish new state'
+    Assert-True ((Get-Content (Join-Path $testRoot 'previous-release.json') -Raw) -eq $previousState) 'failed rollback must retain previous-release.json for manual recovery'
+    Assert-RecoveryOverrides @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+
+    $global:edugraphTestRemainingUpFailures = 2
+    $callCount = $global:edugraphTestCalls.Count
+    $doubleUpFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Docker Compose failed: up') 'rollback startup failure must preserve the original up error'
+        Assert-True ($_.Exception.Data['RollbackFailure'] -eq 'Docker Compose failed: up') 'rollback startup error must remain available separately'
+        $doubleUpFailed = $true
+    }
+    Assert-True $doubleUpFailed 'both startup failures must leave the deployment failed'
+    Assert-True ($global:edugraphTestRemainingUpFailures -eq 0) 'test must exercise both deployment and rollback startup failure'
+    Assert-True ((Get-Content $statePath -Raw) -eq $publicState) 'double startup failure must retain current-release.json'
+    Assert-True ((Get-Content (Join-Path $testRoot 'previous-release.json') -Raw) -eq $previousState) 'double startup failure must retain previous-release.json'
+    Assert-RecoveryOverrides @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+    foreach ($call in @($global:edugraphTestHttpCalls | Where-Object public)) {
+        Assert-True ($call.uri.StartsWith('https://edugraph-rag.io.vn/')) 'public checks must use the configured HTTPS hostname'
+        Assert-True ($call.timeout -eq 10) 'each public request must have a finite timeout'
+        Assert-True ($call.redirectsSpecified -and $call.redirects -eq 0) 'public checks must explicitly disable redirects'
+        Assert-True ($call.headers['Cache-Control'] -eq 'no-cache') 'public checks must bypass cached responses'
+    }
+
+    # Publication faults happen after healthy activation, and must reconcile both
+    # runtime and release records. Use real file renames except at injected faults.
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -Tunnel
+    $baselineCurrent = Get-Content $statePath -Raw
+    $baselinePrevious = Get-Content (Join-Path $testRoot 'previous-release.json') -Raw
+    $baselineImages = ($baselineCurrent | ConvertFrom-Json -AsHashtable).images
+    Set-Alias -Name New-MetadataStage -Value Invoke-TestMetadataStage -Scope Script
+    Set-Alias -Name Publish-ReleaseMetadata -Value Invoke-TestMetadataPublish -Scope Script
+
+    $global:edugraphTestFailMetadataStage = $true
+    $upCount = @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count
+    $stageFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated metadata staging failure') 'staging failure must report its cause'
+        $stageFailed = $true
+    }
+    Assert-True $stageFailed 'failed metadata staging must fail deployment'
+    Assert-True (@($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count -eq $upCount) 'staging failure must happen before changing containers'
+    Assert-TestRuntime $baselineImages
+
+    foreach ($destination in @('previous-release.json', 'current-release.json')) {
+        $global:edugraphTestPublicationFailures.Enqueue($destination)
+        $publicationFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+            Assert-True ($_.Exception.Message -eq "Simulated publication failure: $destination") 'publication failure must preserve its original error'
+            $publicationFailed = $true
+        }
+        Assert-True $publicationFailed 'either publication failure must fail deployment'
+        Assert-True ((Get-Content $statePath -Raw) -eq $baselineCurrent) 'publication failure must preserve the prior current record'
+        Assert-True ((Get-Content (Join-Path $testRoot 'previous-release.json') -Raw) -eq $baselinePrevious) 'publication failure must restore the prior rollback record'
+        Assert-TestRuntime $baselineImages
+    }
+
+    $global:edugraphTestPublicationFailures.Enqueue('current-release.json')
+    $global:edugraphTestFailRollbackOnPublish = $true
+    $callCount = $global:edugraphTestCalls.Count
+    $publicationRollbackFailed = $false
+    $publicationWarnings = @()
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -WarningVariable publicationWarnings } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated publication failure: current-release.json') 'failed rollback must not mask the state-publication error'
+        Assert-True ($_.Exception.Data['RollbackFailure'] -eq 'Docker Compose failed: up') 'failed runtime reconciliation must remain available separately'
+        $publicationRollbackFailed = $true
+    }
+    Assert-True $publicationRollbackFailed 'publication plus runtime recovery failure must fail deployment'
+    Assert-True (($publicationWarnings -join ' ') -like '*Runtime/state reconciliation failed*') 'failed reconciliation must be explicit'
+    Assert-True ((Get-Content $statePath -Raw) -eq $baselineCurrent) 'failed reconciliation must retain the prior current record'
+    Assert-True ((Get-Content (Join-Path $testRoot 'previous-release.json') -Raw) -eq $baselinePrevious) 'metadata restoration must run even when runtime recovery fails'
+    Assert-RecoveryOverrides @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+
+    $global:edugraphTestPublicationFailures.Enqueue('current-release.json')
+    $global:edugraphTestPublicationFailures.Enqueue('previous-release.json')
+    $callCount = $global:edugraphTestCalls.Count
+    $metadataRecoveryFailed = $false
+    $metadataWarnings = @()
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -WarningVariable metadataWarnings } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated publication failure: current-release.json') 'metadata recovery failure must preserve the original publication error'
+        Assert-True ($_.Exception.Data['StateRecoveryFailure'] -eq 'Simulated publication failure: previous-release.json') 'metadata recovery error must remain available separately'
+        $metadataRecoveryFailed = $true
+    }
+    Assert-True $metadataRecoveryFailed 'failed restoration of the rollback record must fail deployment'
+    Assert-True (($metadataWarnings -join ' ') -like '*Release-state reconciliation failed*') 'failed metadata reconciliation must be explicit'
+    Assert-True ((Get-Content $statePath -Raw) -eq $baselineCurrent) 'failed metadata recovery must preserve current-release.json'
+    Assert-TestRuntime $baselineImages
+    Assert-RecoveryOverrides @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+    $backups = @(Get-ChildItem -LiteralPath $testRoot -Filter 'previous-release.json.*.tmp' | Where-Object { (Get-Content -LiteralPath $_.FullName -Raw) -eq $baselinePrevious })
+    Assert-True ($backups.Count -gt 0) 'manual recovery must retain a staged copy of the old rollback record'
+    # Restore this isolated test fixture after intentionally failing its recovery.
+    [IO.File]::WriteAllText((Join-Path $testRoot 'previous-release.json'), $baselinePrevious)
+
+    $firstRoot = Join-Path $testRoot 'first-deploy'
+    New-Item -ItemType Directory -Path $firstRoot | Out-Null
+    $firstEnv = Join-Path $firstRoot 'production.env'
+    Set-Content -LiteralPath $firstEnv -Value '# isolated first deployment'
+    $global:edugraphTestRunningImages = @{}
+    $global:edugraphTestStoppedImages = @{}
+    $global:edugraphTestPublicationFailures.Enqueue('current-release.json')
+    $firstPublicationFailed = $false
+    try { Invoke-TestDeployment -EnvFile $firstEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated publication failure: current-release.json') 'first-release publication failure must preserve its cause'
+        $firstPublicationFailed = $true
+    }
+    Assert-True $firstPublicationFailed 'first deployment must fail when state cannot be published'
+    Assert-True ($global:edugraphTestRunningImages.Count -eq 0) 'first-release publication failure must stop the newly activated services'
+    Assert-True ($global:edugraphTestStoppedImages.Count -eq 0) 'first-release publication failure must remove stopped containers too'
+    Assert-True (-not (Test-Path (Join-Path $firstRoot 'current-release.json'))) 'first-release failure must not create a successful record'
+    Remove-Item -LiteralPath Alias:New-MetadataStage, Alias:Publish-ReleaseMetadata
+
+    foreach ($scenario in @(
+        @{ tunnel = $false; stop = 'normal' }, @{ tunnel = $true; stop = 'normal' },
+        @{ tunnel = $false; stop = 'failed' }, @{ tunnel = $true; stop = 'failed' },
+        @{ tunnel = $false; stop = 'timeout' }, @{ tunnel = $true; stop = 'timeout' }
+    )) {
+        $useTunnel = $scenario.tunnel
+        $retryRoot = Join-Path $testRoot "first-smoke-$useTunnel-$($scenario.stop)"
+        New-Item -ItemType Directory -Path $retryRoot | Out-Null
+        $retryEnv = Join-Path $retryRoot 'production.env'
+        Set-Content -LiteralPath $retryEnv -Value '# isolated first-deploy retry'
+        $global:edugraphTestRunningImages = @{}
+        $global:edugraphTestStoppedImages = @{}
+        $global:edugraphTestBadOrigin = $true
+        $global:edugraphTestFailRecoveryStop = $scenario.stop -eq 'failed'
+        $global:edugraphTestTimeoutRecoveryStop = $scenario.stop -eq 'timeout'
+        $callStart = $global:edugraphTestCalls.Count
+        $firstCleanupWarnings = @()
+        $firstSmokeFailed = $false
+        try { Invoke-TestDeployment -EnvFile $retryEnv -BackendTag $first -FrontendTag $second -Tunnel:$useTunnel -WarningVariable firstCleanupWarnings } catch {
+            Assert-True ($_.Exception.Message -eq 'Simulated origin failure') 'first-release cleanup must preserve the smoke error'
+            Assert-True (-not $_.Exception.Data.Contains('RollbackFailure')) 'failed first-release cleanup must complete successfully'
+            $firstSmokeFailed = $true
+        }
+        $global:edugraphTestBadOrigin = $false
+        Assert-True $firstSmokeFailed 'the first attempt must actually fail its smoke check'
+        if ($scenario.stop -ne 'normal') {
+            Assert-True (@($firstCleanupWarnings | Where-Object { [string]$_ -like 'Graceful first-release stop failed*' }).Count -eq 1) 'graceful stop failure must be reported while removal continues'
+        }
+        Assert-True ($global:edugraphTestRunningImages.Count -eq 0 -and $global:edugraphTestStoppedImages.Count -eq 0) 'failed first smoke check must leave no running or stopped project containers'
+        Assert-True (-not (Test-Path (Join-Path $retryRoot 'current-release.json'))) 'a failed first attempt must not publish a release record'
+        $firstCalls = @($global:edugraphTestCalls | Select-Object -Skip $callStart)
+        $removed = @($firstCalls | Where-Object { $_.arguments[0] -eq 'rm' })
+        $expectedCount = if ($useTunnel) { 5 } else { 4 }
+        Assert-True ($removed.Count -eq $expectedCount) 'cleanup must remove exactly the containers from the failed attempt'
+        foreach ($call in $removed) {
+            Assert-True ($call.arguments.Count -eq 3 -and $call.arguments[1] -eq '--force' -and $call.arguments[2] -match '^container-(ai-core|core-service|gateway-service|frontend|cloudflared)$') 'container removal must target only the identified project services and preserve volumes'
+        }
+        Invoke-TestDeployment -EnvFile $retryEnv -BackendTag $first -FrontendTag $second -Tunnel:$useTunnel
+        $retried = Get-Content (Join-Path $retryRoot 'current-release.json') -Raw | ConvertFrom-Json -AsHashtable
+        Assert-True ($retried.backendTag -eq $first -and $retried.frontendTag -eq $second) 'a fixed first deployment must be retryable with the same environment and project'
+        Assert-TestRuntime $retried.images
+    }
+
+    $incompleteRoot = Join-Path $testRoot 'first-cleanup-incomplete'
+    New-Item -ItemType Directory -Path $incompleteRoot | Out-Null
+    $incompleteEnv = Join-Path $incompleteRoot 'production.env'
+    Set-Content -LiteralPath $incompleteEnv -Value '# isolated incomplete first-release cleanup'
+    $global:edugraphTestRunningImages = @{}
+    $global:edugraphTestStoppedImages = @{}
+    $global:edugraphTestBadOrigin = $true
+    $global:edugraphTestFailRecoveryStop = $true
+    $global:edugraphTestIgnoreNextRemove = $true
+    $overrideStart = $global:edugraphTestCreatedOverrides.Count
+    $incompleteFailed = $false
+    try { Invoke-TestDeployment -EnvFile $incompleteEnv -BackendTag $first -FrontendTag $second -Tunnel } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated origin failure') 'incomplete first-release cleanup must preserve the deployment error'
+        Assert-True ($_.Exception.Data['RollbackFailure'] -eq 'Cannot confirm the failed first-release project is empty.') 'final project check must report incomplete cleanup'
+        $incompleteFailed = $true
+    }
+    $global:edugraphTestBadOrigin = $false
+    Assert-True $incompleteFailed 'remaining containers must fail final recovery verification'
+    Assert-True ($global:edugraphTestRunningImages.Count -eq 1) 'the fixture must retain the container whose removal was ignored'
+    foreach ($path in @($global:edugraphTestCreatedOverrides | Select-Object -Skip $overrideStart)) {
+        Assert-True (Test-Path -LiteralPath $path) 'incomplete first-release cleanup must preserve its recovery artifact'
+        $null = $preservedOverrides.Add($path)
+    }
+    $unsafeRetryFailed = $false
+    try { Invoke-TestDeployment -EnvFile $incompleteEnv -BackendTag $first -FrontendTag $second -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like 'Existing edugraph containers have no current release record*') 'incomplete cleanup must retain the missing-record guard'
+        $unsafeRetryFailed = $true
+    }
+    Assert-True $unsafeRetryFailed 'a project that is not empty must not be treated as a fresh deployment'
+    $global:edugraphTestRunningImages = @{}
+    $global:edugraphTestStoppedImages = @{}
+
+    $legacyPath = Join-Path $testRoot 'legacy-release.json'
+    @{ backendTag = $first; frontendTag = $second; gpu = $true; tunnel = $true } | ConvertTo-Json | Set-Content $legacyPath
+    $legacyFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -ReleaseFile $legacyPath } catch {
+        Assert-True ($_.Exception.Message -like 'Release must contain immutable*') 'tag-only state must explain why rollback is unsafe'
+        $legacyFailed = $true
+    }
+    Assert-True $legacyFailed 'legacy tag-only releases must not silently fall back to mutable tags'
+
+    $callCount = $global:edugraphTestCalls.Count
+    $missingManifestFailed = $false
+    try { & $deployScript -EnvFile $testEnv -BackendTag $first -FrontendTag $second } catch {
+        Assert-True ($_.Exception.Message -like 'Fresh deployments require both*') 'tag-only deployments must explain that complete manifests are required'
+        $missingManifestFailed = $true
+    }
+    Assert-True $missingManifestFailed 'fresh deployment must not resolve a release from mutable tags'
+    Assert-True ($global:edugraphTestCalls.Count -eq $callCount) 'missing build selection must fail before Docker'
+
+    $chosen = New-TestCIManifests $first $second
+    $validFrontendManifest = Get-Content $chosen.frontend -Raw
+    $validFrontendImage = ($validFrontendManifest | ConvertFrom-Json -AsHashtable).images.frontend
+    foreach ($value in @(@($validFrontendImage), @($validFrontendImage, $validFrontendImage), @(), @{ image = $validFrontendImage }, 42, $null)) {
+        $corrupt = $validFrontendManifest | ConvertFrom-Json -AsHashtable
+        $corrupt.images.frontend = $value
+        $corrupt | ConvertTo-Json -Depth 8 | Set-Content $chosen.frontend
+        foreach ($validateOnly in @($true, $false)) {
+            $before = $global:edugraphTestCalls.Count
+            $rejected = $false
+            try { & $deployScript -EnvFile $testEnv -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend -ValidateOnly:$validateOnly } catch {
+                Assert-True ($_.Exception.Message -like 'Missing or invalid digest for frontend*') 'manifest image values must be scalar strings'
+                $rejected = $true
+            }
+            Assert-True $rejected 'malformed manifest must fail validation and deployment'
+            Assert-True ($global:edugraphTestCalls.Count -eq $before) 'malformed manifests must fail before Docker'
+        }
+    }
+    Set-Content $chosen.frontend $validFrontendManifest -NoNewline
+    $backendManifest = Get-Content $chosen.backend -Raw | ConvertFrom-Json -AsHashtable
+    $gpuReference = $backendManifest.images['edugraph-ai-core-gpu']
+    $backendManifest.images.Remove('edugraph-ai-core-gpu')
+    $backendManifest | ConvertTo-Json -Depth 4 | Set-Content $chosen.backend
+    $incompleteFailed = $false
+    try { & $deployScript -EnvFile $testEnv -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend } catch {
+        Assert-True ($_.Exception.Message -like 'Invalid or incomplete backend*') 'incomplete manifests must be rejected'
+        $incompleteFailed = $true
+    }
+    Assert-True $incompleteFailed 'CPU deployments must also require the complete backend build set'
+    Assert-True ($global:edugraphTestCalls.Count -eq $callCount) 'incomplete manifests must fail before Docker'
+    $backendManifest.images['edugraph-ai-core-gpu'] = $gpuReference
+    $backendManifest.componentAttempts = @{}
+    foreach ($component in $backendManifest.images.Keys) { $backendManifest.componentAttempts[$component] = '1' }
+    foreach ($invalidAttempt in @('2', '0', @('1', '1'), $null)) {
+        $backendManifest.componentAttempts['core-service'] = $invalidAttempt
+        $backendManifest | ConvertTo-Json -Depth 6 | Set-Content $chosen.backend
+        $before = $global:edugraphTestCalls.Count
+        $rejected = $false
+        try { & $deployScript -EnvFile $testEnv -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend -ValidateOnly } catch {
+            Assert-True ($_.Exception.Message -like 'Invalid producing attempt*') 'producing attempts must be valid scalar attempts not newer than the manifest'
+            $rejected = $true
+        }
+        Assert-True $rejected 'invalid provenance must not pass validation'
+        Assert-True ($global:edugraphTestCalls.Count -eq $before) 'invalid provenance must fail before Docker'
+    }
+    $backendManifest.componentAttempts['core-service'] = '1'
+    $backendManifest | ConvertTo-Json -Depth 4 | Set-Content $chosen.backend
+    $tagMismatchFailed = $false
+    try { & $deployScript -EnvFile $testEnv -BackendTag $third -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend } catch {
+        Assert-True ($_.Exception.Message -like 'Commit tags do not match*') 'lookup tags must match the selected build'
+        $tagMismatchFailed = $true
+    }
+    Assert-True $tagMismatchFailed 'a different tag must not override the selected build manifest'
+
+    # Simulate tag replacement after the operator downloaded the chosen manifests.
+    $global:edugraphTestTagGeneration = 'partially-published-rerun'
+    $callCount = $global:edugraphTestCalls.Count
+    & $deployScript -EnvFile $testEnv -BackendManifest $chosen.backend -FrontendManifest $chosen.frontend -Gpu
+    $chosenCalls = @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+    Assert-True (@($chosenCalls | Where-Object { $_.arguments -contains '{{json .RepoDigests}}' }).Count -eq 0) 'application digests must never be resolved again from commit tags'
+    $chosenUp = @($chosenCalls | Where-Object { $_.arguments -contains 'up' })[0]
+    Assert-True ($chosenUp.images['ai-core'] -eq $gpuReference) 'GPU deployment must use the selected manifest variant'
+    foreach ($name in @('core-service', 'gateway-service')) {
+        Assert-True ($chosenUp.images[$name] -eq $backendManifest.images[$name]) 'tag replacement must not mix images from another build'
+    }
+    $frontendManifest = Get-Content $chosen.frontend -Raw | ConvertFrom-Json -AsHashtable
+    Assert-True ($chosenUp.images.frontend -eq $frontendManifest.images.frontend) 'frontend must also use the exact selected build digest'
+    $chosenState = Get-Content $statePath -Raw | ConvertFrom-Json
+    Assert-True ($chosenState.builds.backend.runId -eq '123' -and $chosenState.builds.backend.attempt -eq '1') 'release state must preserve selected CI build identity'
+    Assert-True ($chosenState.builds.backend.componentAttempts.'core-service' -eq '1') 'release state must preserve each image producing attempt'
+
+    $deadlineBaseline = Get-Content $statePath -Raw
+    foreach ($failureMode in @('before-timeout', 'before-process-start')) {
+        $before = $global:edugraphTestProcessCalls.Count
+        $global:edugraphTestAdvanceAfterPull = if ($failureMode -eq 'before-timeout') { 1496 } else { 0 }
+        $global:edugraphTestFailBeforeStart = $failureMode -eq 'before-process-start'
+        $failed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+            $failed = $_.Exception.Message -eq 'Insufficient deployment time remaining for activation.' -or $_.Exception.Message -eq 'Simulated process start failure'
+        }
+        Assert-True $failed 'pre-launch activation failures must report the original error'
+        $calls = @($global:edugraphTestProcessCalls | Select-Object -Skip $before)
+        Assert-True (@($calls | Where-Object { $_.recovering -or $_.arguments -contains 'stop' -or $_.arguments -contains 'rm' }).Count -eq 0) 'pre-launch failure must not recreate or stop healthy runtime'
+        Assert-True ((Get-Content $statePath -Raw) -eq $deadlineBaseline) 'pre-launch failure must retain release state'
+        $global:edugraphTestElapsedSeconds = 0
+    }
+    $deadlineImages = ($deadlineBaseline | ConvertFrom-Json -AsHashtable).images
+    $processStart = $global:edugraphTestProcessCalls.Count
+    $callCount = $global:edugraphTestCalls.Count
+    $expiredFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -DeadlineUtc ([DateTimeOffset]::UtcNow.AddMinutes(29)) } catch {
+        Assert-True ($_.Exception.Message -eq 'Deployment forward deadline exceeded.') 'elapsed checkout time must not consume the recovery reserve'
+        $expiredFailed = $true
+    }
+    Assert-True $expiredFailed 'an invocation with only recovery time remaining must reject forward work'
+    Assert-True ($global:edugraphTestCalls.Count -eq $callCount) 'an expired forward budget must fail before Docker'
+
+    $global:edugraphTestTimeoutForwardPull = $true
+    $slowPullFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated Docker command budget exceeded') 'pull timeout must report its cause'
+        $slowPullFailed = $true
+    }
+    Assert-True $slowPullFailed 'a hung pull must not wait for the workflow deadline'
+    $pullCalls = @($global:edugraphTestCalls | Select-Object -Skip $callCount)
+    Assert-True (@($pullCalls | Where-Object { $_.arguments -contains 'up' }).Count -eq 0) 'pull timeout must not activate the new release'
+    Assert-TestRuntime $deadlineImages
+    $global:edugraphTestElapsedSeconds = 0
+
+    $global:edugraphTestAdvanceAfterPull = 1450
+    $global:edugraphTestTimeoutActivation = $true
+    $processStart = $global:edugraphTestProcessCalls.Count
+    $lateActivationFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated Docker command budget exceeded') 'rollback must preserve the activation timeout'
+        Assert-True (-not $_.Exception.Data.Contains('RollbackFailure')) 'reserved recovery time must allow the previous release to be restored'
+        $lateActivationFailed = $true
+    }
+    Assert-True $lateActivationFailed 'late activation must stop before exhausting recovery time'
+    $deadlineCalls = @($global:edugraphTestProcessCalls | Select-Object -Skip $processStart)
+    $forwardUp = @($deadlineCalls | Where-Object { -not $_.recovering -and $_.arguments -contains 'up' })[0]
+    $recoveryUp = @($deadlineCalls | Where-Object { $_.recovering -and $_.arguments -contains 'up' })[0]
+    Assert-True ($forwardUp.timeout -lt 60) 'activation must use only the short forward budget remaining after a slow pull'
+    $waitIndex = [Array]::IndexOf($forwardUp.arguments, '--wait-timeout')
+    Assert-True ([int]$forwardUp.arguments[$waitIndex + 1] -le $forwardUp.timeout - 5) 'Compose health wait must fit within the process timeout'
+    Assert-True ($recoveryUp.timeout -gt 1200) 'rollback must retain its separate full activation budget'
+    Assert-True (@($deadlineCalls | Where-Object { $_.recovering -and $_.arguments -contains 'pull' }).Count -eq 0) 'cached rollback must not contact the registry'
+    Assert-TestRuntime $deadlineImages
+    Assert-True ((Get-Content $statePath -Raw) -eq $deadlineBaseline) 'activation timeout must not publish new state'
+    $global:edugraphTestElapsedSeconds = 0
+
+    $global:edugraphTestAdvanceAfterPull = 1450
+    $global:edugraphTestTimeoutActivation = $true
+    $global:edugraphTestTimeoutRecoveryPull = $true
+    $missingRecoveryImage = @($deadlineImages.Values)[0]
+    $null = $global:edugraphTestMissingImages.Add($missingRecoveryImage)
+    $callCount = $global:edugraphTestCalls.Count
+    $recoveryProcessStart = $global:edugraphTestProcessCalls.Count
+    $recoveryOverrideStart = $global:edugraphTestCreatedOverrides.Count
+    $recoveryTimeoutFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third } catch {
+        Assert-True ($_.Exception.Message -eq 'Simulated Docker command budget exceeded') 'recovery timeout must preserve the original activation error'
+        Assert-True ($_.Exception.Data['RollbackFailure'] -eq 'Simulated Docker command budget exceeded') 'recovery timeout must be reported separately'
+        $recoveryTimeoutFailed = $true
+    }
+    Assert-True $recoveryTimeoutFailed 'a hung recovery pull must fail explicitly before workflow cancellation'
+    $missingImagePulls = @($global:edugraphTestProcessCalls | Select-Object -Skip $recoveryProcessStart |
+        Where-Object { $_.recovering -and $_.arguments -contains 'pull' })
+    Assert-True ($missingImagePulls.Count -eq 1) 'one missing image must exercise exactly one recovery pull'
+    Assert-True ($missingImagePulls[0].arguments[-1] -ceq $missingRecoveryImage) 'recovery must pull the missing saved digest'
+    Assert-True ($missingImagePulls[0].timeout -ge 1 -and $missingImagePulls[0].timeout -le 120) 'rollback registry pull must have a timeout between 1 and 120 seconds'
+    # A missing-image pull now fails before Compose can use the rollback override.
+    Assert-CreatedRecoveryOverrides $recoveryOverrideStart $deadlineImages
+    Assert-True ((Get-Content $statePath -Raw) -eq $deadlineBaseline) 'recovery timeout must retain recovery records'
+    $global:edugraphTestMissingImages.Clear()
+    $global:edugraphTestElapsedSeconds = 0
+    foreach ($call in $global:edugraphTestProcessCalls) {
+        Assert-True ($call.timeout -gt 0 -and $call.timeout -le 1205) 'every Docker invocation must have a finite operation budget'
+    }
+    $httpStart = $global:edugraphTestHttpCalls.Count
+    $global:edugraphTestAdvanceAtOrigin = 1493
+    Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel
+    $latePublicCalls = @($global:edugraphTestHttpCalls | Select-Object -Skip $httpStart | Where-Object public)
+    Assert-True ($latePublicCalls.Count -eq 4) 'late public smoke check must still exercise all routes'
+    foreach ($call in $latePublicCalls) {
+        Assert-True ($call.timeout -gt 0 -and $call.timeout -le 7) 'HTTP timeouts must shrink to the remaining forward budget'
+    }
+    $global:edugraphTestElapsedSeconds = 0
+
+    foreach ($case in @(
+        @('docker.io/cloudflare/cloudflared:2026.1', 'cloudflare/cloudflared'),
+        @('cloudflare/cloudflared:2026.1', 'docker.io/cloudflare/cloudflared'),
+        @('docker.io/alpine:3', 'alpine'),
+        @('alpine:3', 'docker.io/library/alpine'),
+        @('index.docker.io/cloudflare/cloudflared:2026.1', 'cloudflare/cloudflared'),
+        @('registry.example:5000/cloudflare/cloudflared:2026.1', 'registry.example:5000/cloudflare/cloudflared')
+    )) {
+        $global:edugraphTestConnectorImage = $case[0]
+        $global:edugraphTestConnectorDigestRepository = $case[1]
+        $global:edugraphTestInspectedRepoDigests.Remove($case[0])
+        Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel
+        $normalizedState = Get-Content $statePath -Raw | ConvertFrom-Json
+        $inspectedReferences = @($global:edugraphTestInspectedRepoDigests[$case[0]])
+        Assert-True ($inspectedReferences.Count -eq 1 -and $inspectedReferences[0]) 'normalization scenario must inspect exactly one repository digest'
+        Assert-True ($normalizedState.images.cloudflared -ceq $inspectedReferences[0]) 'equivalent repository names must retain the exact full reference returned by inspection'
+    }
+    $digestA = 'sha256:' + ('a' * 64)
+    $digestB = 'sha256:' + ('b' * 64)
+    $global:edugraphTestConnectorPullDigest = $digestB
+    $global:edugraphTestConnectorExtraDigest = $digestA
+    $global:edugraphTestConnectorDigestRepository = 'cloudflare/cloudflared'
+    foreach ($connectorImage in @("docker.io/cloudflare/cloudflared@$digestB", 'docker.io/cloudflare/cloudflared:2026.1')) {
+        $global:edugraphTestConnectorImage = $connectorImage
+        $callStart = $global:edugraphTestCalls.Count
+        Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel
+        $digestState = Get-Content $statePath -Raw | ConvertFrom-Json
+        $expectedReference = if ($connectorImage.Contains('@')) { $connectorImage } else { "cloudflare/cloudflared@$digestB" }
+        Assert-True ($digestState.images.cloudflared -ceq $expectedReference) 'connector must retain the configured or just-pulled digest B even when digest A is listed first'
+        $digestCalls = @($global:edugraphTestCalls | Select-Object -Skip $callStart)
+        $digestUp = @($digestCalls | Where-Object { $_.arguments -contains 'up' })[-1]
+        Assert-True ($digestUp.images.cloudflared -ceq $expectedReference) 'the activated connector must use the same exact digest saved in release state'
+        if ($connectorImage.Contains('@')) {
+            Assert-True (@($digestCalls | Where-Object { $_.arguments -contains '{{json .RepoDigests}}' }).Count -eq 0) 'an explicit digest must not be reselected from repository digest order'
+        }
+    }
+    $global:edugraphTestConnectorImage = 'docker.io/cloudflare/cloudflared:2026.1'
+    $global:edugraphTestNoPullDigest = $true
+    $callStart = $global:edugraphTestCalls.Count
+    $beforeMissingPullDigest = Get-Content $statePath -Raw
+    $missingPullDigestFailed = $false
+    try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+        Assert-True ($_.Exception.Message -like 'Cannot determine the digest reported by connector pull:*') 'tag pulls without a reported digest must fail explicitly'
+        $missingPullDigestFailed = $true
+    }
+    Assert-True $missingPullDigestFailed 'repository digest order must never replace a missing pull result'
+    Assert-True (@($global:edugraphTestCalls | Select-Object -Skip $callStart | Where-Object { $_.arguments -contains 'up' }).Count -eq 0) 'unknown pulled digest must fail before activation'
+    Assert-True ((Get-Content $statePath -Raw) -eq $beforeMissingPullDigest) 'unknown pulled digest must preserve release state'
+    $global:edugraphTestNoPullDigest = $false
+    $global:edugraphTestConnectorPullDigest = $null
+    $global:edugraphTestConnectorExtraDigest = $null
+    $global:edugraphTestConnectorImage = 'docker.io/cloudflare/cloudflared:2026.1'
+    foreach ($unrelated in @('ghcr.io/cloudflare/cloudflared', 'cloudflare/cloudflared-other', 'other/cloudflared', 'registry.example:5000/cloudflare/cloudflared')) {
+        $global:edugraphTestConnectorDigestRepository = $unrelated
+        $beforeMismatch = Get-Content $statePath -Raw
+        $beforeUpCount = @($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count
+        $mismatchFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $third -FrontendTag $third -Tunnel } catch {
+            Assert-True ($_.Exception.Message -like 'No repository digest found*') 'unrelated repositories must fail digest matching'
+            $mismatchFailed = $true
+        }
+        Assert-True $mismatchFailed 'normalization must not accept a different registry or repository'
+        Assert-True ((Get-Content $statePath -Raw) -eq $beforeMismatch) 'a repository mismatch must preserve release state'
+        Assert-True (@($global:edugraphTestCalls | Where-Object { $_.arguments -contains 'up' }).Count -eq $beforeUpCount) 'a repository mismatch must fail before activation'
+    }
+    $global:edugraphTestConnectorImage = $null
+    $global:edugraphTestConnectorDigestRepository = $null
+
+    $cachedBaseline = Get-Content $statePath -Raw
+    $cachedImages = (Get-Content $statePath -Raw | ConvertFrom-Json -AsHashtable).images
+    foreach ($cacheMode in @('all-cached-registry-down', 'one-missing', 'missing-registry-down')) {
+        $global:edugraphTestRecoveryRegistryDown = $cacheMode -ne 'one-missing'
+        $missingReference = @($cachedImages.Values)[0]
+        if ($cacheMode -ne 'all-cached-registry-down') { $null = $global:edugraphTestMissingImages.Add($missingReference) }
+        $global:edugraphTestFailNextUp = $true
+        $callStart = $global:edugraphTestCalls.Count
+        $processStart = $global:edugraphTestProcessCalls.Count
+        $recoveryOverrideStart = $global:edugraphTestCreatedOverrides.Count
+        $recoveryFailed = $false
+        try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second } catch {
+            Assert-True ($_.Exception.Message -eq 'Docker Compose failed: up') 'cache-aware recovery must preserve the original deployment error'
+            if ($cacheMode -eq 'missing-registry-down') {
+                Assert-True ($_.Exception.Data['RollbackFailure'] -like 'Cannot pull missing rollback image:*') 'an uncached image with unavailable registry must report recovery failure'
+            } else {
+                Assert-True (-not $_.Exception.Data.Contains('RollbackFailure')) 'cached or successfully fetched digests must restore the old release'
+            }
+            $recoveryFailed = $true
+        }
+        Assert-True $recoveryFailed 'a failed release must fail even after cache-aware rollback'
+        $recoveryCalls = @($global:edugraphTestProcessCalls | Select-Object -Skip $processStart | Where-Object recovering)
+        $recoveryPulls = @($recoveryCalls | Where-Object { $_.arguments -contains 'pull' })
+        if ($cacheMode -eq 'all-cached-registry-down') {
+            Assert-True ($recoveryPulls.Count -eq 0) 'fully cached recovery must not contact the registry'
+        } else {
+            Assert-True ($recoveryPulls.Count -eq 1 -and $recoveryPulls[0].arguments[-1] -eq $missingReference) 'recovery must pull only the missing saved digest'
+        }
+        Assert-True ((Get-Content $statePath -Raw) -eq $cachedBaseline) 'cache-aware rollback must preserve release metadata'
+        if ($cacheMode -ne 'missing-registry-down') { Assert-TestRuntime $cachedImages }
+        else { Assert-CreatedRecoveryOverrides $recoveryOverrideStart $cachedImages }
+        $global:edugraphTestRecoveryRegistryDown = $false
+        $global:edugraphTestMissingImages.Clear()
+    }
+
+    Set-Alias -Name Remove-Item -Value Invoke-TestCleanup -Scope Script
+    try {
+        foreach ($outcome in @('success', 'activation-failed')) {
+            $global:edugraphTestCleanupAttempts = [Collections.Generic.List[string]]::new()
+            $global:edugraphTestCleanupBlocked = [Collections.Generic.List[string]]::new()
+            $global:edugraphTestLockOverrideCleanup = $true
+            $global:edugraphTestLockMetadataCleanup = $true
+            $beforeCleanup = Get-Content $statePath -Raw
+            $global:edugraphTestFailNextUp = $outcome -eq 'activation-failed'
+            $cleanupWarnings = @()
+            $cleanupDeployFailed = $false
+            try { Invoke-TestDeployment -EnvFile $testEnv -BackendTag $first -FrontendTag $second -WarningVariable cleanupWarnings } catch {
+                Assert-True ($_.Exception.Message -eq 'Docker Compose failed: up') 'cleanup failure must not replace the deployment error'
+                $cleanupDeployFailed = $true
+            }
+            Assert-True ($cleanupDeployFailed -eq ($outcome -eq 'activation-failed')) 'temporary file deletion must not change the deployment result'
+            Assert-True ($global:edugraphTestCleanupBlocked.Count -eq 2) 'both override and metadata deletion failures must be exercised'
+            foreach ($path in $global:edugraphTestCleanupBlocked) {
+                Assert-True (@($cleanupWarnings | Where-Object { [string]$_ -like '*Cannot remove deployment temporary file*' -and ([string]$_).Contains($path) }).Count -eq 1) 'each cleanup failure must warn with its exact path'
+                Assert-True (Test-Path -LiteralPath $path) 'locked temporary files must remain available for later cleanup'
+                $null = $preservedOverrides.Add($path)
+            }
+            $cleaned = @($global:edugraphTestCleanupAttempts | Where-Object { -not $global:edugraphTestCleanupBlocked.Contains($_) })
+            Assert-True ($cleaned.Count -gt 0) 'cleanup must continue after a locked file'
+            foreach ($path in $cleaned) { Assert-True (-not (Test-Path -LiteralPath $path)) 'other temporary files must still be deleted' }
+            if ($outcome -eq 'activation-failed') {
+                Assert-True ((Get-Content $statePath -Raw) -eq $beforeCleanup) 'failed activation must retain the prior record despite cleanup errors'
+            } else {
+                $committed = Get-Content $statePath -Raw | ConvertFrom-Json -AsHashtable
+                Assert-True ($committed.backendTag -eq $first -and $committed.frontendTag -eq $second) 'a committed release must remain recorded despite cleanup errors'
+                Assert-TestRuntime $committed.images
+            }
+        }
+    } finally { Microsoft.PowerShell.Management\Remove-Item -LiteralPath Alias:Remove-Item }
+
+    # Use a second pwsh process and a different secrets path: the lock must be
+    # project-wide, not tied to a checkout or the location of production.env.
+    $probeEnv = Join-Path $testRoot 'alternate.env'
+    Set-Content -LiteralPath $probeEnv -Value '# isolated lock probe'
+    $marker = Join-Path $testRoot 'lock-probe-docker.txt'
+    $invalidRelease = Join-Path $testRoot 'invalid-release.json'
+    Set-Content -LiteralPath $invalidRelease -Value 'invalid JSON must not be read while locked'
+    $holder = [Threading.Mutex]::new($false, 'Global\edugraph-production')
+    $holderAcquired = $false
+    try {
+        $holderAcquired = $holder.WaitOne(0)
+        Assert-True $holderAcquired 'earlier successful and failed deployments must release the project lock'
+        $blocked = Invoke-DeploymentLockProbe $probeEnv $marker $invalidRelease
+        Assert-True ($blocked -like 'Another edugraph deployment is already running*') 'a second process must be rejected before reading rollback state'
+        Assert-True (-not (Test-Path -LiteralPath $marker)) 'a competing deployment must not reach Docker'
+    } finally {
+        if ($holderAcquired) { $holder.ReleaseMutex() }
+        $holder.Dispose()
+    }
+    $unblocked = Invoke-DeploymentLockProbe $probeEnv $marker
+    Assert-True ($unblocked -eq 'Probe completed') 'a second process must deploy after the project lock is released'
+    Assert-True (Test-Path -LiteralPath $marker) 'unblocked validation must reach its isolated Docker mock'
+    Write-Host 'Deployment orchestration tests passed.'
+} finally {
+    $env:BACKEND_TAG = $callerBackendTag
+    $env:COMPOSE_PROFILES = $callerComposeProfiles
+    Remove-Item -LiteralPath Alias:Invoke-DeploymentWebRequest -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Alias:Start-Sleep -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Alias:Invoke-DeploymentProcess, Alias:Get-DeploymentElapsedSeconds -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Alias:Get-DockerExecutable -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Alias:New-ImageOverride -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath Alias:New-MetadataStage, Alias:Publish-ReleaseMetadata -ErrorAction SilentlyContinue
+    foreach ($path in $preservedOverrides) { Remove-Item -LiteralPath $path -Force }
+    # Delete only this test-created directory under the OS temp root.
+    $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
+    $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if ($resolvedTestRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+        (Split-Path $resolvedTestRoot -Leaf).StartsWith('edugraph-deploy-tests-')) {
+        Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+    }
+}
+

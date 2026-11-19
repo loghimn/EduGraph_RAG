@@ -1,0 +1,133 @@
+name: edugraph
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+services:
+  ai-core:
+    image: ${REGISTRY_PREFIX:?Set REGISTRY_PREFIX}/edugraph-ai-core:${BACKEND_TAG:?Set BACKEND_TAG}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    logging: *logging
+    environment:
+      NEO4J_URI: ${NEO4J_URI:?Set NEO4J_URI}
+      NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD}
+      INTERNAL_API_KEY: ${AI_CORE_INTERNAL_KEY:?Set AI_CORE_INTERNAL_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      MODEL_MAIN: ${MODEL_MAIN:-gpt-5.4-mini}
+      MODEL_FALLBACK: ${MODEL_FALLBACK:-gemini-2.5-flash}
+      EMBEDDING_DEVICE: cpu
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-4}
+      RAW_DATA_DIR: /data/raw
+      HF_HOME: /data/huggingface
+    volumes:
+      - ai-raw:/data/raw
+      - huggingface:/data/huggingface
+      - ai-cache:/app/.cache
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=10)"]
+      start_period: 600s
+      interval: 20s
+      timeout: 15s
+      retries: 5
+
+  core-service:
+    image: ${REGISTRY_PREFIX:?Set REGISTRY_PREFIX}/core-service:${BACKEND_TAG:?Set BACKEND_TAG}
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      ai-core:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_NAME: core-service
+      SERVER_PORT: '8081'
+      JAVA_TOOL_OPTIONS: ${CORE_JAVA_OPTIONS:--XX:MaxRAMPercentage=65 -Xms128m -Xmx1024m}
+      DB_URL: ${DB_URL:?Set DB_URL}
+      DB_USERNAME: ${DB_USERNAME:?Set DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      DB_DDL_AUTO: ${DB_DDL_AUTO:-update}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: https://edugraph-rag.io.vn/login/oauth2/code/google
+      FRONTEND_SUCCESS_URL: https://edugraph-rag.io.vn/auth/callback
+      FRONTEND_FAILURE_URL: https://edugraph-rag.io.vn/auth/error
+      CORS_ALLOWED_ORIGINS: https://edugraph-rag.io.vn
+      AI_CORE_URL: http://ai-core:8082
+      AI_CORE_INTERNAL_KEY: ${AI_CORE_INTERNAL_KEY:?Set AI_CORE_INTERNAL_KEY}
+      SUPABASE_URL: ${SUPABASE_URL:?Set SUPABASE_URL}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:?Set SUPABASE_SECRET_KEY}
+      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-course-materials}
+      MAIL_HOST: ${MAIL_HOST:?Set MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:?Set MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:?Set MAIL_PASSWORD}
+      MAIL_FROM: ${MAIL_FROM:?Set MAIL_FROM}
+      MAIL_SMTP_AUTH: ${MAIL_SMTP_AUTH:-true}
+      MAIL_STARTTLS: ${MAIL_STARTTLS:-true}
+    healthcheck:
+      test: [CMD, curl, -fsS, --max-time, '10', http://127.0.0.1:8081/actuator/health]
+      start_period: 120s
+      interval: 15s
+      timeout: 12s
+      retries: 5
+
+  gateway-service:
+    image: ${REGISTRY_PREFIX:?Set REGISTRY_PREFIX}/gateway-service:${BACKEND_TAG:?Set BACKEND_TAG}
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      core-service:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      GATEWAY_PORT: '8080'
+      JAVA_TOOL_OPTIONS: ${GATEWAY_JAVA_OPTIONS:--Xms128m -Xmx512m}
+      CORE_SERVICE_URL: http://core-service:8081
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      CORS_ALLOWED_ORIGINS: https://edugraph-rag.io.vn
+    healthcheck:
+      test: [CMD, curl, -fsS, --max-time, '10', http://127.0.0.1:8080/actuator/health]
+      start_period: 90s
+      interval: 15s
+      timeout: 12s
+      retries: 5
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE}:${FRONTEND_TAG:?Set FRONTEND_TAG}
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      gateway-service:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:8088:80
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/healthz]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    restart: unless-stopped
+    logging: *logging
+    profiles: [tunnel]
+    depends_on:
+      frontend:
+        condition: service_healthy
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+volumes:
+  ai-raw:
+  huggingface:
+  ai-cache:

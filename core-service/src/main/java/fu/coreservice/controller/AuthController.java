@@ -1,7 +1,5 @@
 package fu.coreservice.controller;
 
-import fu.coreservice.security.OAuth2LoginSuccessHandler;
-
 import fu.coreservice.dto.ApiResponse;
 import fu.coreservice.dto.auth.AuthResponse;
 import fu.coreservice.dto.auth.LoginRequest;
@@ -12,15 +10,12 @@ import fu.coreservice.entity.ApprovalStatus;
 import fu.coreservice.dto.auth.UserInfoResponse;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.service.AuthService;
-import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 
-import java.io.IOException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -35,29 +30,6 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
-    // ── Google OAuth2 Login (Swagger Authorize button) ─────────────────
-    /**
-     * Proxy endpoint for Swagger's OAuth2 Authorize button.
-     * Stores a flag in HTTP session so OAuth2LoginSuccessHandler knows
-     * to redirect back to Swagger's oauth2-redirect.html with JWT.
-     */
-    @Hidden
-    @GetMapping("/google/authorize")
-    public void googleAuthorizeProxy(
-            @RequestParam(value = "state", required = false) String state,
-            @RequestParam(value = "redirect_uri", required = false) String redirectUri,
-            HttpServletRequest request,
-            HttpServletResponse response) throws IOException {
-
-        // Store Swagger's state + redirect_uri in session
-        request.getSession().setAttribute("fromSwagger", true);
-        request.getSession().setAttribute("swagger_state", state);
-        request.getSession().setAttribute("swagger_redirect_uri", redirectUri);
-
-        // Redirect to Spring Security's built-in OAuth2 login flow
-        response.sendRedirect("/oauth2/authorization/google");
-    }
-
     // ── Standard JWT endpoints ─────────────────────────────────────────
 
     @Operation(

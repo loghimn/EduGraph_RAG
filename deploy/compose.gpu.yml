@@ -1,0 +1,12 @@
+services:
+  ai-core:
+    image: ${REGISTRY_PREFIX:?Set REGISTRY_PREFIX}/edugraph-ai-core-gpu:${BACKEND_TAG:?Set BACKEND_TAG}
+    environment:
+      EMBEDDING_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

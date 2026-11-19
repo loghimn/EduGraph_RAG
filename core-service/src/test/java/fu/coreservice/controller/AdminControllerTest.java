@@ -23,6 +23,8 @@ import fu.coreservice.service.ActivityAlertService;
 import fu.coreservice.service.ActivityLogService;
 import fu.coreservice.service.InstructorApprovalService;
 import jakarta.servlet.Filter;
+import jakarta.servlet.http.HttpServletRequest;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -30,6 +32,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -49,6 +52,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.web.util.UriUtils;
+import fu.coreservice.security.LoginAuthorizationRequestRepository;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -84,6 +91,49 @@ class AdminControllerTest {
     void cleanup() {
         SecurityContextHolder.clearContext();
         context.close();
+    }
+
+    @Test
+    void normalGoogleLoginReplacesAbandonedSwaggerRequest() throws Exception {
+        var swagger = mvc.perform(get("/api/auth/google/authorize").servletPath("/api/auth/google/authorize")
+                        .param("state", "swagger-client-state"))
+                .andExpect(status().isFound()).andReturn();
+        var session = (MockHttpSession) swagger.getRequest().getSession(false);
+        assertThat(session).isNotNull();
+        String oldState = googleState(swagger.getResponse().getRedirectedUrl());
+        var normal = mvc.perform(get("/oauth2/authorization/google").servletPath("/oauth2/authorization/google").session(session))
+                .andExpect(status().isFound()).andReturn();
+        String normalState = googleState(normal.getResponse().getRedirectedUrl());
+        assertThat(normalState).isNotEqualTo(oldState);
+        var callback = new MockHttpServletRequest();
+        callback.setSession(session);
+        callback.setParameter("state", normalState);
+        var authorization = context.getBean(LoginAuthorizationRequestRepository.class).removeAuthorizationRequest(callback, new org.springframework.mock.web.MockHttpServletResponse());
+        assertThat(authorization).isNotNull();
+        assertThat((Object) authorization.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_MODE)).isNull();
+        assertThat((Object) authorization.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_STATE)).isNull();
+    }
+
+    @Test
+    void callbackFilterRecoversContextFromMatchingSwaggerAuthorizationRequest() throws Exception {
+        var swagger = mvc.perform(get("/api/auth/google/authorize").servletPath("/api/auth/google/authorize")
+                        .param("state", "matching-swagger-state"))
+                .andExpect(status().isFound()).andReturn();
+        var session = (MockHttpSession) swagger.getRequest().getSession(false);
+        // A provider denial exercises the callback filter without any token/network call.
+        mvc.perform(get("/login/oauth2/code/google").servletPath("/login/oauth2/code/google").session(session)
+                .param("state", googleState(swagger.getResponse().getRedirectedUrl())).param("error", "access_denied"));
+        var captured = ArgumentCaptor.forClass(HttpServletRequest.class);
+        verify(context.getBean(OAuth2LoginFailureHandler.class)).onAuthenticationFailure(captured.capture(), any(), any());
+        var authorization = (OAuth2AuthorizationRequest) captured.getValue().getAttribute(LoginAuthorizationRequestRepository.CALLBACK_REQUEST);
+        assertThat(authorization).isNotNull();
+        assertThat((Object) authorization.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_MODE)).isEqualTo(true);
+        assertThat((Object) authorization.getAttribute(LoginAuthorizationRequestRepository.SWAGGER_STATE)).isEqualTo("matching-swagger-state");
+    }
+
+    private String googleState(String redirect) {
+        String value = UriComponentsBuilder.fromUriString(redirect).build().getQueryParams().getFirst("state");
+        return UriUtils.decode(value, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Test
@@ -174,7 +224,7 @@ class AdminControllerTest {
 
     @Configuration
     @EnableWebMvc
-    @Import({SecurityConfig.class, AdminController.class, JacksonConfig.class})
+    @Import({SecurityConfig.class, AdminController.class, JacksonConfig.class, SwaggerOAuthController.class})
     static class TestConfig {
         @Bean ActivityLogService activityLogService() { return mock(ActivityLogService.class); }
         @Bean InstructorApprovalService instructorApprovalService() { return mock(InstructorApprovalService.class); }
