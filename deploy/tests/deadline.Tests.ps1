@@ -3,6 +3,15 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../DeploymentProcess.ps1')
 . (Join-Path $PSScriptRoot '../DeploymentHttp.ps1')
 $pwsh = Join-Path $PSHOME $(if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' })
+$startedMarker = [Collections.Generic.List[bool]]::new()
+$null = Invoke-DeploymentProcess -FilePath $pwsh -Arguments @('-NoProfile', '-NonInteractive', '-Command', 'exit 0') -TimeoutSeconds 10 -OnStarted { $startedMarker.Add($true) }
+if ($startedMarker.Count -ne 1) { throw 'Started callback must signal a process that actually launched.' }
+try {
+    $null = Invoke-DeploymentProcess -FilePath (Join-Path $PSHOME 'missing-deployment-process') -TimeoutSeconds 10 -OnStarted { $startedMarker.Add($true) }
+    throw 'Missing executable unexpectedly started.'
+} catch [System.ComponentModel.Win32Exception] {
+    if ($startedMarker.Count -ne 1) { throw 'A failed process start must not signal activation.' }
+}
 $result = Invoke-DeploymentProcess -FilePath $pwsh -Arguments @('-NoProfile', '-NonInteractive', '-Command', '[Console]::Out.Write("output"); [Console]::Error.Write("diagnostic"); exit 7') -TimeoutSeconds 10
 if ($result.ExitCode -ne 7 -or $result.Output -ne 'output' -or $result.Error -ne 'diagnostic') {
     throw 'Bounded process runner must preserve output and failure status.'

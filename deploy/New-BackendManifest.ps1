@@ -17,7 +17,7 @@ $componentAttempts = @{}
 $seen = @{}
 $owner = $Repository.Split('/')[0].ToLowerInvariant()
 foreach ($file in $records) {
-    $record = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -AsHashtable
+    $record = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -AsHashtable -NoEnumerate
     if ($record -isnot [System.Collections.IDictionary] -or
         $record.repository -isnot [string] -or $record.commit -isnot [string] -or
         $record.runId -isnot [string] -or $record.attempt -isnot [string] -or

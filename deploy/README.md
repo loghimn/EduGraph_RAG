@@ -197,6 +197,15 @@ Lệnh `ps` trên chỉ xem trạng thái. Dùng script deploy để cập nhậ
 
 Backup PostgreSQL và Neo4j theo công cụ nhà cung cấp; backup Supabase Storage theo chính sách dự án. Backup Docker volume `edugraph_ai-raw` khi đã dừng AI để giữ file gốc và bản nháp nhất quán. `edugraph_huggingface` và `edugraph_ai-cache` là cache, có thể tạo lại. Không dùng `docker compose down -v` khi cập nhật vì sẽ xóa volume dữ liệu. Thử khôi phục backup trước khi coi quy trình hoàn tất.
 
+## Kiểm tra release và ranh giới activation
+
+- Script dùng profile tường minh `edugraph-base` khi tắt tunnel, đồng thời truyền danh sách service đã pin vào `compose up`. `COMPOSE_PROFILES=tunnel` trong shell hoặc file env không được phép tự khởi động connector. Khi bật tunnel, `cloudflared` nằm trong bộ service đã pin digest; connector của release cũ vẫn được stop tường minh khi chuyển sang tunnel-off.
+- Manifest, release được chọn và current-release phải có JSON root là object; mảng bọc một object và JSON `null` không hợp lệ. Nếu đã truyền `-ReleaseFile`, script không chuyển sang deploy manifest mới khi file rollback không hợp lệ.
+- Lỗi parse `production.env` được bắt với cả stdout/stderr; log chỉ báo kiểm tra file tại máy, không in chẩn đoán thô có thể chứa password. `config --quiet` tự nó không bảo đảm giấu lỗi parse khi chạy tay.
+- Override image đặt `APP_RELEASE_ID` cho core bằng SHA-256 của bộ digest AI/core/gateway đã chọn. Endpoint production `GET /api/deployment/release` trả `backendReleaseId` với `Cache-Control: no-store`. Smoke checks local và HTTPS public đều so sánh ID với release đích, gồm cả lúc rollback, để phát hiện domain còn trỏ backend cũ dù asset frontend giống nhau. Không cache endpoint này tại proxy/CDN. Khi tùy chỉnh `GATEWAY_PUBLIC_PATHS`, giữ `/api/deployment/release` trong danh sách public.
+- Rollback chỉ chạy sau khi process activation thực sự start. Thiếu thời gian hoặc lỗi launch trước ranh giới đó không được recreate/stop runtime đang tốt. Nếu process đã start rồi lỗi hoặc timeout, script vẫn thực hiện recovery và kiểm tra release ID cũ.
+- Image core của release dùng với cơ chế này phải có endpoint release mới. Release cũ chưa có endpoint sẽ không vượt smoke check; cần giữ backup/kiểm tra tương thích trước khi rollback về image cũ.
+
 ## Tài liệu chính thức
 
 - [GitHub Actions publishing Docker images](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images)

@@ -7,7 +7,8 @@ function Invoke-DeploymentProcess {
     param(
         [Parameter(Mandatory)][string]$FilePath,
         [string[]]$Arguments = @(),
-        [Parameter(Mandatory)][ValidateRange(1, 3300)][int]$TimeoutSeconds
+        [Parameter(Mandatory)][ValidateRange(1, 3300)][int]$TimeoutSeconds,
+        [scriptblock]$OnStarted
     )
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
@@ -20,6 +21,7 @@ function Invoke-DeploymentProcess {
     $process.StartInfo = $startInfo
     try {
         if (-not $process.Start()) { throw 'Cannot start deployment command.' }
+        if ($null -ne $OnStarted) { & $OnStarted }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {

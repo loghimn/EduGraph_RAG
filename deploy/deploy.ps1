@@ -25,6 +25,7 @@ $deploymentClock = [Diagnostics.Stopwatch]::StartNew()
 $totalBudgetSeconds = [Math]::Min(3300, ($DeadlineUtc - [DateTimeOffset]::UtcNow).TotalSeconds)
 $recoveryReserveSeconds = 1800
 $recovering = $false
+$activationStarted = $false
 
 function Get-DeploymentElapsedSeconds { return $deploymentClock.Elapsed.TotalSeconds }
 
@@ -63,7 +64,11 @@ function Invoke-Docker([string[]]$Arguments, [switch]$CaptureOutput) {
     $timeout = Get-OperationTimeout (Get-DockerOperationLimit $Arguments)
     Set-ActivationWaitTimeout $Arguments $timeout
     $dockerPath = Get-DockerExecutable
-    $result = Invoke-DeploymentProcess -FilePath $dockerPath -Arguments $Arguments -TimeoutSeconds $timeout
+    $processParameters = @{ FilePath = $dockerPath; Arguments = $Arguments; TimeoutSeconds = $timeout }
+    if ($Arguments -contains 'up' -and -not $recovering) {
+        $processParameters.OnStarted = { $script:activationStarted = $true }
+    }
+    $result = Invoke-DeploymentProcess @processParameters
     $script:dockerExitCode = $result.ExitCode
     $script:dockerErrorOutput = [string]$result.Error
     if ($CaptureOutput) {
@@ -101,7 +106,8 @@ function Get-ComposeArguments([bool]$UseGpu, [bool]$UseTunnel) {
     $arguments = @('compose', '--project-name', 'edugraph', '--env-file', $EnvFile,
         '-f', (Join-Path $PSScriptRoot 'compose.yml'))
     if ($UseGpu) { $arguments += @('-f', (Join-Path $PSScriptRoot 'compose.gpu.yml')) }
-    if ($UseTunnel) { $arguments += @('--profile', 'tunnel') }
+    $profile = if ($UseTunnel) { 'tunnel' } else { 'edugraph-base' }
+    $arguments += @('--profile', $profile)
     return $arguments
 }
 
@@ -119,11 +125,18 @@ function New-ImageOverride([System.Collections.IDictionary]$Images, [bool]$UseTu
         }
         $services[$name] = @{ image = $Images[$name] }
     }
+    $services['core-service'].environment = @{ APP_RELEASE_ID = Get-BackendReleaseId $Images }
     # Only image references are written here, never the rendered environment/secrets.
     $path = (New-TemporaryFile).FullName
     $overrideFiles.Add($path)
     @{ services = $services } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $path -Encoding utf8
     return $path
+}
+
+function Get-BackendReleaseId([System.Collections.IDictionary]$Images) {
+    $references = foreach ($name in @('ai-core', 'core-service', 'gateway-service')) { "$name=$($Images[$name])" }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($references -join "`n")
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
 function Invoke-Compose([string[]]$Arguments) {
@@ -185,7 +198,7 @@ function Assert-ManifestProducingAttempts($Manifest, [string]$Kind, [string[]]$R
 
 function Read-CIManifest([string]$Path, [string]$Kind) {
     if (-not $Path) { throw 'Fresh deployments require both BackendManifest and FrontendManifest from selected successful CI builds; commit tags alone are not sufficient.' }
-    $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
+    $manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable -NoEnumerate
     $required = if ($Kind -eq 'backend') {
         @('core-service', 'gateway-service', 'edugraph-ai-core', 'edugraph-ai-core-gpu')
     } else { @('frontend') }
@@ -262,7 +275,7 @@ function Ensure-ReleaseImages([System.Collections.IDictionary]$Images) {
     }
 }
 
-function Test-Origin {
+function Test-Origin([string]$BackendReleaseId) {
     foreach ($path in @('/healthz', '/courses')) {
         $response = Invoke-DeploymentWebRequest "http://127.0.0.1:8088$path" -SkipHttpErrorCheck -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
         if ($response.StatusCode -ne 200) { throw "Origin check failed: $path" }
@@ -273,12 +286,22 @@ function Test-Origin {
     }
     $response = Invoke-DeploymentWebRequest 'http://127.0.0.1:8088/api/users/me' -SkipHttpErrorCheck -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
     if ($response.StatusCode -ne 401) { throw 'Protected gateway API did not return 401' }
+    $releaseResponse = Invoke-DeploymentWebRequest 'http://127.0.0.1:8088/api/deployment/release' -SkipHttpErrorCheck -TimeoutSec (Get-OperationTimeout 15) -MaximumRedirection 0
+    Assert-BackendReleaseResponse $releaseResponse $BackendReleaseId
     $assets = @([regex]::Matches($frontendHtml, '\bsrc="(/assets/[^\"]+\.js)"') | ForEach-Object { $_.Groups[1].Value })
     if ($assets.Count -eq 0) { throw 'SPA response did not contain a frontend JavaScript asset.' }
     return $assets
 }
 
-function Assert-PublicProbeResponse($Response, [string]$Path, [string[]]$FrontendAssets) {
+function Assert-BackendReleaseResponse($Response, [string]$ExpectedId) {
+    if ($Response.StatusCode -ne 200) { throw 'Backend release probe did not return 200.' }
+    $body = $Response.Content | ConvertFrom-Json -AsHashtable -NoEnumerate
+    if ($body -isnot [System.Collections.IDictionary] -or $body.backendReleaseId -isnot [string] -or
+        $body.backendReleaseId -cne $ExpectedId) { throw 'Backend release identifier does not match the selected images.' }
+}
+
+function Assert-PublicProbeResponse($Response, [string]$Path, [string[]]$FrontendAssets, [string]$BackendReleaseId) {
+    if ($Path -eq '/api/deployment/release') { Assert-BackendReleaseResponse $Response $BackendReleaseId; return }
     $expectedStatus = if ($Path -eq '/api/users/me') { 401 } else { 200 }
     if ($Response.StatusCode -ne $expectedStatus) { throw "Unexpected public status for $Path" }
     if ($Path -eq '/healthz' -and $Response.Content.Trim() -ne 'ok') { throw 'Unexpected public health response.' }
@@ -289,21 +312,21 @@ function Assert-PublicProbeResponse($Response, [string]$Path, [string[]]$Fronten
     }
 }
 
-function Invoke-PublicRouteProbes([string]$Origin, [string[]]$FrontendAssets) {
-    foreach ($path in @('/healthz', '/courses', '/api/users/me')) {
+function Invoke-PublicRouteProbes([string]$Origin, [string[]]$FrontendAssets, [string]$BackendReleaseId) {
+    foreach ($path in @('/healthz', '/courses', '/api/users/me', '/api/deployment/release')) {
         $probe = "$Origin${path}?deploy-check=$([guid]::NewGuid().ToString('N'))"
         $response = Invoke-DeploymentWebRequest $probe -TimeoutSec (Get-OperationTimeout 10) -SkipHttpErrorCheck -MaximumRedirection 0 -Headers @{ 'Cache-Control' = 'no-cache' }
-        Assert-PublicProbeResponse $response $path $FrontendAssets
+        Assert-PublicProbeResponse $response $path $FrontendAssets $BackendReleaseId
     }
 }
 
-function Test-PublicRoute([bool]$UseTunnel, [string[]]$FrontendAssets) {
+function Test-PublicRoute([bool]$UseTunnel, [string[]]$FrontendAssets, [string]$BackendReleaseId) {
     if (-not $UseTunnel) { return }
     $publicOrigin = 'https://edugraph-rag.io.vn'
     # Finite retries let a newly connected tunnel settle without waiting indefinitely.
     for ($attempt = 1; $attempt -le 4; $attempt++) {
         try {
-            Invoke-PublicRouteProbes $publicOrigin $FrontendAssets
+            Invoke-PublicRouteProbes $publicOrigin $FrontendAssets $BackendReleaseId
             return
         } catch {
             if ($attempt -eq 4) { throw "Public route check failed for $publicOrigin after 4 attempts: $($_.Exception.Message)" }
@@ -332,10 +355,10 @@ try {
     }
     $null = Get-OperationTimeout 1
     # Read rollback selections as well as current state only while holding the lock.
-    $selectedRelease = if ($ReleaseFile) {
-        Get-Content -LiteralPath $ReleaseFile -Raw | ConvertFrom-Json -AsHashtable
-    } else { $null }
-    if ($null -ne $selectedRelease) {
+    $releaseSelected = $PSBoundParameters.ContainsKey('ReleaseFile')
+    $selectedRelease = $null
+    if ($releaseSelected) {
+        $selectedRelease = Get-Content -LiteralPath $ReleaseFile -Raw | ConvertFrom-Json -AsHashtable -NoEnumerate
         if ($selectedRelease -isnot [System.Collections.IDictionary] -or
             $selectedRelease.gpu -isnot [bool] -or $selectedRelease.tunnel -isnot [bool]) {
             throw 'Selected release must contain Boolean gpu and tunnel modes.'
@@ -383,7 +406,8 @@ try {
         $composeArgs += @('-f', (New-ImageOverride $selectedRelease.images $Tunnel))
     }
     # Quiet validation: rendered Compose output contains credentials.
-    Invoke-Compose @('config', '--quiet')
+    $null = Invoke-Docker ($composeArgs + @('config', '--quiet')) -CaptureOutput
+    if ($dockerExitCode -ne 0) { throw 'Cannot validate deployment configuration. Inspect production.env locally; raw Compose diagnostics are hidden.' }
     # Keep rendered secrets in memory only; do not print this configuration.
     $rendered = Invoke-Docker ($composeArgs + @('config', '--format', 'json')) -CaptureOutput
     if ($dockerExitCode -ne 0) { throw 'Cannot read Compose configuration.' }
@@ -414,7 +438,7 @@ try {
     $previous = $null
     if (Test-Path -LiteralPath $stateFile) {
         try {
-            $previous = $currentRecord | ConvertFrom-Json -AsHashtable
+            $previous = $currentRecord | ConvertFrom-Json -AsHashtable -NoEnumerate
             if ($previous -isnot [System.Collections.IDictionary] -or
                 $previous.backendTag -isnot [string] -or $previous.frontendTag -isnot [string] -or
                 $previous.backendTag -cnotmatch '^sha-[0-9a-f]{40}$' -or
@@ -469,11 +493,12 @@ try {
     $tempPrevious = if ($null -ne $previous) { New-MetadataStage $previousFile $currentRecord } else { $null }
     $previousPublished = $false
     try {
-        Invoke-Compose @('up', '-d', '--pull', 'never', '--wait', '--wait-timeout', '1200', '--remove-orphans')
+        Invoke-Compose (@('up', '-d', '--pull', 'never', '--wait', '--wait-timeout', '1200', '--remove-orphans') + @($images.Keys | Sort-Object))
         Stop-InactiveTunnel $Tunnel
-        $frontendAssets = @(Test-Origin)
+        $backendReleaseId = Get-BackendReleaseId $images
+        $frontendAssets = @(Test-Origin $backendReleaseId)
         Test-RunningImages $images
-        Test-PublicRoute $Tunnel $frontendAssets
+        Test-PublicRoute $Tunnel $frontendAssets $backendReleaseId
         $null = Get-OperationTimeout 1
         if ($null -ne $previous) {
             Publish-ReleaseMetadata $tempPrevious $previousFile
@@ -484,6 +509,7 @@ try {
         Publish-ReleaseMetadata $tempState $stateFile
     } catch {
         $failure = $_
+        if (-not $activationStarted) { throw $failure }
         $recovering = $true
         if ($null -ne $previous) {
             Write-Warning 'Deployment failed. Restoring previous image versions and deployment mode.' -WarningAction Continue
@@ -493,11 +519,12 @@ try {
                 $composeArgs = @(Get-ComposeArguments ([bool]$previous.gpu) ([bool]$previous.tunnel))
                 $composeArgs += @('-f', $previousOverride)
                 Ensure-ReleaseImages $previous.images
-                Invoke-Compose @('up', '-d', '--pull', 'never', '--wait', '--wait-timeout', '1200', '--remove-orphans')
+                Invoke-Compose (@('up', '-d', '--pull', 'never', '--wait', '--wait-timeout', '1200', '--remove-orphans') + @($previous.images.Keys | Sort-Object))
                 Stop-InactiveTunnel ([bool]$previous.tunnel)
-                $frontendAssets = @(Test-Origin)
+                $backendReleaseId = Get-BackendReleaseId $previous.images
+                $frontendAssets = @(Test-Origin $backendReleaseId)
                 Test-RunningImages $previous.images
-                Test-PublicRoute ([bool]$previous.tunnel) $frontendAssets
+                Test-PublicRoute ([bool]$previous.tunnel) $frontendAssets $backendReleaseId
             } catch {
                 $preserveOverrideFiles = $true
                 $failure.Exception.Data['RollbackFailure'] = $_.Exception.Message

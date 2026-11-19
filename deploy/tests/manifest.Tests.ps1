@@ -61,6 +61,12 @@ try {
     Write-TestRecord $gpuDirectory 'unexpected-service'
     Assert-Rejected 'unexpected component'
     Write-TestRecord $gpuDirectory 'edugraph-ai-core-gpu'
+    $recordFile = Join-Path $gpuDirectory 'image-release.json'
+    $recordText = Get-Content $recordFile -Raw
+    $recordObject = $recordText | ConvertFrom-Json -AsHashtable
+    ConvertTo-Json -InputObject @($recordObject) -Depth 6 | Set-Content $recordFile
+    Assert-Rejected 'array-wrapped image record'
+    Set-Content $recordFile $recordText -NoNewline
     foreach ($component in $components) {
         $directory = Join-Path $testRoot $component
         Write-TestRecord $directory $component.ToUpperInvariant()
