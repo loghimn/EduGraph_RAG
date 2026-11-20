@@ -27,24 +27,24 @@ def _overlaps(match, spans):
 
 def _whole_names(concepts, normalized):
     # Prefer whole names beyond the general linker's four-gram window.
-    spans, names = [], set()
+    spans, name_positions = [], {}
     candidates = {name for row in concepts for name in keys(row)}
     for name in sorted(candidates, key=lambda name: (-len(name), name)):
         for match in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', normalized):
             if _overlaps(match, spans):
                 continue
-            names.add(name)
+            name_positions[name] = min(name_positions.get(name, match.start()), match.start())
             spans.append(match.span())
-    return names
+    return name_positions
 
 
 def _matching_ids(concepts, lookup):
     normalized = normalize_text_unaccent(normalize_concept_key(lookup))
-    names = _whole_names(concepts, normalized)
-    if names:
-        return {row['id'] for row in concepts if keys(row) & names}
+    name_positions = _whole_names(concepts, normalized)
+    if name_positions:
+        return {row['id'] for row in concepts if keys(row) & name_positions.keys()}, name_positions
     linked = link_concepts_from_data(lookup, concepts)
-    return set(linked.get('concept_ids') or [row['id'] for row in linked.get('clarify') or []])
+    return set(linked.get('concept_ids') or [row['id'] for row in linked.get('clarify') or []]), name_positions
 
 
 def _merge_name_groups(concepts, ids):
@@ -62,16 +62,16 @@ def _merge_name_groups(concepts, ids):
     return groups
 
 
-def _group_position(group, normalized):
-    return min((normalized.find(name) for name in group if name in normalized), default=100000)
+def _group_position(group, name_positions):
+    return min((name_positions[name] for name in group if name in name_positions), default=100000)
 
 
 def _question_groups(concepts, query, target):
     lookup = query if _has_edge_words(query) else target or query
-    groups = _merge_name_groups(concepts, _matching_ids(concepts, lookup))
+    ids, name_positions = _matching_ids(concepts, lookup)
+    groups = _merge_name_groups(concepts, ids)
     if _has_arrow(query):
-        normalized = normalize_text_unaccent(normalize_concept_key(query))
-        groups.sort(key=lambda group: _group_position(group, normalized))
+        groups.sort(key=lambda group: _group_position(group, name_positions))
     return groups
 
 
@@ -135,10 +135,10 @@ def _course_suggestion(course, selected, metadata, query, edge_question):
 
 
 def select_courses(concepts, edges, groups, scope, public_courses, query, relationship=None):
-    if not groups:
-        return [], relationship is not None
-    edge_question = relationship is not None or len(groups) == 2 and _has_edge_words(query)
     directed = relationship is not None or _has_arrow(query)
+    if not groups:
+        return [], directed
+    edge_question = directed or len(groups) == 2 and _has_edge_words(query)
     if edge_question and len(groups) != 2:
         return [], True
     available = _available_courses(concepts, edges, groups, edge_question, directed)

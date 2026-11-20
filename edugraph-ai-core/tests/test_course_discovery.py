@@ -63,6 +63,31 @@ def test_typed_arrow_preserves_direction_and_a_matching_local_edge_prevents_swit
     assert select_courses(concepts, edge, groups, ['2'], catalog, 'Key -> Join') == ([], False)
 
 
+@pytest.mark.parametrize('arrow', ['->', '→'])
+@pytest.mark.parametrize('reverse_rows', [False, True])
+@pytest.mark.parametrize('reverse_direction', [False, True])
+@pytest.mark.parametrize('use_alias', [False, True])
+def test_arrow_endpoints_use_non_overlapping_name_matches(arrow, reverse_rows, reverse_direction, use_alias):
+    concepts = [concept('key', '2', 'Key'),
+                concept('value', '2', 'Map entry' if use_alias else 'Key value',
+                        aliases=['Key value'] if use_alias else [])]
+    if reverse_rows:
+        concepts.reverse()
+    left, right = ('Key', 'Key value') if reverse_direction else ('Key value', 'Key')
+    source_id, target_id = ('key', 'value') if reverse_direction else ('value', 'key')
+    query = f'{left} {arrow} {right}'
+    groups = matching_groups(concepts, query, scope=['1'])
+    assert left.lower() in groups[0]
+    assert right.lower() in groups[1]
+    catalog = {'2': PublicCourse(name='Data structures')}
+    edge = dict(source=source_id, target=target_id, course_id='2')
+    rows, missing = select_courses(concepts, [edge], groups, ['1'], catalog, query)
+    assert missing
+    assert rows[0]['graphRelationship'] == {'sourceId': source_id, 'targetId': target_id}
+    reversed_edge = dict(source=target_id, target=source_id, course_id='2')
+    assert select_courses(concepts, [reversed_edge], groups, ['1'], catalog, query) == ([], True)
+
+
 def test_unrelated_questions_and_courses_without_source_data_are_not_recommended():
     concepts = [concept('a', '2', evidence=False)]
     assert matching_groups(concepts, 'Tell me about networking', scope=['1']) == []
@@ -127,6 +152,31 @@ def test_incomplete_edge_endpoints_are_unavailable_without_indexing_missing_grou
     relation = GraphRelationship(source_id='missing', target_id='also-missing')
     assert select_courses([concept('a', '2', 'Key')], [], groups, ['1'],
                           {'2': PublicCourse(name='SQL')}, 'Key -> Key', relation) == ([], True)
+
+
+@pytest.mark.parametrize('arrow', ['->', '→'])
+@pytest.mark.parametrize('groups', [[], [{'key'}], [{'join'}], [{'key'}, {'join'}, {'table'}]])
+def test_explicit_arrow_never_recommends_concepts_when_endpoint_groups_are_incomplete(arrow, groups):
+    concepts = [concept('key', '2', 'Key'), concept('join', '2', 'Join')]
+    assert select_courses(concepts, [], groups, ['1'], {'2': PublicCourse(name='SQL')},
+                          f'Key {arrow} Join') == ([], True)
+
+
+@pytest.mark.parametrize('arrow', ['->', '→'])
+@pytest.mark.parametrize('matched_name', ['Key', 'Join'])
+def test_partial_arrow_match_does_not_fall_back_to_single_concept_suggestion(arrow, matched_name):
+    concepts = [concept('matched', '2', matched_name)]
+    catalog = {'2': PublicCourse(name='SQL')}
+    query = f'Key {arrow} Join'
+    groups = matching_groups(concepts, query, scope=['1'])
+    assert len(groups) == 1
+    assert select_courses(concepts, [], groups, ['1'], catalog, query) == ([], True)
+    ordinary_query = f'Explain {matched_name}'
+    groups = matching_groups(concepts, ordinary_query, scope=['1'])
+    rows, missing = select_courses(concepts, [], groups, ['1'], catalog, ordinary_query)
+    assert missing
+    assert rows[0]['conceptIds'] == ['matched']
+    assert rows[0]['graphRelationship'] is None
 
 
 def test_edge_evidence_must_belong_to_its_actual_endpoints_and_later_valid_edges_are_considered():

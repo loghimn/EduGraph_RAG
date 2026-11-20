@@ -123,6 +123,41 @@ async def test_name_resolution_without_access_does_not_query_the_graph():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('public', [False, True])
+@pytest.mark.parametrize('resolution', ['ambiguous', 'partial', 'unmatched'])
+async def test_no_chunks_preserves_relationship_name_clarification_before_fallback(public, resolution):
+    names = RelationshipIntent(source='Linear algebra', target='Gradient descent')
+    classification = ChatIntent(intent='explain', query='Explain the relationship', confidence=.99, relationship=names)
+    concepts = []
+    if resolution != 'unmatched':
+        concepts.append(dict(id='a', course_id='1', name=names.source, aliases=[]))
+    if resolution == 'ambiguous':
+        concepts.extend(dict(id=cid, course_id='1', name=names.target, aliases=[]) for cid in ['b', 'c'])
+    with patch('app.services.chat.classify_chat_intent', AsyncMock(return_value=classification)), \
+         patch('app.retrieval.named_relationship.get_course_concepts_for_linking', AsyncMock(return_value=concepts)), \
+         patch('app.services.chat.retrieve_chunks', AsyncMock(return_value=[])), \
+         patch('app.services.chat.retrieve_relationship', AsyncMock()) as edge, \
+         patch('app.services.chat.discover_courses', AsyncMock()) as discover, \
+         patch('app.services.chat.llm_client.generate_stream') as llm:
+        frames = [frame async for frame in chat_explain_stream_generator('1', classification.query,
+            authorized_course_ids=['1'], public_courses={'2': PublicCourse(name='Other')} if public else {})]
+    result = events(frames)
+    answer = result['answer']['content']
+    assert names.source in answer and names.target in answer
+    assert 'tên cụ thể hơn hoặc mã khái niệm' in answer
+    assert ('nhiều cặp' in answer) is (resolution == 'ambiguous')
+    assert ('Chưa xác định' in answer) is (resolution != 'ambiguous')
+    assert ''.join(json.loads(frame.splitlines()[1][6:])['token']
+                   for frame in frames if frame.startswith('event: token')) == answer
+    assert result['sources'] == []
+    assert set(result) == {'token', 'answer', 'sources', 'done'}
+    assert frames[-1].startswith('event: done')
+    edge.assert_not_awaited()
+    discover.assert_not_awaited()
+    llm.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_exact_edge_evidence_prevents_public_fallback_even_without_ordinary_search_results():
     relationship = GraphRelationship(source_id='a', target_id='b')
     async def generate(*args, **kwargs):

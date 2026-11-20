@@ -216,6 +216,15 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
         chunks = _prefer_relationship_evidence(chunks, evidence)
     if not chunks:
         logger.info("Chat retrieval stopped: no chunks linked_concepts=%d", len(linked_ids or []))
+        if relationship_context and relationship_context.get("resolution") in {"ambiguous", "unresolved"}:
+            reason = ("Tên các khái niệm khớp với nhiều cặp trong khóa học."
+                      if relationship_context["resolution"] == "ambiguous"
+                      else "Chưa xác định được đầy đủ hai khái niệm trong cùng khóa học.")
+            answer = (f"{reason} Bạn hãy cung cấp tên cụ thể hơn hoặc mã khái niệm cho hai đầu quan hệ "
+                      f'"{relationship_context["source"]}" → "{relationship_context["target"]}" nhé.')
+            async for event in _path_events({"answer": answer, "chunks": []}):
+                yield event
+            return
         for event in await _fallback_events(course_id, query, concept_ids, authorized_course_ids, conversation):
             yield event
         return
