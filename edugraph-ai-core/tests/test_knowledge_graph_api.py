@@ -17,6 +17,7 @@ def test_knowledge_graph_returns_concepts_and_prerequisite_edges(monkeypatch):
         aliases=["A"],
         language="en",
         order=1,
+        difficulty=2,
     )
     graph.add_node("concept-b", name="Concept B", order=2)
     graph.add_edge("concept-a", "concept-b", status="CONFIRMED", score=0.9)
@@ -44,6 +45,7 @@ def test_knowledge_graph_returns_concepts_and_prerequisite_edges(monkeypatch):
                 "aliases": ["A"],
                 "language": "en",
                 "order": 1,
+                "difficulty": 2,
             },
             {
                 "id": "concept-b",
@@ -52,6 +54,7 @@ def test_knowledge_graph_returns_concepts_and_prerequisite_edges(monkeypatch):
                 "aliases": [],
                 "language": "mixed",
                 "order": 2,
+                "difficulty": None,
             },
         ],
         "edges": [

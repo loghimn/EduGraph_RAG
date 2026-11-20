@@ -42,6 +42,31 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     private final ActivityAlertService alerts;
 
     @Override
+    @Transactional(readOnly = true)
+    public Map<String, fu.coreservice.dto.ai.PublicChatCourse> getPublicChatCatalog() {
+        User learner = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        var joined = new java.util.HashSet<>(courseEnrollmentRepository.findCourseIdsByUser(learner));
+        return courseRepository.findPublicChatCatalog().stream().collect(Collectors.toMap(
+                row -> row.getCourseId().toString(), row -> new fu.coreservice.dto.ai.PublicChatCourse(
+                        row.getCourseName(), joined.contains(row.getCourseId()) || row.getOwnerId().equals(learner.getUserId()))));
+    }
+
+    @Override
+    @Transactional
+    public void finishSuggestedTurn(ChatTurn turn, String content, int latencyMs, List<CourseSuggestion> suggestions) {
+        ChatMessage answer = chatMessageRepository.findById(turn.assistantMessageId())
+                .filter(row -> row.getSession().getSessionId().equals(turn.sessionId())
+                        && row.getSession().getLearner().getUserId().equals(turn.userId()))
+                .orElseThrow(() -> new AppException(ErrorCode.CHAT_MESSAGE_NOT_FOUND));
+        if (answer.getStatus() != ChatMessageStatus.STREAMING) return;
+        var visible = fu.coreservice.utils.CourseSuggestionCodec.visible(
+                fu.coreservice.utils.CourseSuggestionCodec.encode(suggestions), courseRepository, courseEnrollmentRepository, answer.getSession().getLearner());
+        answer.setCourseSuggestions(fu.coreservice.utils.CourseSuggestionCodec.encode(visible));
+        finishTurn(turn, content, ChatMessageStatus.COMPLETED, null, latencyMs, List.of(), false);
+    }
+
+    @Override
     @Transactional
     public ChatTurn beginTurn(Long courseId, Long sessionId, ChatRequest request) {
         CourseAccess access = requireCourseAccess(courseId);
@@ -168,6 +193,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .createdAt(message.getCreatedAt())
                 .clarificationCandidates(fu.coreservice.utils.ClarificationCodec.decode(message.getClarificationOptions()))
+                .courseSuggestions(fu.coreservice.utils.CourseSuggestionCodec.visible(message.getCourseSuggestions(), courseRepository, courseEnrollmentRepository, session.getLearner()))
                 .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
     }
 
@@ -266,6 +292,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .createdAt(message.getCreatedAt())
                 .clarificationCandidates(fu.coreservice.utils.ClarificationCodec.decode(message.getClarificationOptions()))
+                .courseSuggestions(fu.coreservice.utils.CourseSuggestionCodec.visible(message.getCourseSuggestions(), courseRepository, courseEnrollmentRepository, session.getLearner()))
                 .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
     }
 

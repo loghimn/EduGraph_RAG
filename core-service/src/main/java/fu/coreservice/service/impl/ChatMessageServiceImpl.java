@@ -53,6 +53,8 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     private final ActivityAlertService alerts;
     private final LearnerMasteryService masteryService;
+    private final fu.coreservice.service.CourseAiSettingsService courseSettings;
+    private final fu.coreservice.service.CourseLearningAnalyticsService learningAnalytics;
 
     @Override
     @Transactional
@@ -65,18 +67,22 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         }
         List<String> authorizedCourseIds = courseId == null
                 ? chatSessionService.getGlobalChatCourseIds() : List.of(courseId.toString());
+        var publicCatalog = courseId == null ? Map.<String, fu.coreservice.dto.ai.PublicChatCourse>of()
+                : chatSessionService.getPublicChatCatalog();
         AiChatRequest aiRequest = AiChatRequest.builder()
                 .courseId(courseId == null ? null : courseId.toString())
                 .authorizedCourseIds(authorizedCourseIds)
+                .publicCourses(publicCatalog)
                 .courseNames(chatSessionService.getChatCourseNames(authorizedCourseIds))
-                .knownConceptsByCourse(courseId == null ? Map.of() : Map.of(courseId.toString(), masteryService.knownConcepts(courseId)))
+                .courseSettingsByCourse(courseSettings.forChat(authorizedCourseIds))
+                .knownConceptsByCourse(courseId == null ? masteryService.knownForChat(authorizedCourseIds) : Map.of(courseId.toString(), masteryService.knownConcepts(courseId)))
                 .userId(turn.userId().toString()).message(request.getMessage())
                 .history(turn.history())
                 .replyContext(turn.replyContext())
                 .graphRelationship(request.getGraphRelationship() == null ? null : Map.of(
                         "source_id", request.getGraphRelationship().sourceId(), "target_id", request.getGraphRelationship().targetId()))
                 .conceptIds(request.getConceptIds() == null ? null : new ArrayList<>(request.getConceptIds())).build();
-        StreamExecution execution = new StreamExecution(turn);
+        StreamExecution execution = new StreamExecution(turn, authorizedCourseIds, publicCatalog);
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             execution.mvcManaged = true;
             WebAsyncUtils.getAsyncManager(attributes.getRequest())
@@ -116,7 +122,12 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                             return;
                         }
                         if (!execution.accept(event, payload)) return;
-                        writeEvent(output, event, "error".equals(event) ? CLIENT_ERROR_PAYLOAD : payload);
+                        String clientPayload = switch (event) {
+                            case "error" -> CLIENT_ERROR_PAYLOAD;
+                            case "course_suggestions" -> objectMapper.writeValueAsString(execution.state.suggestions);
+                            default -> payload;
+                        };
+                        writeEvent(output, event, clientPayload);
                         event = "message";
                         data.setLength(0);
                     } else if (line.startsWith("event:")) {
@@ -161,8 +172,14 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         private boolean finalized;
         private boolean mvcManaged;
         private boolean awaitingContainer;
+        private final List<String> authorizedCourses;
 
-        StreamExecution(ChatTurn turn) { this.turn = turn; }
+        StreamExecution(ChatTurn turn, List<String> authorizedCourses, Map<String, fu.coreservice.dto.ai.PublicChatCourse> publicCourses) {
+            this.turn = turn;
+            this.authorizedCourses = List.copyOf(authorizedCourses);
+            state.currentCourses = this.authorizedCourses;
+            state.publicCourses = Map.copyOf(publicCourses);
+        }
 
         synchronized boolean start() {
             if (stopped || finalized) return false;
@@ -251,9 +268,16 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         private void persist() {
             int latency = (int) Math.min(Integer.MAX_VALUE, (System.nanoTime() - started) / 1_000_000);
             if (state.clarification) chatSessionService.finishClarification(turn, state.candidates, latency);
+            else if (state.status == ChatMessageStatus.COMPLETED && !state.suggestions.isEmpty())
+                chatSessionService.finishSuggestedTurn(turn, state.content.toString(), latency, state.suggestions);
             else chatSessionService.finishTurn(turn, state.content.toString(), state.status, truncateError(state.error),
                     latency, List.copyOf(state.sources), false);
             finalized = true; // Set only after the transactional call has committed.
+            if (!state.clarification && state.status == ChatMessageStatus.COMPLETED && !state.targets.isEmpty()) {
+                try { learningAnalytics.record(turn, state.targets, authorizedCourses); }
+                catch (RuntimeException error) { log.warn("Could not record concept analytics. messageId={}, errorType={}",
+                        turn.assistantMessageId(), error.getClass().getSimpleName()); }
+            }
             if (state.status == ChatMessageStatus.FAILED) {
                 alerts.repeatedSystemFailure("CHAT_GENERATE", "CHAT_MESSAGE");
             }
@@ -283,6 +307,62 @@ public class ChatMessageServiceImpl implements ChatMessageService {
             throw new IOException("Empty AI event");
         }
         switch (event) {
+            case "course_suggestions" -> {
+                if (state.failed || state.clarification || state.finalAnswer || state.sourcesReceived || !state.content.isEmpty()
+                        || !state.suggestions.isEmpty() || !json.isArray() || json.isEmpty() || json.size() > 5) {
+                    throw new IOException("Invalid course suggestions");
+                }
+                List<fu.coreservice.dto.chat.CourseSuggestion> suggestions = new ArrayList<>();
+                Set<Long> seen = new HashSet<>();
+                for (JsonNode row : json) {
+                    Long id;
+                    try { id = Long.valueOf(row.path("courseId").asText()); }
+                    catch (NumberFormatException error) { throw new IOException("Invalid suggested course ID", error); }
+                    var course = state.publicCourses.get(id.toString());
+                    String subject = row.path("subject").asText("");
+                    String question = row.path("question").asText("");
+                    if (course == null || state.currentCourses.contains(id.toString()) || !seen.add(id) || subject.isBlank() || subject.length() > 500
+                            || question.isBlank() || question.length() > 4000 || !row.path("conceptIds").isArray()
+                            || row.path("conceptIds").isEmpty() || row.path("conceptIds").size() > 20) {
+                        throw new IOException("Invalid course suggestions");
+                    }
+                    List<String> concepts = new ArrayList<>();
+                    for (JsonNode concept : row.path("conceptIds")) {
+                        if (!concept.isTextual() || concept.asText().isBlank() || concept.asText().length() > 200)
+                            throw new IOException("Invalid suggested concept");
+                        concepts.add(concept.asText());
+                    }
+                    fu.coreservice.dto.chat.ChatGraphRelationship relationship = null;
+                    JsonNode edge = row.path("graphRelationship");
+                    if (!edge.isMissingNode() && !edge.isNull()) {
+                        String source = edge.path("sourceId").asText("");
+                        String target = edge.path("targetId").asText("");
+                        if (!concepts.contains(source) || !concepts.contains(target) || source.equals(target))
+                            throw new IOException("Invalid suggested relationship");
+                        relationship = new fu.coreservice.dto.chat.ChatGraphRelationship(source, target);
+                    }
+                    suggestions.add(new fu.coreservice.dto.chat.CourseSuggestion(id, course.name(), course.enrolled(),
+                            subject, List.copyOf(concepts), relationship, question));
+                }
+                state.suggestions = List.copyOf(suggestions);
+            }
+            case "concepts" -> {
+                if (state.failed || state.clarification || state.sourcesReceived || state.conceptsReceived || !json.isArray() || json.size() > 20) {
+                    throw new IOException("Invalid concept metadata");
+                }
+                List<fu.coreservice.service.CourseLearningAnalyticsService.Target> targets = new ArrayList<>();
+                for (JsonNode concept : json) {
+                    String id = concept.path("id").asText("");
+                    String name = concept.path("name").asText("");
+                    String course = concept.path("course_id").asText("");
+                    if (id.isBlank() || id.length() > 200 || name.isBlank() || name.length() > 255 || !course.matches("[1-9][0-9]{0,18}")) {
+                        throw new IOException("Invalid concept metadata");
+                    }
+                    targets.add(new fu.coreservice.service.CourseLearningAnalyticsService.Target(id, name, course));
+                }
+                state.targets = List.copyOf(targets);
+                state.conceptsReceived = true;
+            }
             case "token" -> {
                 if (state.failed || state.clarification || state.finalAnswer || !json.path("token").isTextual()) {
                     throw new IOException("Invalid token event");
@@ -403,5 +483,10 @@ public class ChatMessageServiceImpl implements ChatMessageService {
         boolean sourcesReceived;
         boolean finalAnswer;
         List<ClarificationCandidate> candidates = List.of();
+        boolean conceptsReceived;
+        List<fu.coreservice.service.CourseLearningAnalyticsService.Target> targets = List.of();
+        Map<String, fu.coreservice.dto.ai.PublicChatCourse> publicCourses = Map.of();
+        List<String> currentCourses = List.of();
+        List<fu.coreservice.dto.chat.CourseSuggestion> suggestions = List.of();
     }
 }

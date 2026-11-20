@@ -36,7 +36,7 @@ async def compute_draft(course_id: str, req: DraftRequest, x_actor_id: str=...):
     draft_id = str(uuid4())
     async with graph_repository.session() as session:
         await graph_repository.run(session, queries.COMPUTE_DRAFT_QUERY_2, id=draft_id, course_id=course_id, actor=x_actor_id, name=req.name,
-            aliases=req.aliases, language=req.language, key=keys[0], embedding=vectors[0])
+            aliases=req.aliases, language=req.language, difficulty=req.difficulty, key=keys[0], embedding=vectors[0])
     return {"draft_id": draft_id, **req.model_dump(), "embedding_ready": True,
             "embedding_model": "BAAI/bge-m3", "embedding_dimensions": 1024, "expires_in_seconds": 86400}
 
@@ -59,7 +59,7 @@ async def publish_draft(course_id: str, draft_id: str, x_actor_id: str=...):
         await check_duplicate(tx, course_id, [normalize_concept_key(v) for v in [draft["name"], *draft["aliases"]]])
         concept_id = str(uuid4())
         result = await graph_repository.run(tx, queries.PUBLISH_DRAFT_QUERY_4, **{k: draft[k] for k in ["key", "name", "aliases", "language", "embedding", "embedding_model"]},
-            id=concept_id, course_id=course_id, course_key=f"{course_id}|{draft['key']}", actor=x_actor_id, draft_id=draft_id)
+            id=concept_id, difficulty=draft.get("difficulty"), course_id=course_id, course_key=f"{course_id}|{draft['key']}", actor=x_actor_id, draft_id=draft_id)
         return (await result.single()).data()
 
     async with graph_repository.session() as session:

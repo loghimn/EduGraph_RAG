@@ -77,7 +77,7 @@ class AiCoreClientTest {
     void graphReviewRoundTripsThePythonContractIncludingEvidenceAndReviewMetadata() throws Exception {
         String payload = """
                 {"graph_version":8,"nodes":[{"id":"a","name":"Class","aliases":["Lop"],
-                 "language":"vi","review_status":"CONFIRMED","origin":"MANUAL"}],
+                 "language":"vi","review_status":"CONFIRMED","origin":"MANUAL","difficulty":2}],
                  "edges":[{"source":"a","target":"b","status":"CONFIRMED","score":0.75,
                  "evidence":"Foundation","evidence_chunk_id":null,"note":"Reviewed",
                  "reviewed_by":"15","reviewed_at":1730000000000}]}

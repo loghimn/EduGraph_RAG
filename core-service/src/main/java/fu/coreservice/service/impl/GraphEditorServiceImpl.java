@@ -35,7 +35,7 @@ public class GraphEditorServiceImpl implements GraphEditorService {
     @Override
     public GraphMutationResponse updateConcept(Long courseId, String conceptId, Long version, ConceptDraftRequest request) {
         return execute(courseId, GraphEditorAction.CONCEPT_UPDATE, conceptId, null, version,
-                Map.of("name", request.getName(), "aliases", request.getAliases(), "language", request.getLanguage()));
+                request.toAiBody());
     }
 
     @Override

@@ -47,7 +47,9 @@ class ChatMessageServiceTest {
     private final ChatRequest request = ChatRequest.builder().message("Kế thừa?")
             .conceptIds(List.of("concept1")).build();
     private final LearnerMasteryService mastery = mock(LearnerMasteryService.class);
-    private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper(), org.mockito.Mockito.mock(ActivityAlertService.class), mastery);
+    private final CourseAiSettingsService settings = mock(CourseAiSettingsService.class);
+    private final CourseLearningAnalyticsService analytics = mock(CourseLearningAnalyticsService.class);
+    private final ChatMessageService service = new ChatMessageServiceImpl(storage, client, new ObjectMapper(), mock(ActivityAlertService.class), mastery, settings, analytics);
 
     @BeforeEach
     void setup() {
@@ -419,5 +421,60 @@ class ChatMessageServiceTest {
         when(storage.beginTurn(7L, 10L, request)).thenThrow(new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         assertThrows(AppException.class, () -> service.sendMessage(7L, 10L, request));
         verifyNoInteractions(client);
+    }
+
+    @Test
+    void completedStreamRecordsResolvedConceptsAndPassesCourseSettings() throws Exception {
+        var preferences = new fu.coreservice.dto.ai.CourseAiSettings(.8, 2, "Use worked examples");
+        when(settings.forChat(List.of("7"))).thenReturn(Map.of("7", preferences));
+        run("event: concepts\ndata: [{\"id\":\"c1\",\"name\":\"HTTP\",\"course_id\":\"7\"}]\n\n"
+                + "event: token\ndata: {\"token\":\"Answer\"}\n\n"
+                + "event: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        verify(analytics).record(turn, List.of(new CourseLearningAnalyticsService.Target("c1", "HTTP", "7")), List.of("7"));
+        var payload = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(payload.capture());
+        assertEquals(preferences, payload.getValue().getCourseSettingsByCourse().get("7"));
+        var json = new ObjectMapper().valueToTree(payload.getValue());
+        assertEquals(2, json.path("course_settings_by_course").path("7").path("traversalDepth").asInt());
+    }
+
+    @Test
+    void interruptedOrFailedStreamDoesNotRecordSuccessfulConceptQueries() throws Exception {
+        run("event: concepts\ndata: [{\"id\":\"c1\",\"name\":\"HTTP\",\"course_id\":\"7\"}]\n\n"
+                + "event: error\ndata: {\"error\":\"Provider unavailable\"}\n\nevent: done\ndata: {}\n\n");
+        verifyNoInteractions(analytics);
+    }
+
+    @Test
+    void suggestionsUseTheServerPublicCatalogAndArePersistedWithTheAnswer() throws Exception {
+        when(storage.getPublicChatCatalog()).thenReturn(Map.of("8", new fu.coreservice.dto.ai.PublicChatCourse("SQL", true)));
+        var output = run("event: course_suggestions\ndata: [{\"courseId\":\"8\",\"courseName\":\"Forged name\",\"enrolled\":false,\"subject\":\"Key → Join\",\"conceptIds\":[\"key8\",\"join8\"],\"graphRelationship\":{\"sourceId\":\"key8\",\"targetId\":\"join8\"},\"question\":\"Explain Key -> Join\"}]\n\n"
+                + "event: answer\ndata: {\"content\":\"Would you like to switch?\", \"extra\":\"preserve\"}\n\nevent: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        var captured = ArgumentCaptor.forClass(java.util.List.class);
+        verify(storage).finishSuggestedTurn(eq(turn), eq("Would you like to switch?"), anyInt(), captured.capture());
+        var row = (fu.coreservice.dto.chat.CourseSuggestion) captured.getValue().getFirst();
+        assertEquals("SQL", row.courseName()); assertTrue(row.enrolled());
+        assertEquals("key8", row.graphRelationship().sourceId());
+        String wire = output.toString(StandardCharsets.UTF_8);
+        String suggestionsJson = wire.lines().filter(line -> line.startsWith("data: ") && line.contains("courseName"))
+                .findFirst().orElseThrow().substring(6);
+        var forwarded = new ObjectMapper().readTree(suggestionsJson).get(0);
+        assertEquals("SQL", forwarded.path("courseName").asText());
+        assertTrue(forwarded.path("enrolled").asBoolean());
+        assertEquals(row.courseId().longValue(), forwarded.path("courseId").asLong());
+        assertFalse(wire.contains("Forged name"));
+        assertTrue(wire.contains("data: {\"content\":\"Would you like to switch?\", \"extra\":\"preserve\"}"));
+        var request = ArgumentCaptor.forClass(AiChatRequest.class);
+        verify(client).openChatStream(request.capture());
+        assertEquals(List.of("7"), request.getValue().getAuthorizedCourseIds());
+        assertEquals("SQL", request.getValue().getPublicCourses().get("8").name());
+        verifyNoInteractions(analytics);
+    }
+
+    @Test
+    void courseNotInThePublicCatalogCannotBeRecommended() throws Exception {
+        run("event: course_suggestions\ndata: [{\"courseId\":\"99\",\"subject\":\"Secret\",\"conceptIds\":[\"c\"],\"question\":\"Secret?\"}]\n\n");
+        verify(storage).finishTurn(eq(turn), anyString(), eq(ChatMessageStatus.FAILED), anyString(), anyInt(), anyList(), eq(false));
+        verify(storage, never()).finishSuggestedTurn(any(), anyString(), anyInt(), anyList());
     }
 }

@@ -20,4 +20,5 @@ public class ChatMessageResponse {
     private LocalDateTime createdAt;
     private List<ChatCitationResponse> citations;
     private List<ClarificationCandidate> clarificationCandidates;
+    private List<CourseSuggestion> courseSuggestions;
 }

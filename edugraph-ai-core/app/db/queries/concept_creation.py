@@ -10,7 +10,7 @@ COMPUTE_DRAFT_QUERY_1 = """MATCH (d:ConceptDraft)
 
 COMPUTE_DRAFT_QUERY_2 = """
             CREATE (d:ConceptDraft {id: $id, course_id: $course_id, created_by: $actor,
-                name: $name, aliases: $aliases, language: $language, key: $key,
+                name: $name, aliases: $aliases, language: $language, difficulty: $difficulty, key: $key,
                 embedding: $embedding, embedding_model: 'BAAI/bge-m3', created_at: timestamp(),
                 expires_at: timestamp() + 86400000})
         """
@@ -29,7 +29,7 @@ PUBLISH_DRAFT_QUERY_4 = """
             OPTIONAL MATCH (existing:Concept {course_id: $course_id})
             WITH course, coalesce(max(existing.order), 0) + 1 AS next_order
             CREATE (n:Concept {id: $id, course_id: $course_id, course_key: $course_key,
-                key: $key, name: $name, aliases: $aliases, language: $language,
+                key: $key, name: $name, aliases: $aliases, language: $language, difficulty: $difficulty,
                 embedding: $embedding, embedding_model: $embedding_model, order: next_order,
                 origin: 'MANUAL', status: 'ACTIVE', curated: true, review_status: 'CONFIRMED', created_by: $actor, created_at: timestamp()})
             SET course.version = coalesce(course.version, 0) + 1

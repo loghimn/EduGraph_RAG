@@ -253,3 +253,50 @@ async def test_graph_evidence_rejects_chunks_outside_authorized_courses(
     assert "SECRET" not in build_explain_prompt("Stack?", chunks)
     sources = build_sources_payload(list(range(1, len(chunks) + 1)), chunks)
     assert [source["chunk_id"] for source in sources] == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_course_thresholds_are_applied_independently_in_global_chat(monkeypatch):
+    from app.schemas.chat import CourseAiSettings
+    class Session(_FakeSession):
+        async def run(self, query, **params):
+            if 'vector' in params:
+                return _FakeResult([
+                    {'id': 'strict', 'text': 'Servlet strict', 'course_id': 'c1', 'score': .6},
+                    {'id': 'lenient', 'text': 'Servlet lenient', 'course_id': 'c2', 'score': .2},
+                ])
+            return _FakeResult([])
+    monkeypatch.setattr(chunk_retriever.neo4j_client, 'driver', _FakeDriver(Session()))
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(chunk_retriever.embed_model, 'embed_batch', AsyncMock(return_value=[[0.] * 8]))
+    chunks = await chunk_retriever.retrieve_chunks(None, 'Servlet', authorized_course_ids=['c1', 'c2'],
+        course_settings={'c1': CourseAiSettings(similarityThreshold=.8), 'c2': CourseAiSettings(similarityThreshold=.1)})
+    assert [row['id'] for row in chunks] == ['lenient']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('find_later', [True, False])
+async def test_overfetch_retries_after_all_rows_fail_their_course_threshold(monkeypatch, find_later):
+    from app.schemas.chat import CourseAiSettings
+    from unittest.mock import AsyncMock
+    class ThresholdSession(_FakeSession):
+        async def run(self, query, **params):
+            self.calls.append(dict(params))
+            if 'vector' not in params:
+                return _FakeResult([])
+            rows = [{'id': 'strict', 'text': 'Servlet strict', 'course_id': 'c1', 'score': .6}]
+            if find_later and params['k'] >= 200:
+                rows.append({'id': 'later', 'text': 'Servlet source', 'course_id': 'c2', 'score': .2})
+            return _FakeResult(rows)
+    session = ThresholdSession()
+    monkeypatch.setattr(chunk_retriever.neo4j_client, 'driver', _FakeDriver(session))
+    monkeypatch.setattr(chunk_retriever.embed_model, 'embed_batch', AsyncMock(return_value=[[0.] * 8]))
+    available = AsyncMock(return_value=True)
+    monkeypatch.setattr(chunk_retriever, '_authorized_courses_have_chunks', available)
+    monkeypatch.setattr(chunk_retriever.settings, 'VECTOR_OVERFETCH_MAX', 2000)
+    monkeypatch.setattr(chunk_retriever.settings, 'VECTOR_OVERFETCH_STEP', 4)
+    chunks = await chunk_retriever.retrieve_chunks(None, 'Servlet', authorized_course_ids=['c1', 'c2'], overfetch_k=50,
+        course_settings={'c1': CourseAiSettings(similarityThreshold=.8), 'c2': CourseAiSettings(similarityThreshold=.1)})
+    assert [call['k'] for call in session.calls if 'vector' in call] == ([50, 200] if find_later else [50, 200, 800, 2000])
+    assert [row['id'] for row in chunks] == (['later'] if find_later else [])
+    assert all(call.args == (['c1', 'c2'],) for call in available.await_args_list)

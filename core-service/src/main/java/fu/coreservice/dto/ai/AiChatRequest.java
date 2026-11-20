@@ -34,6 +34,12 @@ public class AiChatRequest {
     @JsonProperty("known_concepts_by_course")
     private Map<String, List<String>> knownConceptsByCourse;
 
+    @JsonProperty("course_settings_by_course")
+    private Map<String, CourseAiSettings> courseSettingsByCourse;
+
+    @JsonProperty("public_courses")
+    private Map<String, PublicChatCourse> publicCourses;
+
     @JsonProperty("user_id")
     private String userId;
 

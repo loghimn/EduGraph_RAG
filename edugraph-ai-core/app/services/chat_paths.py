@@ -70,4 +70,5 @@ async def build_chat_path(intent, courses, concept_ids=None, course_names=None, 
     answer = render_path_answer(target, name, graph, result, known, chunks, version)
     if len(chunk_ids) >= MAX_PATH_SOURCES:
         answer += f"\n\nHiển thị tối đa {MAX_PATH_SOURCES} đoạn trích trong lượt này."
-    return {"answer": answer, "chunks": chunks}
+    return {"answer": answer, "chunks": chunks,
+            "targets": [{"id": goal_id, "name": target["name"], "course_id": course_id}]}

@@ -22,6 +22,18 @@ public class LearnerMasteryServiceImpl implements LearnerMasteryService {
 
     @Override
     @Transactional(readOnly = true)
+    public Map<String, List<String>> knownForChat(List<String> authorizedCourseIds) {
+        if (authorizedCourseIds.isEmpty()) return Map.of();
+        User user = currentUser(false);
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        masteries.findByLearnerAndCourse_CourseIdIn(user, authorizedCourseIds.stream().map(Long::valueOf).toList())
+                .stream().filter(m -> m.getMasteryStatus() == MasteryStatus.MASTERED)
+                .forEach(m -> result.computeIfAbsent(m.getCourse().getCourseId().toString(), key -> new ArrayList<>()).add(m.getNeo4jConceptId()));
+        return result;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<MasteryView> list(Long courseId) {
         User user = currentUser(false);
         Course course = access(courseId, user);

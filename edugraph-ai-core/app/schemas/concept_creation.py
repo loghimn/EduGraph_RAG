@@ -10,6 +10,7 @@ class DraftRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     aliases: list[str] = Field(default_factory=list, max_length=50)
     language: Literal["vi", "en", "mixed"] = "mixed"
+    difficulty: int | None = Field(default=None, ge=1, le=5)
 
     @field_validator("name")
     @classmethod

@@ -37,7 +37,7 @@ public class SystemSettings {
 
     @Column(name = "similarity_threshold", nullable = false)
     @Builder.Default
-    private Double similarityThreshold = 0.75;
+    private Double similarityThreshold = 0.35;
 
     @Column(name = "traversal_depth", nullable = false)
     @Builder.Default

@@ -331,7 +331,7 @@ def test_cytoscape_data_no_embedding_and_format():
     # Kiểm tra các trường dữ liệu bắt buộc của node
     for node_item in res["graph"]["elements"]["nodes"]:
         data = node_item["data"]
-        assert set(data.keys()) == {"id", "name", "order", "role", "outside_document"}
+        assert set(data.keys()) == {"id", "name", "order", "role", "outside_document", "difficulty"}
 
 # 13. Test Cache Invalidation khi Course.version thay đổi
 @pytest.mark.asyncio

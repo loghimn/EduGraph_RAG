@@ -14,6 +14,11 @@ import java.util.List;
 
 @Repository
 public interface CourseRepository extends JpaRepository<Course, Long> {
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select c from Course c where c.courseId = :id")
+    Optional<Course> findLockedSettingsCourse(@org.springframework.data.repository.query.Param("id") Long id);
+    @Query("select c from Course c where c.notebook = false and (:admin = true or c.user.userId = :owner)")
+    Page<Course> findTeachingCourses(@Param("owner") Long owner, @Param("admin") boolean admin, Pageable pageable);
     long countByNotebook(boolean notebook);
 
     @Query("""
@@ -22,6 +27,21 @@ public interface CourseRepository extends JpaRepository<Course, Long> {
         ORDER BY c.courseId
         """)
     List<Long> findGlobalChatCourseIds();
+
+    interface PublicChatCourseRow { Long getCourseId(); String getCourseName(); Long getOwnerId(); }
+    @Query("""
+        select c.courseId as courseId, c.courseName as courseName,
+               c.user.userId as ownerId
+        from Course c where c.isPublic = true and c.notebook = false order by c.courseId
+        """)
+    List<PublicChatCourseRow> findPublicChatCatalog();
+
+    @Query("""
+        select c.courseId as courseId, c.courseName as courseName,
+               c.user.userId as ownerId
+        from Course c where c.isPublic = true and c.notebook = false and c.courseId in :ids order by c.courseId
+        """)
+    List<PublicChatCourseRow> findPublicChatCatalogByIds(@Param("ids") List<Long> ids);
 
     Page<Course> findByUserAndNotebookTrue(User user, Pageable pageable);
 

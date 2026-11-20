@@ -10,6 +10,6 @@ router = APIRouter()
 
 
 @router.post('/chat')
-async def chat_endpoint(req: ChatRequest, x_internal_key: Annotated[str, Header()]):
+def chat_endpoint(req: ChatRequest, x_internal_key: Annotated[str, Header()]):
     verify_internal_key(x_internal_key)
-    return await service.chat_endpoint(req=req)
+    return service.chat_endpoint(req=req)

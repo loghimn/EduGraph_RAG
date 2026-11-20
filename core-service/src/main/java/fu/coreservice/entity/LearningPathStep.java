@@ -49,6 +49,12 @@ public class LearningPathStep {
     @Column(name = "stage_level")
     private Integer stageLevel;
 
+    @Column(name = "difficulty")
+    private Integer difficulty;
+
+    @Column(name = "difficulty_rated")
+    private Boolean difficultyRated;
+
     // Null in GOAL mode, true/false in DOCUMENT and COURSE modes.
     @Column(name = "outside_document")
     private Boolean outsideDocument;

@@ -37,7 +37,7 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
     RETURN c.id AS id, c.key AS key, c.name AS name,
            coalesce(c.aliases, []) AS aliases,
            coalesce(c.language, 'mixed') AS language,
-           coalesce(c.order, 0) AS order
+           coalesce(c.order, 0) AS order, c.difficulty AS difficulty
     """
     # 2. Lấy cạnh PREREQUISITE_OF không phải REJECTED
     q_edges = """
@@ -77,6 +77,7 @@ async def load_graph_from_neo4j(course_id: str) -> Tuple[nx.DiGraph, Dict[str, A
             aliases=n.get("aliases", []),
             language=n.get("language", "mixed"),
             order=n["order"],
+            difficulty=n.get("difficulty"),
         )
 
     for e in edges_data:

@@ -71,7 +71,8 @@ async def retrieve_chunks(
     concept_ids: Optional[List[str]] = None,
     authorized_course_ids: Optional[List[str]] = None,
     max_chunks: int = 6,
-    overfetch_k: Optional[int] = None
+    overfetch_k: Optional[int] = None,
+    course_settings=None,
 ) -> List[Dict[str, Any]]:
     """
     Truy xuất chunks cho câu hỏi giải thích (explain):
@@ -98,7 +99,7 @@ async def retrieve_chunks(
           AND c.id IN $concept_ids
           AND c.course_id IN $authorized_course_ids
           AND ch.course_id IN $authorized_course_ids
-        RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
+        RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index, ch.course_id AS course_id
         ORDER BY ch.index ASC LIMIT 200
         """
         async with neo4j_client.driver.session() as session:
@@ -113,8 +114,8 @@ async def retrieve_chunks(
     CALL db.index.vector.queryNodes('chunk_embedding', $k, $vector)
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
-    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
-    ORDER BY score DESC LIMIT 200
+    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, node.course_id AS course_id, score
+    ORDER BY score DESC LIMIT $k
     """
 
     # 3. Fulltext search
@@ -123,7 +124,7 @@ async def retrieve_chunks(
     CALL db.index.fulltext.queryNodes('chunk_text', $ft_query)
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
-    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, node.course_id AS course_id, score
     ORDER BY score DESC LIMIT 200
     """
 
@@ -141,6 +142,9 @@ async def retrieve_chunks(
             try:
                 res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id, authorized_course_ids=authorized_course_ids)
                 vector_results = await res_vec.data()
+                # Stop only when this batch has usable, authorized results that
+                # pass their own course's threshold, not merely raw vector hits.
+                vector_results = filter_vector_batch(vector_results, course_id, course_settings)
             except Exception:
                 # Nếu vector index chưa sẵn sàng trong mock/test
                 vector_results = []
@@ -164,16 +168,29 @@ async def retrieve_chunks(
             # Nếu fulltext index chưa sẵn sàng
             pass
 
-    return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks)
+    return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks,
+                       min_vector_score=0)
 
 
-def _fuse_chunk_channels(channels):
+def filter_vector_batch(rows, course_id, course_settings):
+    configs = course_settings or {}
+    return [row for row in rows if row.get("id") and row.get("text", "").strip() and row.get("score", 1) >= (
+        configs[row.get("course_id", course_id)].similarity_threshold
+        if row.get("course_id", course_id) in configs else settings.CHAT_MIN_VECTOR_SCORE)]
+
+
+def _eligible_channel_row(channel, row, min_vector_score):
+    if not row.get("id") or not row.get("text", "").strip():
+        return False
+    return channel != "vector" or row.get("score", 1) >= min_vector_score
+
+
+def _fuse_chunk_channels(channels, min_vector_score=None):
+    threshold = settings.CHAT_MIN_VECTOR_SCORE if min_vector_score is None else min_vector_score
     candidates = {}
     for channel, rows in channels:
         for rank, row in enumerate(rows, 1):
-            if not row.get("id") or not row.get("text", "").strip():
-                continue
-            if channel == "vector" and row.get("score", 1) < getattr(settings, "CHAT_MIN_VECTOR_SCORE", 0.35):
+            if not _eligible_channel_row(channel, row, threshold):
                 continue
             item = candidates.setdefault(row["id"], {"chunk": dict(row), "score": 0.0})
             item["score"] += 60 / (60 + rank)
@@ -199,12 +216,12 @@ def _diversify_chunks(ordered, limit):
     return (selected + deferred)[:limit]
 
 
-def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
+def rank_chunks(query, graph_results, vector_results, fulltext_results, limit, min_vector_score=None):
     """Fuse all channels before truncation, with lexical relevance and document diversity."""
     terms = set(re.findall(r"\w+", normalize_text_unaccent(query.casefold())))
     terms -= {"va", "la", "cua", "cho", "toi", "hay", "cac", "nhung", "mot", "the", "a", "an", "is", "of", "to", "in"}
     candidates = _fuse_chunk_channels([
-        ("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)])
+        ("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)], min_vector_score)
     for item in candidates.values():
         words = set(re.findall(r"\w+", normalize_text_unaccent(item["chunk"]["text"].casefold())))
         item["score"] += 1.5 * len(words & terms) / max(1, len(terms))

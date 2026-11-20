@@ -134,6 +134,21 @@ def test_update_concept_keeps_identity_and_protects_manual_changes(monkeypatch):
     assert 'n.curated = true' in write.args[0]
     assert 'SET n.key' not in write.args[0]
     assert write.kwargs['aliases'] == ['Old name']
+    assert write.kwargs['difficulty_provided'] is False
+
+
+@pytest.mark.parametrize('rating', [1, 5, None])
+def test_update_concept_can_rate_or_clear_difficulty(monkeypatch, rating):
+    monkeypatch.setattr(api.embed_model, 'embed_batch', AsyncMock(return_value=[[0.1] * 1024]))
+    session, _ = database(monkeypatch, [result({'version': 8}),
+        result(rows=[{'id': 'a', 'key': 'a', 'name': 'A', 'aliases': [], 'status': 'ACTIVE'}]),
+        result(), result({'graph_version': 9})])
+    response = client.put(BASE + '/concepts/a?expected_version=8', headers=HEADERS,
+                          json={'name': 'A', 'difficulty': rating})
+    assert response.status_code == 200
+    write = session.run.call_args_list[2]
+    assert write.kwargs['difficulty_provided'] is True
+    assert write.kwargs['difficulty'] == rating
 
 
 def test_update_concept_rejects_duplicate_archived_name(monkeypatch):

@@ -12,6 +12,8 @@ import java.util.Optional;
 
 @Repository
 public interface CourseEnrollmentRepository extends JpaRepository<CourseEnrollment, Long> {
+    @org.springframework.data.jpa.repository.Query("select e.course.courseId from CourseEnrollment e where e.user = :user")
+    java.util.List<Long> findCourseIdsByUser(@org.springframework.data.repository.query.Param("user") User user);
     boolean existsByCourseAndUser(Course course, User user);
     boolean existsByCourse_CourseIdAndUser(Long courseId, User user);
     Page<CourseEnrollment> findByUser(User user, Pageable pageable);

@@ -10,9 +10,12 @@ RUN pip install --no-cache-dir --only-binary=:all: --require-hashes \
     && pip check \
     && useradd --system --uid 10001 --create-home app \
     && mkdir -p /data/raw /data/huggingface /app/.cache \
-    && chown -R app:app /data /app
-COPY --chown=app:app app ./app
-COPY --chown=app:app prompts ./prompts
+    && chown -R app:app /data /app/.cache \
+    && chown root:root /app \
+    && chmod 755 /app
+COPY --chown=root:root --chmod=755 app ./app
+COPY --chown=root:root --chmod=755 prompts ./prompts
+COPY --chown=root:root --chmod=755 scripts/run_pipeline.py ./scripts/run_pipeline.py
 USER 10001
 EXPOSE 8082
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082", "--workers", "1"]

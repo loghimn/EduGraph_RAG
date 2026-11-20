@@ -12,6 +12,14 @@ import java.util.Optional;
 
 @Repository
 public interface LearnerMasteryRepository extends JpaRepository<LearnerMastery, Long> {
+    List<LearnerMastery> findByLearnerAndCourse_CourseIdIn(User learner, List<Long> courseIds);
+    interface StatusCount { String getConceptId(); MasteryStatus getStatus(); Long getTotal(); }
+    @org.springframework.data.jpa.repository.Query("""
+        select m.neo4jConceptId as conceptId, m.masteryStatus as status, count(m) as total
+        from LearnerMastery m where m.course.courseId = :course and m.learner.role = fu.coreservice.entity.UserRole.STUDENT
+        group by m.neo4jConceptId, m.masteryStatus
+        """)
+    List<StatusCount> courseStatusCounts(@org.springframework.data.repository.query.Param("course") Long courseId);
     List<LearnerMastery> findByLearner(User learner);
     List<LearnerMastery> findByCourse(Course course);
     List<LearnerMastery> findByLearnerAndCourse(User learner, Course course);

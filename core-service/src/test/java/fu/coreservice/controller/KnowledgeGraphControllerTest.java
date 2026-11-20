@@ -106,7 +106,7 @@ class KnowledgeGraphControllerTest {
         var resolved = ModelConverters.getInstance().resolveAsResolvedSchema(
                 new AnnotatedType(ConceptDraftRequest.class));
         var schema = resolved.referencedSchemas.get("ConceptDraftRequest");
-        assertThat(schema.getProperties().keySet()).containsExactlyInAnyOrder("name", "aliases", "language");
+        assertThat(schema.getProperties().keySet()).containsExactlyInAnyOrder("name", "aliases", "language", "difficulty");
         assertThat(schema.getRequired()).contains("name");
         assertThat(schema.getExample().toString()).contains("HTTP Requests");
     }

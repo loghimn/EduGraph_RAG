@@ -100,6 +100,7 @@ public class LearningPathServiceImpl implements LearningPathService {
                 plan.getSteps().add(LearningPathStep.builder().plan(plan).neo4jConceptId(conceptId)
                         .conceptLabel(label.substring(0, Math.min(label.length(), 255)))
                         .stepOrder(order++).stageLevel(located.level())
+                        .difficulty(located.step().difficulty()).difficultyRated(located.step().difficultyRated())
                         .outsideDocument(located.step().outsideDocument()).build());
             }
             LearningPathPlan saved = planRepository.saveAndFlush(plan);
@@ -202,7 +203,7 @@ public class LearningPathServiceImpl implements LearningPathService {
                 plan.getGoals().stream().map(LearningPathGoal::getNeo4jConceptId).sorted().toList(),
                 orderedSteps.stream().map(s -> new LearningPathDetail.Step(s.getStepId(), s.getNeo4jConceptId(),
                         s.getConceptLabel(), s.getStepOrder(), s.getStageLevel(), s.getOutsideDocument(),
-                        s.getStatus(), s.getCompletedAt(), isUnlocked(plan, s))).toList(), warnings);
+                        s.getStatus(), s.getCompletedAt(), isUnlocked(plan, s), s.getDifficulty(), s.getDifficultyRated())).toList(), warnings);
     }
 
     private LearningPathSummary summary(LearningPathPlan plan, long total, long completed) {
