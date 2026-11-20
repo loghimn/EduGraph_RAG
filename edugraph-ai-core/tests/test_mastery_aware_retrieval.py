@@ -40,7 +40,8 @@ async def test_explanation_receives_mastery_config_and_cites_prerequisite_source
     context = [{'course_id': '7', 'missing': [{'id': 'prior', 'name': 'Basic'}], 'mastered': []}]
     config = {'7': CourseAiSettings(traversalDepth=2, promptTemplate='Use simple examples')}
     async def generate(prompt, **kwargs):
-        assert 'Basic' in prompt and 'Use simple examples' in prompt
+        assert 'Basic' in prompt
+        assert 'Use simple examples' in prompt
         yield 'First learn Basic [2], then Goal [1].'
     with patch('app.services.chat.classify_chat_intent', AsyncMock(side_effect=ValueError())), \
          patch('app.services.chat.retrieve_chunks', AsyncMock(return_value=evidence[:1])) as chunks, \

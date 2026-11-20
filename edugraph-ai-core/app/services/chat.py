@@ -158,6 +158,37 @@ async def _fallback_events(course_id, query, concept_ids, authorized_course_ids,
     return no_data_events()
 
 
+def _retrieval_arguments(course_id, query, concept_ids, authorized_course_ids, configs):
+    arguments = {"course_id": course_id, "query": query, "concept_ids": concept_ids,
+                 "authorized_course_ids": authorized_course_ids, "max_chunks": settings.CHAT_MAX_CHUNKS}
+    if configs:
+        arguments['course_settings'] = configs
+    return arguments
+
+
+def _prefer_relationship_evidence(chunks, evidence):
+    evidence_ids = {item['id'] for item in evidence}
+    return (evidence + [item for item in chunks if item['id'] not in evidence_ids])[:settings.CHAT_MAX_CHUNKS]
+
+
+def _prompt_arguments(course_id, query, chunks, configs, conversation, relationship_context, prerequisite_context):
+    arguments = {"history": conversation['history'], "resolved_question": query,
+                 "reply_context": conversation['reply_context']}
+    if relationship_context is not None:
+        arguments['relationship_context'] = relationship_context
+    if prerequisite_context:
+        arguments['prerequisite_context'] = prerequisite_context
+    relevant_courses = {item['course_id'] for item in prerequisite_context or []}
+    relevant_courses.update(item['course_id'] for item in chunks if item.get('course_id'))
+    if course_id:
+        relevant_courses.add(course_id)
+    teaching = [configs[cid].prompt_template for cid in sorted(relevant_courses)
+                if cid in configs and configs[cid].prompt_template]
+    if teaching:
+        arguments['teaching_instructions'] = '\n'.join(teaching)
+    return arguments
+
+
 async def _explain_events(course_id, message, query, concept_ids, authorized_course_ids, course_names, conversation):
     relationship = conversation['graph_relationship']
     relationship_context = None
@@ -169,11 +200,8 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
         yield format_sse("clarify", {"candidates": candidates[:50]})
         yield format_sse("done", {})
         return
-    retrieval_args = dict(course_id=course_id, query=query, concept_ids=linked_ids,
-                          authorized_course_ids=authorized_course_ids, max_chunks=settings.CHAT_MAX_CHUNKS)
     configs = conversation.get("course_settings_by_course") or {}
-    if configs:
-        retrieval_args["course_settings"] = configs
+    retrieval_args = _retrieval_arguments(course_id, query, linked_ids, authorized_course_ids, configs)
     chunks = await retrieve_chunks(**retrieval_args)
     prerequisite_context = None
     if linked_ids and relationship is None and names is None:
@@ -185,30 +213,30 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
             yield format_sse("concepts", targets)
     if relationship is not None:
         relationship_context, evidence = await retrieve_relationship(relationship, authorized_course_ids)
-        evidence_ids = {item["id"] for item in evidence}
-        chunks = (evidence + [item for item in chunks if item["id"] not in evidence_ids])[:settings.CHAT_MAX_CHUNKS]
+        chunks = _prefer_relationship_evidence(chunks, evidence)
     if not chunks:
         logger.info("Chat retrieval stopped: no chunks linked_concepts=%d", len(linked_ids or []))
         for event in await _fallback_events(course_id, query, concept_ids, authorized_course_ids, conversation):
             yield event
         return
-    prompt_args = {"history": conversation["history"], "resolved_question": query,
-                   "reply_context": conversation["reply_context"]}
-    if relationship_context is not None:
-        prompt_args["relationship_context"] = relationship_context
-    if prerequisite_context:
-        prompt_args["prerequisite_context"] = prerequisite_context
-    relevant_courses = {item["course_id"] for item in prerequisite_context or []}
-    relevant_courses.update(item["course_id"] for item in chunks if item.get("course_id"))
-    if course_id:
-        relevant_courses.add(course_id)
-    teaching = [configs[cid].prompt_template for cid in sorted(relevant_courses)
-                if cid in configs and configs[cid].prompt_template]
-    if teaching:
-        prompt_args["teaching_instructions"] = "\n".join(teaching)
+    prompt_args = _prompt_arguments(course_id, query, chunks, configs, conversation, relationship_context, prerequisite_context)
     prompt = build_explain_prompt(message, chunks, **prompt_args)
     async for event in _answer_events(prompt, chunks):
         yield event
+
+
+async def _path_discovery_events(course_id, query, concept_ids, authorized_course_ids, path_intent, public_courses, configs):
+    if course_id is None or not public_courses:
+        return []
+    recommendations, missing = await discover_courses(
+        authorized_course_ids, public_courses, query, concept_ids, None, path_intent.target, None)
+    if not recommendations and not missing:
+        return []
+    # Missing graph annotations are not proof of missing course material.
+    arguments = _retrieval_arguments(course_id, query, concept_ids, authorized_course_ids, configs)
+    if await retrieve_chunks(**arguments):
+        return []
+    return _suggestion_events(recommendations) if recommendations else no_data_events()
 
 
 async def _chat_explain_events(
@@ -260,22 +288,13 @@ async def _chat_explain_events(
             yield resolution_event
         if graph_relationship is None and semantic is None:
             path_intent = detect_path_intent(search_query) or path_intent
-        if path_intent is not None and course_id is not None and public_courses:
-            recommendations, missing = await discover_courses(
-                authorized_course_ids, public_courses, search_query, concept_ids, graph_relationship,
-                path_intent.target if path_intent else semantic.target if semantic else None,
-                semantic.relationship if semantic else None)
-            if recommendations or missing:
-                retrieval_args = dict(course_id=course_id, query=search_query, concept_ids=concept_ids,
-                                      authorized_course_ids=authorized_course_ids, max_chunks=settings.CHAT_MAX_CHUNKS)
-                if course_settings_by_course:
-                    retrieval_args['course_settings'] = course_settings_by_course
-                # Missing graph annotations are not proof of missing course material.
-                if not await retrieve_chunks(**retrieval_args):
-                    for event in _suggestion_events(recommendations) if recommendations else no_data_events():
-                        yield event
-                    return
         if path_intent is not None:
+            fallback = await _path_discovery_events(course_id, search_query, concept_ids, authorized_course_ids,
+                                                    path_intent, public_courses, course_settings_by_course)
+            if fallback:
+                for event in fallback:
+                    yield event
+                return
             yield ": computing prerequisite learning path\n\n"
             path = await build_chat_path(path_intent, authorized_course_ids, concept_ids, course_names,
                                          known_concepts_by_course)
@@ -296,7 +315,7 @@ async def _chat_explain_events(
         yield format_sse("done", {})
 
 
-async def chat_endpoint(req: ChatRequest):
+def chat_endpoint(req: ChatRequest):
     # A course authorized by Java may not have a Neo4j graph yet. Discovery must
     # also work for an empty corpus, rather than returning a graph-level 404.
 

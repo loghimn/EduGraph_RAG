@@ -5,6 +5,10 @@ from app.db import graph_repository
 from app.retrieval.graph_cache import get_course_graph
 
 
+def _unvisited_parents(graph, node, visited):
+    return (parent for parent in sorted(graph.predecessors(node)) if parent not in visited)
+
+
 def missing_prerequisites(graph, targets, known, max_depth=3, limit=40):
     targets, known = set(targets), set(known)
     queue = deque((target, 0) for target in sorted(targets) if target in graph and target not in known)
@@ -14,9 +18,7 @@ def missing_prerequisites(graph, targets, known, max_depth=3, limit=40):
         node, depth = queue.popleft()
         if depth >= max_depth:
             continue
-        for parent in sorted(graph.predecessors(node)):
-            if parent in visited:
-                continue
+        for parent in _unvisited_parents(graph, node, visited):
             visited.add(parent)
             item = {"id": parent, "name": graph.nodes[parent].get("name", parent), "depth": depth + 1}
             if parent in known:

@@ -179,13 +179,18 @@ def filter_vector_batch(rows, course_id, course_settings):
         if row.get("course_id", course_id) in configs else settings.CHAT_MIN_VECTOR_SCORE)]
 
 
+def _eligible_channel_row(channel, row, min_vector_score):
+    if not row.get("id") or not row.get("text", "").strip():
+        return False
+    return channel != "vector" or row.get("score", 1) >= min_vector_score
+
+
 def _fuse_chunk_channels(channels, min_vector_score=None):
+    threshold = settings.CHAT_MIN_VECTOR_SCORE if min_vector_score is None else min_vector_score
     candidates = {}
     for channel, rows in channels:
         for rank, row in enumerate(rows, 1):
-            if not row.get("id") or not row.get("text", "").strip():
-                continue
-            if channel == "vector" and row.get("score", 1) < (min_vector_score if min_vector_score is not None else settings.CHAT_MIN_VECTOR_SCORE):
+            if not _eligible_channel_row(channel, row, threshold):
                 continue
             item = candidates.setdefault(row["id"], {"chunk": dict(row), "score": 0.0})
             item["score"] += 60 / (60 + rank)

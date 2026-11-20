@@ -13,90 +13,139 @@ def keys(concept):
             for value in [concept['name'], *(concept.get('aliases') or [])] if value}
 
 
+def _has_edge_words(query):
+    return bool(re.search(r'->|→|quan he|relationship|\bedge\b|\bcanh\b', normalize_text_unaccent(query.lower())))
+
+
+def _has_arrow(query):
+    return '->' in query or '→' in query
+
+
+def _overlaps(match, spans):
+    return any(match.start() < end and start < match.end() for start, end in spans)
+
+
+def _whole_names(concepts, normalized):
+    # Prefer whole names beyond the general linker's four-gram window.
+    spans, names = [], set()
+    candidates = {name for row in concepts for name in keys(row)}
+    for name in sorted(candidates, key=lambda name: (-len(name), name)):
+        for match in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', normalized):
+            if _overlaps(match, spans):
+                continue
+            names.add(name)
+            spans.append(match.span())
+    return names
+
+
+def _matching_ids(concepts, lookup):
+    normalized = normalize_text_unaccent(normalize_concept_key(lookup))
+    names = _whole_names(concepts, normalized)
+    if names:
+        return {row['id'] for row in concepts if keys(row) & names}
+    linked = link_concepts_from_data(lookup, concepts)
+    return set(linked.get('concept_ids') or [row['id'] for row in linked.get('clarify') or []])
+
+
+def _merge_name_groups(concepts, ids):
+    groups = []
+    # The same name in multiple courses represents one requested topic.
+    for concept in concepts:
+        if concept['id'] not in ids:
+            continue
+        names = keys(concept)
+        overlap = [group for group in groups if group & names]
+        if overlap:
+            overlap[0].update(names)
+        else:
+            groups.append(names)
+    return groups
+
+
+def _group_position(group, normalized):
+    return min((normalized.find(name) for name in group if name in normalized), default=100000)
+
+
+def _question_groups(concepts, query, target):
+    lookup = query if _has_edge_words(query) else target or query
+    groups = _merge_name_groups(concepts, _matching_ids(concepts, lookup))
+    if _has_arrow(query):
+        normalized = normalize_text_unaccent(normalize_concept_key(query))
+        groups.sort(key=lambda group: _group_position(group, normalized))
+    return groups
+
+
 def matching_groups(concepts, query, concept_ids=None, relationship=None, target=None, scope=(), relationship_names=None):
+    if relationship_names is not None and relationship is None:
+        return [{normalize_text_unaccent(normalize_concept_key(value))}
+                for value in [relationship_names.source, relationship_names.target]]
     local = {row['id']: row for row in concepts if row['course_id'] in scope}
     selected = ([relationship.source_id, relationship.target_id] if relationship else concept_ids) or []
-    if relationship_names is not None and relationship is None:
-        groups = [{normalize_text_unaccent(normalize_concept_key(value))}
-                  for value in [relationship_names.source, relationship_names.target]]
-    elif selected and all(cid in local for cid in selected):
-        groups = [keys(local[cid]) for cid in selected]
-    else:
-        edge_words = re.search(r'->|→|quan he|relationship|\bedge\b|\bcanh\b', normalize_text_unaccent(query.lower()))
-        lookup = query if edge_words else target or query
-        normalized = normalize_text_unaccent(normalize_concept_key(lookup))
-        # Whole-name matching supports long concept names beyond the general linker's four-gram window.
-        spans, names = [], set()
-        for name in sorted({name for row in concepts for name in keys(row)}, key=lambda name: (-len(name), name)):
-            for match in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', normalized):
-                if any(match.start() < end and start < match.end() for start, end in spans):
-                    continue
-                names.add(name); spans.append(match.span())
-        if names:
-            ids = {row['id'] for row in concepts if keys(row) & names}
-        else:
-            linked = link_concepts_from_data(lookup, concepts)
-            ids = set(linked.get('concept_ids') or [row['id'] for row in linked.get('clarify') or []])
-        groups = []
-        # Merge identical names across courses; they represent the same requested topic.
-        for concept in concepts:
-            if concept['id'] not in ids:
-                continue
-            names = keys(concept)
-            overlap = [group for group in groups if group & names]
-            if overlap:
-                overlap[0].update(names)
-            else:
-                groups.append(names)
-        if '->' in query or '→' in query:
-            normalized = normalize_text_unaccent(normalize_concept_key(query))
-            groups.sort(key=lambda group: min((normalized.find(name) for name in group if name in normalized), default=100000))
-    return groups[:20]
+    if selected and all(cid in local for cid in selected):
+        return [keys(local[cid]) for cid in selected][:20]
+    return _question_groups(concepts, query, target)[:20]
+
+
+def _matches_direction(edge, left, right, directed):
+    forward = edge['source'] in left and edge['target'] in right
+    reverse = edge['source'] in right and edge['target'] in left
+    return forward or not directed and reverse
+
+
+def _edge_endpoints(matches, edges, course, directed):
+    left, right = {row['id'] for row in matches[0]}, {row['id'] for row in matches[1]}
+    by_id = {row['id']: row for group in matches for row in group}
+    for edge in edges:
+        if edge['course_id'] != course or not _matches_direction(edge, left, right, directed):
+            continue
+        selected = [by_id[edge['source']], by_id[edge['target']]]
+        # Evidence must belong to these endpoints, rather than a node sharing an alias.
+        if any(row.get('has_evidence') for row in selected):
+            return selected
+    return None
+
+
+def _select_concepts(course_nodes, edges, groups, course, edge_question, directed):
+    matches = [[row for row in course_nodes if keys(row) & group] for group in groups]
+    if not all(matches):
+        return None
+    if edge_question:
+        return _edge_endpoints(matches, edges, course, directed)
+    selected = [next((row for row in group if row.get('has_evidence')), group[0]) for group in matches]
+    return selected if all(row.get('has_evidence') for row in selected) else None
+
+
+def _available_courses(concepts, edges, groups, edge_question, directed):
+    available = {}
+    for course in sorted({row['course_id'] for row in concepts}):
+        nodes = [row for row in concepts if row['course_id'] == course]
+        selected = _select_concepts(nodes, edges, groups, course, edge_question, directed)
+        if selected is not None:
+            available[course] = selected
+    return available
+
+
+def _course_suggestion(course, selected, metadata, query, edge_question):
+    subject = (' → ' if edge_question else ', ').join(row['name'] for row in selected)
+    return {
+        'courseId': course, 'courseName': metadata.name, 'enrolled': metadata.enrolled,
+        'subject': subject[:500], 'conceptIds': [row['id'] for row in selected], 'question': query[:4000],
+        'graphRelationship': ({'sourceId': selected[0]['id'], 'targetId': selected[1]['id']} if edge_question else None),
+    }
 
 
 def select_courses(concepts, edges, groups, scope, public_courses, query, relationship=None):
     if not groups:
         return [], relationship is not None
-    edge_question = relationship is not None or len(groups) == 2 and bool(re.search(
-        r'->|→|quan he|relationship|\bedge\b|\bcanh\b', normalize_text_unaccent(query.lower())))
-    directed = relationship is not None or '->' in query or '→' in query
+    edge_question = relationship is not None or len(groups) == 2 and _has_edge_words(query)
+    directed = relationship is not None or _has_arrow(query)
     if edge_question and len(groups) != 2:
         return [], True
-    available = {}
-    for course in sorted({row['course_id'] for row in concepts}):
-        matches = [[row for row in concepts if row['course_id'] == course and keys(row) & group]
-                   for group in groups]
-        if not all(matches):
-            continue
-        selected = [next((row for row in group if row.get('has_evidence')), group[0]) for group in matches]
-        if edge_question:
-            left, right = {row['id'] for row in matches[0]}, {row['id'] for row in matches[1]}
-            by_id = {row['id']: row for row in concepts}
-            # Evaluate evidence on the actual edge endpoints. Another concept
-            # sharing an alias must not supply evidence for this relationship.
-            edge = next((edge for edge in edges if edge['course_id'] == course and (
-                edge['source'] in left and edge['target'] in right or
-                not directed and edge['source'] in right and edge['target'] in left)
-                and any(by_id[cid].get('has_evidence') for cid in (edge['source'], edge['target']))), None)
-            if edge is None:
-                continue
-            selected = [by_id[edge['source']], by_id[edge['target']]]
-        elif not all(row.get('has_evidence') for row in selected):
-            continue
-        available[course] = selected
+    available = _available_courses(concepts, edges, groups, edge_question, directed)
     if any(course in available for course in scope):
         return [], False
-    suggestions = []
-    for course, selected in available.items():
-        if course in scope or course not in public_courses:
-            continue
-        metadata = public_courses[course]
-        subject = (' → ' if edge_question else ', ').join(row['name'] for row in selected)
-        suggestions.append({
-            'courseId': course, 'courseName': metadata.name, 'enrolled': metadata.enrolled,
-            'subject': subject[:500], 'conceptIds': [row['id'] for row in selected], 'question': query[:4000],
-            'graphRelationship': ({'sourceId': selected[0]['id'], 'targetId': selected[1]['id']} if edge_question else None),
-        })
+    suggestions = [_course_suggestion(course, selected, public_courses[course], query, edge_question)
+                   for course, selected in available.items() if course not in scope and course in public_courses]
     suggestions.sort(key=lambda row: (not row['enrolled'], row['courseName'].casefold(), row['courseId']))
     return suggestions[:5], True
 

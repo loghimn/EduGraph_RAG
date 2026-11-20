@@ -99,12 +99,15 @@ def test_name_resolution_uses_aliases_but_never_pairs_concepts_from_different_or
     rows = [dict(id='a1', course_id='1', name='Linear algebra', aliases=['Đại số tuyến tính']),
             dict(id='b2', course_id='2', name='Gradient descent', aliases=[])]
     relationship, context, ids = resolve_relationship_names(names, rows, ['1'])
-    assert relationship is None and context['recorded'] is False and ids == ['a1']
+    assert relationship is None
+    assert context['recorded'] is False
+    assert ids == ['a1']
     assert resolve_relationship_names(names, rows, ['1', '2'])[0] is None
     rows.append(dict(id='b1', course_id='1', name='Gradient descent', aliases=[]))
     relationship, context, ids = resolve_relationship_names(names, rows, ['1'])
     assert relationship == GraphRelationship(source_id='a1', target_id='b1')
-    assert context is None and ids == ['a1', 'b1']
+    assert context is None
+    assert ids == ['a1', 'b1']
     rows.append(dict(id='b1-other', course_id='1', name='Gradient descent', aliases=[]))
     assert resolve_relationship_names(names, rows, ['1'])[1]['resolution'] == 'ambiguous'
 
@@ -113,7 +116,9 @@ def test_name_resolution_uses_aliases_but_never_pairs_concepts_from_different_or
 async def test_name_resolution_without_access_does_not_query_the_graph():
     with patch('app.retrieval.named_relationship.get_course_concepts_for_linking', AsyncMock()) as load:
         relationship, context, ids = await resolve_named_relationship(RelationshipIntent(source='A', target='B'), [])
-    assert relationship is None and context['recorded'] is False and ids == []
+    assert relationship is None
+    assert context['recorded'] is False
+    assert ids == []
     load.assert_not_awaited()
 
 
