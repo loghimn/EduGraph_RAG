@@ -23,6 +23,7 @@ async def get_knowledge_graph(
             "aliases": data.get("aliases", []),
             "language": data.get("language", "mixed"),
             "order": data.get("order", 0),
+            "difficulty": data.get("difficulty"),
         }
         for concept_id, data in graph.nodes(data=True)
     ]

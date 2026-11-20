@@ -256,7 +256,11 @@ def test_chat_missing_internal_key_is_rejected(mock_neo4j):
     mock_neo4j.driver.session.assert_not_called()
 
 @patch("app.db.graph_repository.neo4j_client")
-def test_chat_course_404_not_found(mock_neo4j):
+@patch("app.services.chat.retrieve_chunks", new_callable=AsyncMock)
+@patch("app.services.chat.link_concepts", new_callable=AsyncMock)
+def test_authorized_course_without_a_graph_can_still_return_a_no_data_answer(linker, retriever, mock_neo4j):
+    linker.return_value = {"concept_ids": []}
+    retriever.return_value = []
     mock_session = AsyncMock()
     mock_neo4j.driver.session.return_value.__aenter__.return_value = mock_session
     mock_res = AsyncMock()
@@ -268,7 +272,10 @@ def test_chat_course_404_not_found(mock_neo4j):
         headers={"X-Internal-Key": "test-internal-api-key"},
         json={"course_id": "non_existent", "user_id": "u1", "message": "hello"}
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert 'event: done' in resp.text
+    assert 'event: sources\ndata: []' in resp.text
+    assert 'event: error' not in resp.text
 
 @patch("app.db.graph_repository.neo4j_client")
 @patch("app.services.chat.link_concepts", new_callable=AsyncMock)
@@ -453,3 +460,9 @@ def test_global_clarification_uses_current_java_names_for_existing_graph_concept
         assert "course.name" not in call.args[0]
         assert call.kwargs["authorized_course_ids"] == ["26", "28"]
 
+
+
+@pytest.fixture(autouse=True)
+def isolate_prerequisite_database_in_transport_tests(monkeypatch):
+    # Traversal has its own database/authorization tests. Keep routing and SSE unit tests offline.
+    monkeypatch.setattr("app.services.chat.retrieve_prerequisite_context", AsyncMock(return_value=([], [], [])))

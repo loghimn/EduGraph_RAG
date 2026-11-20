@@ -148,3 +148,9 @@ async def test_chat_emits_heartbeats_during_each_pre_token_wait(stage, monkeypat
         finally:
             release.set()
             await stream.aclose()
+
+
+@pytest.fixture(autouse=True)
+def isolate_prerequisite_database_in_transport_tests(monkeypatch):
+    # Traversal has its own database/authorization tests. Keep routing and SSE unit tests offline.
+    monkeypatch.setattr("app.services.chat.retrieve_prerequisite_context", AsyncMock(return_value=([], [], [])))

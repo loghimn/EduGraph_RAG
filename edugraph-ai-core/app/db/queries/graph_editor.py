@@ -11,6 +11,7 @@ MUTATE_EDGE_QUERY_1 = """MATCH (s:Concept {course_id: $course_id, id: $source}),
 
 UPDATE_CONCEPT_QUERY_1 = """MATCH (n:Concept {course_id: $course_id, id: $id})
             SET n.name = $name, n.aliases = $aliases, n.language = $language, n.embedding = $embedding,
+                n.difficulty = CASE WHEN $difficulty_provided THEN $difficulty ELSE n.difficulty END,
                 n.curated = true, n.review_status = 'CONFIRMED', n.reviewed_by = $actor, n.reviewed_at = timestamp()"""
 
 MUTATE_EDGE_QUERY_2 = """MATCH (s:Concept {course_id: $course_id, id: $source})-[r:PREREQUISITE_OF]->(t:Concept {course_id: $course_id, id: $target})
@@ -26,7 +27,7 @@ REVIEW_GRAPH_QUERY_2 = """MATCH (n:Concept {course_id: $course_id})
             WHERE coalesce(n.status, 'ACTIVE') = 'ACTIVE'
             RETURN n.id AS id, n.name AS name, coalesce(n.aliases, []) AS aliases,
                 coalesce(n.language, 'mixed') AS language, coalesce(n.review_status, 'AUTO') AS review_status,
-                coalesce(n.origin, 'AUTO') AS origin ORDER BY name, id"""
+                coalesce(n.origin, 'AUTO') AS origin, n.difficulty AS difficulty ORDER BY name, id"""
 
 REVIEW_GRAPH_QUERY_3 = """MATCH (s:Concept {course_id: $course_id})-[r:PREREQUISITE_OF]->(t:Concept {course_id: $course_id})
             WHERE coalesce(s.status, 'ACTIVE') = 'ACTIVE' AND coalesce(t.status, 'ACTIVE') = 'ACTIVE'

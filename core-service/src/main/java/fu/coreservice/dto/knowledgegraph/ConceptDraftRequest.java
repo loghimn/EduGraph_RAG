@@ -35,4 +35,21 @@ public class ConceptDraftRequest {
     @Schema(description = "Concept language; defaults to mixed", example = "en",
             allowableValues = {"vi", "en", "mixed"}, defaultValue = "mixed")
     private String language = "mixed";
+
+    @jakarta.validation.constraints.Min(1)
+    @jakarta.validation.constraints.Max(5)
+    private Integer difficulty;
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean difficultySpecified;
+
+    @com.fasterxml.jackson.annotation.JsonSetter("difficulty")
+    public void setDifficulty(Integer value) { difficulty = value; difficultySpecified = true; }
+
+    public java.util.Map<String, Object> toAiBody() {
+        var body = new java.util.LinkedHashMap<String, Object>();
+        body.put("name", name); body.put("aliases", aliases); body.put("language", language);
+        if (difficultySpecified) body.put("difficulty", difficulty);
+        return body;
+    }
 }

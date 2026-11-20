@@ -141,8 +141,7 @@ public class AiRagServiceImpl implements AiRagService {
     @Override
     public Map<String, Object> createConceptDraft(
             Long courseId, ConceptDraftRequest request) {
-        return writeConceptDraft(courseId, null, Map.of(
-                "name", request.getName(), "aliases", request.getAliases(), "language", request.getLanguage()));
+        return writeConceptDraft(courseId, null, request.toAiBody());
     }
 
     @Override

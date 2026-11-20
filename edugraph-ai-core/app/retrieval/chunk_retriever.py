@@ -71,7 +71,8 @@ async def retrieve_chunks(
     concept_ids: Optional[List[str]] = None,
     authorized_course_ids: Optional[List[str]] = None,
     max_chunks: int = 6,
-    overfetch_k: Optional[int] = None
+    overfetch_k: Optional[int] = None,
+    course_settings=None,
 ) -> List[Dict[str, Any]]:
     """
     Truy xuất chunks cho câu hỏi giải thích (explain):
@@ -98,7 +99,7 @@ async def retrieve_chunks(
           AND c.id IN $concept_ids
           AND c.course_id IN $authorized_course_ids
           AND ch.course_id IN $authorized_course_ids
-        RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index
+        RETURN ch.id AS id, ch.text AS text, ch.doc_id AS doc_id, ch.page AS page, ch.index AS index, ch.course_id AS course_id
         ORDER BY ch.index ASC LIMIT 200
         """
         async with neo4j_client.driver.session() as session:
@@ -113,7 +114,7 @@ async def retrieve_chunks(
     CALL db.index.vector.queryNodes('chunk_embedding', $k, $vector)
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
-    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, node.course_id AS course_id, score
     ORDER BY score DESC LIMIT 200
     """
 
@@ -123,7 +124,7 @@ async def retrieve_chunks(
     CALL db.index.fulltext.queryNodes('chunk_text', $ft_query)
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
-    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, score
+    RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, node.course_id AS course_id, score
     ORDER BY score DESC LIMIT 200
     """
 
@@ -164,16 +165,21 @@ async def retrieve_chunks(
             # Nếu fulltext index chưa sẵn sàng
             pass
 
-    return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks)
+    if course_settings:
+        vector_results = [row for row in vector_results if row.get("score", 1) >= (
+            course_settings[row.get("course_id", course_id)].similarity_threshold
+            if row.get("course_id", course_id) in course_settings else settings.CHAT_MIN_VECTOR_SCORE)]
+    return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks,
+                       min_vector_score=0 if course_settings else None)
 
 
-def _fuse_chunk_channels(channels):
+def _fuse_chunk_channels(channels, min_vector_score=None):
     candidates = {}
     for channel, rows in channels:
         for rank, row in enumerate(rows, 1):
             if not row.get("id") or not row.get("text", "").strip():
                 continue
-            if channel == "vector" and row.get("score", 1) < getattr(settings, "CHAT_MIN_VECTOR_SCORE", 0.35):
+            if channel == "vector" and row.get("score", 1) < (min_vector_score if min_vector_score is not None else settings.CHAT_MIN_VECTOR_SCORE):
                 continue
             item = candidates.setdefault(row["id"], {"chunk": dict(row), "score": 0.0})
             item["score"] += 60 / (60 + rank)
@@ -199,12 +205,12 @@ def _diversify_chunks(ordered, limit):
     return (selected + deferred)[:limit]
 
 
-def rank_chunks(query, graph_results, vector_results, fulltext_results, limit):
+def rank_chunks(query, graph_results, vector_results, fulltext_results, limit, min_vector_score=None):
     """Fuse all channels before truncation, with lexical relevance and document diversity."""
     terms = set(re.findall(r"\w+", normalize_text_unaccent(query.casefold())))
     terms -= {"va", "la", "cua", "cho", "toi", "hay", "cac", "nhung", "mot", "the", "a", "an", "is", "of", "to", "in"}
     candidates = _fuse_chunk_channels([
-        ("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)])
+        ("graph", graph_results), ("vector", vector_results), ("fulltext", fulltext_results)], min_vector_score)
     for item in candidates.values():
         words = set(re.findall(r"\w+", normalize_text_unaccent(item["chunk"]["text"].casefold())))
         item["score"] += 1.5 * len(words & terms) / max(1, len(terms))

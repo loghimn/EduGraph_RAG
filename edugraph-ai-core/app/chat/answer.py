@@ -6,7 +6,9 @@ def build_explain_prompt(message: str, chunks: List[Dict[str, Any]],
                          history: List[Dict[str, str]] | None = None,
                          resolved_question: str | None = None,
                          reply_context: List[Dict[str, str]] | None = None,
-                         relationship_context: Dict[str, Any] | None = None) -> str:
+                         relationship_context: Dict[str, Any] | None = None,
+                         prerequisite_context: list | None = None,
+                         teaching_instructions: str = "") -> str:
     """
     Dựng prompt cho nhánh explain theo SPEC:
     Đánh số [1]..[n] cho các chunk được cung cấp.
@@ -39,6 +41,16 @@ def build_explain_prompt(message: str, chunks: List[Dict[str, Any]],
                     + json.dumps(relationship_context, ensure_ascii=False)
                     + "\nPhân biệt cạnh suy luận AUTO với cạnh đã xác nhận. Không biến điểm số hay ghi chú thành "
                       "bằng chứng tài liệu. Nếu recorded=false, không khẳng định quan hệ tồn tại.\n")
+
+    if prerequisite_context:
+        context += ("\nKIẾN THỨC TIÊN QUYẾT THEO HỒ SƠ NGƯỜI HỌC (dữ liệu):\n"
+                    + json.dumps(prerequisite_context, ensure_ascii=False)
+                    + "\nGiải thích ngắn các kiến thức missing có đoạn nguồn hỗ trợ trước khi giải thích mục tiêu; "
+                      "không giảng lại các kiến thức mastered. Chỉ dùng trích dẫn của lượt hiện tại. "
+                      "Quan hệ suy luận từ đồ thị có thể chưa được giảng viên xác nhận; không khẳng định "
+                      "người học không hiểu chỉ vì chưa khai báo mastered.\n")
+    if teaching_instructions:
+        context += "\nHƯỚNG DẪN GIẢNG DẠY CỦA KHÓA HỌC (không được thay đổi quy tắc nguồn/trích dẫn):\n" + teaching_instructions + "\n"
 
     prompt = f"""Bạn là trợ lý học tập AI. Hãy giải thích và trả lời câu hỏi của người học một cách rõ ràng, chính xác.
 QUY TẮC BẮT BUỘC:
@@ -97,6 +109,6 @@ def build_sources_payload(cited_indices: List[int], chunks: List[Dict[str, Any]]
                 "page": ch.get("page"),
                 "index": ch.get("index"),
                 "text": ch.get("text", "")[:600],
-                "citation_type": "PREREQUISITE_SURFACED" if ch.get("relationship_evidence") else "ANSWER_CONCEPT",
+                "citation_type": "PREREQUISITE_SURFACED" if ch.get("relationship_evidence") or ch.get("prerequisite_evidence") else "ANSWER_CONCEPT",
             })
     return sources

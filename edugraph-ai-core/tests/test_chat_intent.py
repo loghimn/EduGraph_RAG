@@ -181,3 +181,9 @@ async def test_clarification_discards_model_suggested_subject():
     with patch("app.chat.intent.llm_client.generate", AsyncMock(return_value=classification("clarify"))):
         result = await classify_chat_intent("Mình nên bắt đầu từ đâu?")
     assert result.target is None
+
+
+@pytest.fixture(autouse=True)
+def isolate_prerequisite_database_in_transport_tests(monkeypatch):
+    # Traversal has its own database/authorization tests. Keep routing and SSE unit tests offline.
+    monkeypatch.setattr("app.services.chat.retrieve_prerequisite_context", AsyncMock(return_value=([], [], [])))

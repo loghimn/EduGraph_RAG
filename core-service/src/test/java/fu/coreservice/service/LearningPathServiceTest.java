@@ -130,6 +130,8 @@ class LearningPathServiceTest {
         // Stage order is deliberately different from linear order.
         assertEquals(List.of(0, 0, 1), created.steps().stream().map(s -> s.stageLevel()).toList());
         assertEquals(List.of(1, 2, 3), created.steps().stream().map(s -> s.stepOrder()).toList());
+        assertEquals(2, created.steps().getFirst().difficulty());
+        assertEquals(true, created.steps().getFirst().difficultyRated());
         assertEquals(List.of("Example warning"), created.warnings());
         assertEquals(3, created.plan().totalSteps());
         assertEquals(0, created.plan().progressPercentage());
@@ -481,6 +483,8 @@ class LearningPathServiceTest {
         var result = new HashMap<String, Object>();
         result.put("concept_id", id);
         result.put("name", "Concept " + id);
+        result.put("difficulty", 2);
+        result.put("difficulty_rated", true);
         result.put("outside_document", mode == LearningPathMode.GOAL ? null : mode == LearningPathMode.DOCUMENT);
         return result;
     }

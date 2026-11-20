@@ -11,6 +11,7 @@ import java.util.Optional;
 
 @Repository
 public interface SystemSettingsRepository extends JpaRepository<SystemSettings, Long> {
+    List<SystemSettings> findByCourse_CourseIdIn(List<Long> courseIds);
     Optional<SystemSettings> findByCourse(Course course);
     Optional<SystemSettings> findByCourse_CourseId(Long courseId);
     List<SystemSettings> findByUpdatedBy(User updatedBy);

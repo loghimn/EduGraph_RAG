@@ -131,7 +131,9 @@ async def update_concept(course_id: str, concept_id: str, req: DraftRequest, exp
             if node["id"] != concept_id and keys.intersection(normalize_concept_key(v) for v in [node["key"] or "", node["name"], *node["aliases"]]):
                 raise HTTPException(409, "Name or alias belongs to another concept (including archived concepts)")
         await graph_repository.run(tx, queries.UPDATE_CONCEPT_QUERY_1,
-            course_id=course_id, id=concept_id, name=req.name, aliases=aliases, language=req.language, embedding=vectors[0], actor=x_actor_id)
+            course_id=course_id, id=concept_id, name=req.name, aliases=aliases, language=req.language,
+            difficulty=req.difficulty, difficulty_provided="difficulty" in req.model_fields_set,
+            embedding=vectors[0], actor=x_actor_id)
         return {"id": concept_id, **await finish(tx, course_id)}
     return await write_graph(course_id, write)
 

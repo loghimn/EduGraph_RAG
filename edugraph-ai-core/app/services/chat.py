@@ -20,6 +20,8 @@ from app.chat.streaming import with_sse_heartbeats
 from app.chat.path_intent import PathIntent, detect_path_intent, needs_topic_context
 from app.chat.intent import classify_chat_intent
 from app.services.chat_paths import build_chat_path
+from app.retrieval.prerequisite_context import retrieve_prerequisite_context, merge_prerequisite_chunks
+from app.services.course_discovery import discover_courses, invitation
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +64,11 @@ async def chat_explain_stream_generator(
     course_names: Optional[Dict[str, str]] = None,
     graph_relationship: Optional[GraphRelationship] = None,
     known_concepts_by_course: Optional[Dict[str, List[str]]] = None,
+    course_settings_by_course=None,
+    public_courses=None,
 ) -> AsyncGenerator[str, None]:
     events = _chat_explain_events(course_id, message, concept_ids, authorized_course_ids, history, reply_context,
-                                  course_names, graph_relationship, known_concepts_by_course)
+                                  course_names, graph_relationship, known_concepts_by_course, course_settings_by_course, public_courses)
     stream = with_sse_heartbeats(events, settings.CHAT_HEARTBEAT_INTERVAL_SECONDS)
     try:
         async for frame in stream:
@@ -98,6 +102,8 @@ async def _path_events(path):
     if path.get("candidates"):
         yield format_sse("clarify", {"candidates": path["candidates"]})
     else:
+        if path.get("targets"):
+            yield format_sse("concepts", path["targets"])
         answer, indices = filter_citations(path["answer"], len(path["chunks"]))
         for offset in range(0, len(answer), 256):
             yield format_sse("token", {"token": answer[offset:offset + 256]})
@@ -140,8 +146,20 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
         yield format_sse("clarify", {"candidates": candidates[:50]})
         yield format_sse("done", {})
         return
-    chunks = await retrieve_chunks(course_id=course_id, query=query, concept_ids=linked_ids,
-                                   authorized_course_ids=authorized_course_ids, max_chunks=settings.CHAT_MAX_CHUNKS)
+    retrieval_args = dict(course_id=course_id, query=query, concept_ids=linked_ids,
+                          authorized_course_ids=authorized_course_ids, max_chunks=settings.CHAT_MAX_CHUNKS)
+    configs = conversation.get("course_settings_by_course") or {}
+    if configs:
+        retrieval_args["course_settings"] = configs
+    chunks = await retrieve_chunks(**retrieval_args)
+    prerequisite_context = None
+    if linked_ids and conversation["graph_relationship"] is None:
+        prerequisite_context, prerequisite_chunks, targets = await retrieve_prerequisite_context(
+            linked_ids, authorized_course_ids, conversation.get("known_concepts_by_course"),
+            conversation.get("course_settings_by_course"))
+        chunks = merge_prerequisite_chunks(chunks, prerequisite_chunks, settings.CHAT_MAX_CHUNKS)
+        if targets:
+            yield format_sse("concepts", targets)
     relationship_context = None
     relationship = conversation["graph_relationship"]
     if relationship is not None:
@@ -157,6 +175,16 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
                    "reply_context": conversation["reply_context"]}
     if relationship_context is not None:
         prompt_args["relationship_context"] = relationship_context
+    if prerequisite_context:
+        prompt_args["prerequisite_context"] = prerequisite_context
+    relevant_courses = {item["course_id"] for item in prerequisite_context or []}
+    relevant_courses.update(item["course_id"] for item in chunks if item.get("course_id"))
+    if course_id:
+        relevant_courses.add(course_id)
+    teaching = [configs[cid].prompt_template for cid in sorted(relevant_courses)
+                if cid in configs and configs[cid].prompt_template]
+    if teaching:
+        prompt_args["teaching_instructions"] = "\n".join(teaching)
     prompt = build_explain_prompt(message, chunks, **prompt_args)
     async for event in _answer_events(prompt, chunks):
         yield event
@@ -172,6 +200,8 @@ async def _chat_explain_events(
     course_names: Optional[Dict[str, str]] = None,
     graph_relationship: Optional[GraphRelationship] = None,
     known_concepts_by_course: Optional[Dict[str, List[str]]] = None,
+    course_settings_by_course=None,
+    public_courses=None,
 ) -> AsyncGenerator[str, None]:
     try:
         authorized_course_ids = _authorized_scope(course_id, authorized_course_ids)
@@ -208,6 +238,21 @@ async def _chat_explain_events(
             yield resolution_event
         if graph_relationship is None and semantic is None:
             path_intent = detect_path_intent(search_query) or path_intent
+        if course_id is not None and public_courses:
+            recommendations, missing = await discover_courses(
+                authorized_course_ids, public_courses, search_query, concept_ids, graph_relationship,
+                path_intent.target if path_intent else semantic.target if semantic else None,
+                semantic.relationship if semantic else None)
+            if recommendations:
+                yield format_sse('course_suggestions', recommendations)
+                yield format_sse('answer', {'content': invitation(recommendations)})
+                yield format_sse('sources', [])
+                yield format_sse('done', {})
+                return
+            if missing:
+                for event in no_data_events():
+                    yield event
+                return
         if path_intent is not None:
             yield ": computing prerequisite learning path\n\n"
             path = await build_chat_path(path_intent, authorized_course_ids, concept_ids, course_names,
@@ -215,7 +260,9 @@ async def _chat_explain_events(
             async for event in _path_events(path):
                 yield event
             return
-        conversation = {"history": history, "reply_context": reply_context, "graph_relationship": graph_relationship}
+        conversation = {"history": history, "reply_context": reply_context, "graph_relationship": graph_relationship,
+                        "known_concepts_by_course": known_concepts_by_course,
+                        "course_settings_by_course": course_settings_by_course}
         async for event in _explain_events(course_id, message, search_query, concept_ids,
                                            authorized_course_ids, course_names, conversation):
             yield event
@@ -225,14 +272,14 @@ async def _chat_explain_events(
 
 
 async def chat_endpoint(req: ChatRequest):
-    if req.course_id is not None:
-        await verify_course_exists(req.course_id)
+    # A course authorized by Java may not have a Neo4j graph yet. Discovery must
+    # also work for an empty corpus, rather than returning a graph-level 404.
 
     return StreamingResponse(
         chat_explain_stream_generator(req.course_id, req.message, req.concept_ids, req.authorized_course_ids,
                                       [item.model_dump() for item in req.history],
                                       [item.model_dump() for item in req.reply_context], req.course_names, req.graph_relationship,
-                                      req.known_concepts_by_course),
+                                      req.known_concepts_by_course, req.course_settings_by_course, req.public_courses),
         media_type="text/event-stream"
     )
 

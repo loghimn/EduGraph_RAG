@@ -7,6 +7,16 @@ from app.retrieval.graph_cache import GraphConflictError
 
 logger = logging.getLogger(__name__)
 
+
+def difficulty(data):
+    value = data.get("difficulty")
+    return value if isinstance(value, int) and 1 <= value <= 5 else 3
+
+
+def study_order(graph, concept):
+    data = graph.nodes[concept]
+    return difficulty(data), data.get("order", 0), data.get("name", ""), concept
+
 def validate_path(G: nx.DiGraph, linear_order: List[str]) -> int:
     """
     Kiểm tra tính hợp lệ của thứ tự tuyến tính trên đồ thị gốc:
@@ -39,9 +49,9 @@ def generate_learning_path(
     - Mode "goal": need = (ancestors(goal) ∪ goal) - known_all.
       + assume_known_prerequisites=True: known_all = known ∪ ancestors(known).
       + assume_known_prerequisites=False: known_all = known.
-    - Tính stages bằng topological_generations (sắp xếp trong tầng theo Concept.order).
-    - Tính linear_order bằng lexicographical_topological_sort (tie-break theo Concept.order).
-    - cytoscape_data chỉ chứa: id, name, order, role, outside_document.
+    - Tính stages bằng topological_generations (ưu tiên độ khó rồi Concept.order trong tầng).
+    - Tính linear_order bằng lexicographical_topological_sort (ưu tiên độ khó giữa các node sẵn sàng).
+    - Độ khó chưa đánh giá dùng mức trung lập 3/5; không thay đổi điều kiện tiên quyết.
     - Cảnh báo đồ thị thưa: 1 tầng (>1 concept) và tỉ lệ concept cô lập vượt ngưỡng config.
     """
     outside_map: Dict[str, Optional[bool]] = {}
@@ -124,8 +134,8 @@ def generate_learning_path(
         generations = [grouped[level] for level in sorted(grouped)]
     stages = []
     for lvl, gen in enumerate(generations):
-        # Sắp xếp các concept trong cùng tầng theo (Concept.order, name, id)
-        sorted_gen = sorted(gen, key=lambda c: (subG.nodes[c].get("order", 0), subG.nodes[c].get("name", ""), c))
+        # Ưu tiên concept dễ trong cùng tầng, sau đó thứ tự tài liệu, tên và ID.
+        sorted_gen = sorted(gen, key=lambda c: study_order(subG, c))
         steps = []
         for cid in sorted_gen:
             node_data = subG.nodes[cid]
@@ -135,19 +145,21 @@ def generate_learning_path(
                 "concept_id": cid,
                 "name": node_data.get("name", cid),
                 "order": node_data.get("order", 0),
+                "difficulty": difficulty(node_data),
+                "difficulty_rated": node_data.get("difficulty") is not None,
                 "prerequisites_in_path": preds,
                 "outside_document": outside_map.get(cid),
                 "evidence": evidences.get(cid)
             })
         stages.append({"level": lvl, "steps": steps})
 
-    # 4. Thứ tự tuyến tính: lexicographical_topological_sort (tie-break theo Concept.order)
+    # 4. Chỉ chọn trong các node đủ tiên quyết, ưu tiên độ khó tăng dần.
     linear_order = [cid for cid in nx.lexicographical_topological_sort(
         ordering_graph,
-        key=lambda c: (ordering_graph.nodes[c].get("order", 0), ordering_graph.nodes[c].get("name", ""), c)
+        key=lambda c: study_order(ordering_graph, c)
     ) if cid in subG]
 
-    # 5. Dữ liệu đồ thị Cytoscape (chỉ chứa id, name, order, role, outside_document)
+    # 5. Dữ liệu đồ thị Cytoscape không chứa embedding hay thuộc tính nội bộ.
     cyto_nodes = []
     for cid in subG.nodes:
         if mode == "goal":
@@ -165,6 +177,7 @@ def generate_learning_path(
                 "id": cid,
                 "name": subG.nodes[cid].get("name", cid),
                 "order": subG.nodes[cid].get("order", 0),
+                "difficulty": difficulty(subG.nodes[cid]),
                 "role": role,
                 "outside_document": out_doc
             }

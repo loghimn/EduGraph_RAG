@@ -13,6 +13,7 @@ public interface LearnerMasteryService {
 
     List<MasteryView> list(Long courseId);
     List<String> knownConcepts(Long courseId);
+    java.util.Map<String, List<String>> knownForChat(List<String> authorizedCourseIds);
     List<HistoryView> history(Long courseId, String conceptId);
     void initialize(Long courseId, Collection<String> conceptIds, Collection<String> knownIds);
     MasteryView update(Long courseId, String conceptId, MasteryStatus status);

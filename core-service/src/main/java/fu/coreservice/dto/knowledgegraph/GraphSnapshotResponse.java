@@ -8,7 +8,11 @@ public record GraphSnapshotResponse(
         List<Concept> nodes, List<Relationship> edges) {
 
     public record Concept(String id, String name, List<String> aliases, String language,
-                          @JsonProperty("review_status") String reviewStatus, String origin) {}
+                          @JsonProperty("review_status") String reviewStatus, String origin, Integer difficulty) {
+        public Concept(String id, String name, List<String> aliases, String language, String reviewStatus, String origin) {
+            this(id, name, aliases, language, reviewStatus, origin, null);
+        }
+    }
 
     public record Relationship(String source, String target, String status, Double score, String evidence,
                                @JsonProperty("evidence_chunk_id") String evidenceChunkId,

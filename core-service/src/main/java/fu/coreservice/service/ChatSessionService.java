@@ -22,6 +22,9 @@ public interface ChatSessionService {
     ChatTurn beginGlobalTurn(Long sessionId, ChatRequest request);
     List<String> getGlobalChatCourseIds();
     Map<String, String> getChatCourseNames(List<String> courseIds);
+    Map<String, fu.coreservice.dto.ai.PublicChatCourse> getPublicChatCatalog();
+    void finishSuggestedTurn(ChatTurn turn, String content, int latencyMs,
+                             List<fu.coreservice.dto.chat.CourseSuggestion> suggestions);
     void finishTurn(ChatTurn turn, String content, ChatMessageStatus status, String error,
                     int latencyMs, List<ChatSource> sources, boolean clarification);
     void finishClarification(ChatTurn turn, List<fu.coreservice.dto.chat.ClarificationCandidate> candidates, int latencyMs);

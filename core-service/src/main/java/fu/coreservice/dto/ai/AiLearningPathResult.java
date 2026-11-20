@@ -20,6 +20,10 @@ public record AiLearningPathResult(
     public record Step(
             @JsonProperty("concept_id") String conceptId,
             String name,
-            @JsonProperty("outside_document") Boolean outsideDocument
-    ) {}
+            @JsonProperty("outside_document") Boolean outsideDocument,
+            Integer difficulty,
+            @JsonProperty("difficulty_rated") Boolean difficultyRated
+    ) {
+        public Step(String conceptId, String name, Boolean outsideDocument) { this(conceptId, name, outsideDocument, null, null); }
+    }
 }

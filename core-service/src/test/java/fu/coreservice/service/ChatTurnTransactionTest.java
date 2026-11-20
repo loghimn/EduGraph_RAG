@@ -75,7 +75,7 @@ class ChatTurnTransactionTest {
                 repositories.getRepository(ChatSessionRepository.class), messages,
                 repositories.getRepository(MessageCitationRepository.class), mock(ActivityAlertService.class)), ChatSessionService.class, manager);
         ai = mock(AiCoreClient.class);
-        service = transactional(new ChatMessageServiceImpl(storage, ai, new ObjectMapper(), mock(ActivityAlertService.class), mock(LearnerMasteryService.class)),
+        service = transactional(new ChatMessageServiceImpl(storage, ai, new ObjectMapper(), mock(ActivityAlertService.class), mock(LearnerMasteryService.class), mock(fu.coreservice.service.CourseAiSettingsService.class), mock(fu.coreservice.service.CourseLearningAnalyticsService.class)),
                 ChatMessageService.class, manager);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(EMAIL, null, List.of()));
@@ -168,7 +168,7 @@ class ChatTurnTransactionTest {
                 "event: clarify\ndata: {\"candidates\":[{\"id\":\"a\",\"name\":\"A\"}]}\n\n"
                         + "event: done\ndata: {}\n\n").getBytes(StandardCharsets.UTF_8)));
         ChatMessageService uncertainService = transactional(
-                new ChatMessageServiceImpl(uncertainStorage, ai, new ObjectMapper(), mock(ActivityAlertService.class), mock(LearnerMasteryService.class)), ChatMessageService.class,
+                new ChatMessageServiceImpl(uncertainStorage, ai, new ObjectMapper(), mock(ActivityAlertService.class), mock(LearnerMasteryService.class), mock(fu.coreservice.service.CourseAiSettingsService.class), mock(fu.coreservice.service.CourseLearningAnalyticsService.class)), ChatMessageService.class,
                 new JpaTransactionManager(factory));
         var callback = uncertainService.sendMessage(null, sessionId, ChatRequest.builder().message("Stack?").build());
         ByteArrayOutputStream output = new ByteArrayOutputStream();

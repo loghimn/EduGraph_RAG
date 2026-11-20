@@ -97,6 +97,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 .senderType(message.getSenderType()).content(message.getContent()).status(message.getStatus())
                 .createdAt(message.getCreatedAt()).tokensUsed(message.getTokensUsed()).latencyMs(message.getLatencyMs())
                 .clarificationCandidates(ClarificationCodec.decode(message.getClarificationOptions()))
+                .courseSuggestions(fu.coreservice.utils.CourseSuggestionCodec.visible(message.getCourseSuggestions(), courses, enrollments, session.getLearner()))
                 .citations(byMessage.getOrDefault(message.getMessageId(), List.of())).build()).toList();
         return new ChatMessageWindow(result, hasOlder, rows.isEmpty() ? null : rows.get(0).getMessageId());
     }

@@ -40,6 +40,9 @@ public class ChatMessage {
     @Column(name = "clarification_options", columnDefinition = "TEXT")
     private String clarificationOptions;
 
+    @Column(name = "course_suggestions", columnDefinition = "TEXT")
+    private String courseSuggestions;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "sender_type", nullable = false)
     private SenderType senderType;

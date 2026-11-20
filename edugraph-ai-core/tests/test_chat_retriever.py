@@ -253,3 +253,22 @@ async def test_graph_evidence_rejects_chunks_outside_authorized_courses(
     assert "SECRET" not in build_explain_prompt("Stack?", chunks)
     sources = build_sources_payload(list(range(1, len(chunks) + 1)), chunks)
     assert [source["chunk_id"] for source in sources] == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_course_thresholds_are_applied_independently_in_global_chat(monkeypatch):
+    from app.schemas.chat import CourseAiSettings
+    class Session(_FakeSession):
+        async def run(self, query, **params):
+            if 'vector' in params:
+                return _FakeResult([
+                    {'id': 'strict', 'text': 'Servlet strict', 'course_id': 'c1', 'score': .6},
+                    {'id': 'lenient', 'text': 'Servlet lenient', 'course_id': 'c2', 'score': .2},
+                ])
+            return _FakeResult([])
+    monkeypatch.setattr(chunk_retriever.neo4j_client, 'driver', _FakeDriver(Session()))
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(chunk_retriever.embed_model, 'embed_batch', AsyncMock(return_value=[[0.] * 8]))
+    chunks = await chunk_retriever.retrieve_chunks(None, 'Servlet', authorized_course_ids=['c1', 'c2'],
+        course_settings={'c1': CourseAiSettings(similarityThreshold=.8), 'c2': CourseAiSettings(similarityThreshold=.1)})
+    assert [row['id'] for row in chunks] == ['lenient']

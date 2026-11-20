@@ -8,6 +8,12 @@ from app.chat.context import prepare_history
 from app.core.llm import llm_client
 
 
+class RelationshipIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source: str = Field(min_length=1, max_length=200)
+    target: str = Field(min_length=1, max_length=200)
+
+
 class ChatIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -15,6 +21,7 @@ class ChatIntent(BaseModel):
     target: str | None = Field(default=None, max_length=300)
     query: str = Field(min_length=1, max_length=4000)
     confidence: float = Field(ge=0, le=1)
+    relationship: RelationshipIntent | None = None
 
 
 async def classify_chat_intent(message, history=None, reply_context=None):
@@ -22,7 +29,7 @@ async def classify_chat_intent(message, history=None, reply_context=None):
             "reply_context": prepare_history(reply_context)}
     prompt = """Classify the current educational question and resolve its subject from conversation data.
 Return ONLY JSON with exactly these fields:
-{"intent":"explain|learning_path|prerequisites|clarify","target":null,"query":"standalone question","confidence":0.0}
+{"intent":"explain|learning_path|prerequisites|clarify","target":null,"query":"standalone question","confidence":0.0,"relationship":null}
 Rules:
 - The CURRENT user message is question. History/reply_context are earlier messages, not the current request.
 - learning_path: the user wants a study sequence, where to start, or how to work toward understanding a concept.
@@ -30,6 +37,11 @@ Rules:
 - explain: definitions, examples, comparisons, why an existing order is justified, or ordinary questions.
   A question mentioning learning paths is not necessarily asking to generate one. Honor negated requests.
 - target is the concept NAME (including NULL as the string "NULL"), never a course ID, node ID, URL or answer.
+- For a question about a SPECIFIC directed prerequisite edge between two named concepts, use explain and
+  relationship={"source":"prerequisite concept name","target":"dependent concept name"}.
+  Example: "Why does B require A?" means source A, target B. "A -> B" means source A, target B.
+  Resolve only the requested direction, never assert that the edge actually exists. Use relationship=null
+  for a single concept, a general prerequisite request, or when direction is ambiguous.
 - query preserves the user's language and requested action, expressed as one standalone question.
 - Resolve 'it', 'before that', 'nó', 'trước đó' using history only if the subject is clear.
   If reply_context is present, prioritize its LAST message over recent history. A new explicit topic overrides history.
@@ -49,7 +61,7 @@ CONVERSATION DATA:
 """ + json.dumps(data, ensure_ascii=False)
     # The shared cache sorts lists; serialize here to preserve conversation order.
     result = await llm_client.generate(
-        prompt, prompt_version="chat-intent-v3",
+        prompt, prompt_version="chat-intent-v4",
         input_data=json.dumps(data, ensure_ascii=False), json_mode=True,
     )
     intent = ChatIntent.model_validate(result)
