@@ -108,7 +108,8 @@ async def test_discovery_invitation_does_not_answer_from_other_courses_or_call_t
                       'conceptIds': ['other'], 'question': 'Gradient?', 'graphRelationship': None}
     with patch('app.services.chat.classify_chat_intent', AsyncMock(side_effect=ValueError())), \
          patch('app.services.chat.discover_courses', AsyncMock(return_value=([recommendation], True))), \
-         patch('app.services.chat.retrieve_chunks', AsyncMock()) as retrieve, \
+         patch('app.services.chat.link_concepts', AsyncMock(return_value={'concept_ids': []})), \
+         patch('app.services.chat.retrieve_chunks', AsyncMock(return_value=[])) as retrieve, \
          patch('app.services.chat.build_chat_path', AsyncMock()) as path, \
          patch('app.services.chat.llm_client.generate_stream') as llm:
         frames = [frame async for frame in chat_explain_stream_generator('1', 'Gradient?',
@@ -116,4 +117,26 @@ async def test_discovery_invitation_does_not_answer_from_other_courses_or_call_t
     assert any(frame.startswith('event: course_suggestions') for frame in frames)
     assert 'Bạn có muốn học môn này không?' in ''.join(frames)
     assert 'event: sources\ndata: []' in ''.join(frames)
-    retrieve.assert_not_awaited(); path.assert_not_awaited(); llm.assert_not_called()
+    retrieve.assert_awaited_once()
+    assert retrieve.call_args.kwargs['authorized_course_ids'] == ['1']
+    path.assert_not_awaited(); llm.assert_not_called()
+
+
+@pytest.mark.parametrize('groups', [[], [{'key'}]])
+def test_incomplete_edge_endpoints_are_unavailable_without_indexing_missing_groups(groups):
+    relation = GraphRelationship(source_id='missing', target_id='also-missing')
+    assert select_courses([concept('a', '2', 'Key')], [], groups, ['1'],
+                          {'2': PublicCourse(name='SQL')}, 'Key -> Key', relation) == ([], True)
+
+
+def test_edge_evidence_must_belong_to_its_actual_endpoints_and_later_valid_edges_are_considered():
+    concepts = [concept('key-with-proof', '2', 'Key'), concept('key-without-proof', '2', 'Key', evidence=False),
+                concept('join-without-proof', '2', 'Join', evidence=False)]
+    groups = [{'key'}, {'join'}]
+    edges = [dict(source='key-without-proof', target='join-without-proof', course_id='2')]
+    catalog = {'2': PublicCourse(name='SQL')}
+    assert select_courses(concepts, edges, groups, ['1'], catalog, 'Key -> Join') == ([], True)
+    edges.append(dict(source='key-with-proof', target='join-without-proof', course_id='2'))
+    rows, missing = select_courses(concepts, edges, groups, ['1'], catalog, 'Key -> Join')
+    assert missing
+    assert rows[0]['conceptIds'] == ['key-with-proof', 'join-without-proof']

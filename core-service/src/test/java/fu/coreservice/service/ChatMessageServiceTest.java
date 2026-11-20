@@ -448,13 +448,22 @@ class ChatMessageServiceTest {
     @Test
     void suggestionsUseTheServerPublicCatalogAndArePersistedWithTheAnswer() throws Exception {
         when(storage.getPublicChatCatalog()).thenReturn(Map.of("8", new fu.coreservice.dto.ai.PublicChatCourse("SQL", true)));
-        run("event: course_suggestions\ndata: [{\"courseId\":\"8\",\"courseName\":\"Forged name\",\"enrolled\":false,\"subject\":\"Key → Join\",\"conceptIds\":[\"key8\",\"join8\"],\"graphRelationship\":{\"sourceId\":\"key8\",\"targetId\":\"join8\"},\"question\":\"Explain Key -> Join\"}]\n\n"
-                + "event: answer\ndata: {\"content\":\"Would you like to switch?\"}\n\nevent: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
+        var output = run("event: course_suggestions\ndata: [{\"courseId\":\"8\",\"courseName\":\"Forged name\",\"enrolled\":false,\"subject\":\"Key → Join\",\"conceptIds\":[\"key8\",\"join8\"],\"graphRelationship\":{\"sourceId\":\"key8\",\"targetId\":\"join8\"},\"question\":\"Explain Key -> Join\"}]\n\n"
+                + "event: answer\ndata: {\"content\":\"Would you like to switch?\", \"extra\":\"preserve\"}\n\nevent: sources\ndata: []\n\nevent: done\ndata: {}\n\n");
         var captured = ArgumentCaptor.forClass(java.util.List.class);
         verify(storage).finishSuggestedTurn(eq(turn), eq("Would you like to switch?"), anyInt(), captured.capture());
         var row = (fu.coreservice.dto.chat.CourseSuggestion) captured.getValue().getFirst();
         assertEquals("SQL", row.courseName()); assertTrue(row.enrolled());
         assertEquals("key8", row.graphRelationship().sourceId());
+        String wire = output.toString(StandardCharsets.UTF_8);
+        String suggestionsJson = wire.lines().filter(line -> line.startsWith("data: ") && line.contains("courseName"))
+                .findFirst().orElseThrow().substring(6);
+        var forwarded = new ObjectMapper().readTree(suggestionsJson).get(0);
+        assertEquals("SQL", forwarded.path("courseName").asText());
+        assertTrue(forwarded.path("enrolled").asBoolean());
+        assertEquals(row.courseId().longValue(), forwarded.path("courseId").asLong());
+        assertFalse(wire.contains("Forged name"));
+        assertTrue(wire.contains("data: {\"content\":\"Would you like to switch?\", \"extra\":\"preserve\"}"));
         var request = ArgumentCaptor.forClass(AiChatRequest.class);
         verify(client).openChatStream(request.capture());
         assertEquals(List.of("7"), request.getValue().getAuthorizedCourseIds());

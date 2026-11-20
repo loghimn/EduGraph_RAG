@@ -12,6 +12,7 @@ from app.db import graph_repository
 from app.retrieval.concept_linker import link_concepts
 from app.retrieval.chunk_retriever import retrieve_chunks
 from app.retrieval.relationship_retriever import retrieve_relationship
+from app.retrieval.named_relationship import resolve_named_relationship
 from app.chat.answer import build_explain_prompt, filter_citations, build_sources_payload
 from app.core.llm import llm_client
 from app.core.errors import LLMUnavailableError
@@ -140,7 +141,29 @@ async def _answer_events(prompt, chunks):
     yield format_sse("done", {})
 
 
+def _suggestion_events(recommendations):
+    return [format_sse('course_suggestions', recommendations),
+            format_sse('answer', {'content': invitation(recommendations)}),
+            format_sse('sources', []), format_sse('done', {})]
+
+
+async def _fallback_events(course_id, query, concept_ids, authorized_course_ids, conversation):
+    """Call only after ordinary in-scope retrieval and exact-edge evidence are exhausted."""
+    if course_id is not None and conversation.get('public_courses'):
+        recommendations, _ = await discover_courses(
+            authorized_course_ids, conversation['public_courses'], query, concept_ids,
+            conversation['graph_relationship'], conversation.get('target'), conversation.get('relationship_names'))
+        if recommendations:
+            return _suggestion_events(recommendations)
+    return no_data_events()
+
+
 async def _explain_events(course_id, message, query, concept_ids, authorized_course_ids, course_names, conversation):
+    relationship = conversation['graph_relationship']
+    relationship_context = None
+    names = conversation.get('relationship_names')
+    if relationship is None and names is not None:
+        relationship, relationship_context, concept_ids = await resolve_named_relationship(names, authorized_course_ids)
     linked_ids, candidates = await _link_question(authorized_course_ids, query, concept_ids, course_names)
     if candidates:
         yield format_sse("clarify", {"candidates": candidates[:50]})
@@ -153,22 +176,20 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
         retrieval_args["course_settings"] = configs
     chunks = await retrieve_chunks(**retrieval_args)
     prerequisite_context = None
-    if linked_ids and conversation["graph_relationship"] is None:
+    if linked_ids and relationship is None and names is None:
         prerequisite_context, prerequisite_chunks, targets = await retrieve_prerequisite_context(
             linked_ids, authorized_course_ids, conversation.get("known_concepts_by_course"),
             conversation.get("course_settings_by_course"))
         chunks = merge_prerequisite_chunks(chunks, prerequisite_chunks, settings.CHAT_MAX_CHUNKS)
         if targets:
             yield format_sse("concepts", targets)
-    relationship_context = None
-    relationship = conversation["graph_relationship"]
     if relationship is not None:
         relationship_context, evidence = await retrieve_relationship(relationship, authorized_course_ids)
         evidence_ids = {item["id"] for item in evidence}
         chunks = (evidence + [item for item in chunks if item["id"] not in evidence_ids])[:settings.CHAT_MAX_CHUNKS]
     if not chunks:
         logger.info("Chat retrieval stopped: no chunks linked_concepts=%d", len(linked_ids or []))
-        for event in no_data_events():
+        for event in await _fallback_events(course_id, query, concept_ids, authorized_course_ids, conversation):
             yield event
         return
     prompt_args = {"history": conversation["history"], "resolved_question": query,
@@ -224,35 +245,36 @@ async def _chat_explain_events(
                 logger.warning("Intent classification failed; using existing routing. error_type=%s", type(error).__name__)
             if semantic is not None:
                 if semantic.intent == "clarify" or semantic.confidence < .7 or (
-                    semantic.intent in {"learning_path", "prerequisites"} and not (semantic.target or "").strip()
+                    semantic.intent in {"learning_path", "prerequisites"} and semantic.relationship is None
+                    and not (semantic.target or "").strip()
                 ):
                     async for event in _path_events({"answer": "Bạn muốn tìm lộ trình, kiến thức tiên quyết hay giải thích cho khái niệm nào? Hãy cho mình tên khái niệm cụ thể nhé.", "chunks": []}):
                         yield event
                     return
                 search_query = semantic.query.strip()
                 path_intent = (PathIntent(semantic.target.strip())
-                               if semantic.intent in {"learning_path", "prerequisites"} else None)
+                               if semantic.intent in {"learning_path", "prerequisites"} and semantic.relationship is None else None)
         if semantic is None and _needs_conversation_context(history, reply_context, path_intent):
             yield ": resolving conversation context\n\n"
             search_query, resolution_event = await _resolve_search_query(message, history, reply_context)
             yield resolution_event
         if graph_relationship is None and semantic is None:
             path_intent = detect_path_intent(search_query) or path_intent
-        if course_id is not None and public_courses:
+        if path_intent is not None and course_id is not None and public_courses:
             recommendations, missing = await discover_courses(
                 authorized_course_ids, public_courses, search_query, concept_ids, graph_relationship,
                 path_intent.target if path_intent else semantic.target if semantic else None,
                 semantic.relationship if semantic else None)
-            if recommendations:
-                yield format_sse('course_suggestions', recommendations)
-                yield format_sse('answer', {'content': invitation(recommendations)})
-                yield format_sse('sources', [])
-                yield format_sse('done', {})
-                return
-            if missing:
-                for event in no_data_events():
-                    yield event
-                return
+            if recommendations or missing:
+                retrieval_args = dict(course_id=course_id, query=search_query, concept_ids=concept_ids,
+                                      authorized_course_ids=authorized_course_ids, max_chunks=settings.CHAT_MAX_CHUNKS)
+                if course_settings_by_course:
+                    retrieval_args['course_settings'] = course_settings_by_course
+                # Missing graph annotations are not proof of missing course material.
+                if not await retrieve_chunks(**retrieval_args):
+                    for event in _suggestion_events(recommendations) if recommendations else no_data_events():
+                        yield event
+                    return
         if path_intent is not None:
             yield ": computing prerequisite learning path\n\n"
             path = await build_chat_path(path_intent, authorized_course_ids, concept_ids, course_names,
@@ -262,7 +284,10 @@ async def _chat_explain_events(
             return
         conversation = {"history": history, "reply_context": reply_context, "graph_relationship": graph_relationship,
                         "known_concepts_by_course": known_concepts_by_course,
-                        "course_settings_by_course": course_settings_by_course}
+                        "course_settings_by_course": course_settings_by_course,
+                        "public_courses": public_courses,
+                        "target": semantic.target if semantic else None,
+                        "relationship_names": semantic.relationship if semantic else None}
         async for event in _explain_events(course_id, message, search_query, concept_ids,
                                            authorized_course_ids, course_names, conversation):
             yield event

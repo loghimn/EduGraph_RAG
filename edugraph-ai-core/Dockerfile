@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir --only-binary=:all: --require-hashes \
     && chown -R app:app /data /app
 COPY --chown=app:app app ./app
 COPY --chown=app:app prompts ./prompts
+COPY --chown=app:app scripts/run_pipeline.py ./scripts/run_pipeline.py
 USER 10001
 EXPOSE 8082
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082", "--workers", "1"]

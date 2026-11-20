@@ -56,10 +56,12 @@ def matching_groups(concepts, query, concept_ids=None, relationship=None, target
 
 def select_courses(concepts, edges, groups, scope, public_courses, query, relationship=None):
     if not groups:
-        return [], False
+        return [], relationship is not None
     edge_question = relationship is not None or len(groups) == 2 and bool(re.search(
         r'->|→|quan he|relationship|\bedge\b|\bcanh\b', normalize_text_unaccent(query.lower())))
     directed = relationship is not None or '->' in query or '→' in query
+    if edge_question and len(groups) != 2:
+        return [], True
     available = {}
     for course in sorted({row['course_id'] for row in concepts}):
         matches = [[row for row in concepts if row['course_id'] == course and keys(row) & group]
@@ -69,12 +71,15 @@ def select_courses(concepts, edges, groups, scope, public_courses, query, relati
         selected = [next((row for row in group if row.get('has_evidence')), group[0]) for group in matches]
         if edge_question:
             left, right = {row['id'] for row in matches[0]}, {row['id'] for row in matches[1]}
+            by_id = {row['id']: row for row in concepts}
+            # Evaluate evidence on the actual edge endpoints. Another concept
+            # sharing an alias must not supply evidence for this relationship.
             edge = next((edge for edge in edges if edge['course_id'] == course and (
                 edge['source'] in left and edge['target'] in right or
-                not directed and edge['source'] in right and edge['target'] in left)), None)
-            if edge is None or not any(row.get('has_evidence') for row in selected):
+                not directed and edge['source'] in right and edge['target'] in left)
+                and any(by_id[cid].get('has_evidence') for cid in (edge['source'], edge['target']))), None)
+            if edge is None:
                 continue
-            by_id = {row['id']: row for row in concepts}
             selected = [by_id[edge['source']], by_id[edge['target']]]
         elif not all(row.get('has_evidence') for row in selected):
             continue

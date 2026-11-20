@@ -6,5 +6,7 @@
 !app/**
 !prompts/
 !prompts/**
+!scripts/
+!scripts/run_pipeline.py
 **/__pycache__/
 **/*.pyc

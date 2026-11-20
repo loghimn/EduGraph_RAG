@@ -122,7 +122,12 @@ public class ChatMessageServiceImpl implements ChatMessageService {
                             return;
                         }
                         if (!execution.accept(event, payload)) return;
-                        writeEvent(output, event, "error".equals(event) ? CLIENT_ERROR_PAYLOAD : payload);
+                        String clientPayload = switch (event) {
+                            case "error" -> CLIENT_ERROR_PAYLOAD;
+                            case "course_suggestions" -> objectMapper.writeValueAsString(execution.state.suggestions);
+                            default -> payload;
+                        };
+                        writeEvent(output, event, clientPayload);
                         event = "message";
                         data.setLength(0);
                     } else if (line.startsWith("event:")) {

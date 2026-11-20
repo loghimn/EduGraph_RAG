@@ -115,7 +115,7 @@ async def retrieve_chunks(
     YIELD node, score
     WHERE node.course_id IN $authorized_course_ids
     RETURN node.id AS id, node.text AS text, node.doc_id AS doc_id, node.page AS page, node.index AS index, node.course_id AS course_id, score
-    ORDER BY score DESC LIMIT 200
+    ORDER BY score DESC LIMIT $k
     """
 
     # 3. Fulltext search
@@ -142,6 +142,9 @@ async def retrieve_chunks(
             try:
                 res_vec = await session.run(vec_query, k=fetch_k, vector=vec, course_id=course_id, authorized_course_ids=authorized_course_ids)
                 vector_results = await res_vec.data()
+                # Stop only when this batch has usable, authorized results that
+                # pass their own course's threshold, not merely raw vector hits.
+                vector_results = filter_vector_batch(vector_results, course_id, course_settings)
             except Exception:
                 # Nếu vector index chưa sẵn sàng trong mock/test
                 vector_results = []
@@ -165,12 +168,15 @@ async def retrieve_chunks(
             # Nếu fulltext index chưa sẵn sàng
             pass
 
-    if course_settings:
-        vector_results = [row for row in vector_results if row.get("score", 1) >= (
-            course_settings[row.get("course_id", course_id)].similarity_threshold
-            if row.get("course_id", course_id) in course_settings else settings.CHAT_MIN_VECTOR_SCORE)]
     return rank_chunks(query, graph_chunks, vector_results, fulltext_results, max_chunks,
-                       min_vector_score=0 if course_settings else None)
+                       min_vector_score=0)
+
+
+def filter_vector_batch(rows, course_id, course_settings):
+    configs = course_settings or {}
+    return [row for row in rows if row.get("id") and row.get("text", "").strip() and row.get("score", 1) >= (
+        configs[row.get("course_id", course_id)].similarity_threshold
+        if row.get("course_id", course_id) in configs else settings.CHAT_MIN_VECTOR_SCORE)]
 
 
 def _fuse_chunk_channels(channels, min_vector_score=None):
