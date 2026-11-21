@@ -27,6 +27,7 @@ MATCH (s:Concept {id: edge.source_id, course_id: $course_id})
 MATCH (t:Concept {id: edge.target_id, course_id: $course_id})
 MERGE (s)-[r:PREREQUISITE_OF]->(t)
 ON CREATE SET r.status = 'CONFIRMED', r.score = edge.score,
+    r.embedding_score = edge.embedding_score, r.llm_score = edge.llm_score, r.rule_score = edge.rule_score,
     r.evidence = edge.evidence, r.source = edge.source, r.source_type = edge.source,
     r.evidence_chunk_id = edge.evidence_chunk_id, r.model = edge.model,
     r.prompt_version = edge.prompt_version, r.reviewed_by = $owner_id,
@@ -34,6 +35,7 @@ ON CREATE SET r.status = 'CONFIRMED', r.score = edge.score,
 WITH r, edge
 WHERE r.status = 'AUTO'
 SET r.status = 'CONFIRMED', r.score = edge.score, r.evidence = edge.evidence,
+    r.embedding_score = edge.embedding_score, r.llm_score = edge.llm_score, r.rule_score = edge.rule_score,
     r.reviewed_by = $owner_id, r.reviewed_at = timestamp()
 """
 CONCEPTS = """

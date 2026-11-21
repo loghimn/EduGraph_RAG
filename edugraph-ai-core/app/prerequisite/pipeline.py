@@ -108,7 +108,7 @@ async def run_prerequisite_pipeline(course_id: str, new_concept_ids: set | None 
             rule_scores[cand["id"]] = score
 
         # 4. fusion
-        edges = fuse_scores(tgt_id, llm_results, rule_scores)
+        edges = fuse_scores(tgt_id, llm_results, rule_scores, {c["id"]: c.get("embedding_score") for c in cands})
         return edges
 
     tasks = []
@@ -174,6 +174,7 @@ async def save_prerequisite_edges(course_id: str, edges: List[Dict[str, Any]], r
         r.score = edge.score,
         r.llm_score = coalesce(edge.llm_score, 0),
         r.rule_score = coalesce(edge.rule_score, 0),
+        r.embedding_score = edge.embedding_score,
         r.source = edge.source,
         r.source_type = edge.source,
         r.evidence = edge.evidence,
@@ -184,6 +185,7 @@ async def save_prerequisite_edges(course_id: str, edges: List[Dict[str, Any]], r
         r.score = CASE WHEN r.status = 'AUTO' THEN edge.score ELSE r.score END,
         r.llm_score = CASE WHEN r.status = 'AUTO' THEN coalesce(edge.llm_score, 0) ELSE r.llm_score END,
         r.rule_score = CASE WHEN r.status = 'AUTO' THEN coalesce(edge.rule_score, 0) ELSE r.rule_score END,
+        r.embedding_score = CASE WHEN r.status = 'AUTO' THEN edge.embedding_score ELSE r.embedding_score END,
         r.source = CASE WHEN r.status = 'AUTO' THEN edge.source ELSE r.source END,
         r.source_type = CASE WHEN r.status = 'AUTO' THEN edge.source ELSE r.source_type END,
         r.evidence = CASE WHEN r.status = 'AUTO' THEN edge.evidence ELSE r.evidence END,

@@ -49,9 +49,18 @@ async def get_existing_directed_edges(course_id: str) -> Dict[str, Dict[str, str
             edges[tgt][src] = st
         return edges
 
-def compute_cosine_similarity(emb1: List[float], emb2: List[float]) -> float:
-    # Vector t\u1eeb DB \u0111\u00e3 l\u00e0 unit vector, n\u00ean ch\u1ec9 c\u1ea7n dot product
-    return float(np.dot(emb1, emb2))
+def compute_cosine_similarity(emb1, emb2):
+    """Normalize stored vectors and reject missing, malformed or nonfinite embeddings."""
+    if emb1 is None or emb2 is None:
+        return None
+    try:
+        a, b = np.asarray(emb1, dtype=float), np.asarray(emb2, dtype=float)
+        if a.ndim != 1 or a.shape != b.shape or not a.size or not np.isfinite(a).all() or not np.isfinite(b).all():
+            return None
+        norm = np.linalg.norm(a) * np.linalg.norm(b)
+        return float(np.clip(np.dot(a, b) / norm, -1, 1)) if np.isfinite(norm) and norm > 0 else None
+    except (TypeError, ValueError):
+        return None
 
 async def build_candidate_pairs(course_id: str) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -117,6 +126,10 @@ def candidate_pairs_from_data(concepts, cooccurrences, existing_edges):
         
         final_cands = _select_target_candidates(tgt_id, chain(tgt_cooc, cosine_cands), concept_map, tgt_edges)
 
-        candidates_dict[tgt_id] = final_cands
+        candidates_dict[tgt_id] = [
+            {**candidate, "embedding_score": compute_cosine_similarity(
+                concept_map[tgt_id].get("embedding"), candidate.get("embedding"))}
+            for candidate in final_cands
+        ]
         
     return candidates_dict
