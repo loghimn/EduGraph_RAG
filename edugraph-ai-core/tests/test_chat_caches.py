@@ -2,6 +2,7 @@ import json
 from unittest.mock import AsyncMock
 import networkx as nx
 import pytest
+from diskcache import Timeout
 from app.config import settings
 from app.chat import response_cache as answers
 from app.services import chat
@@ -91,8 +92,10 @@ async def test_communities_are_scoped_cached_and_rebuilt_after_graph_version_cha
     communities._SUMMARIES.clear()
 
 
-def test_cache_storage_failure_does_not_break_answer_generation(store,monkeypatch):
-    def broken(*args,**kwargs): raise OSError('unavailable')
+@pytest.mark.parametrize('error', [OSError, Timeout])
+def test_cache_storage_failure_does_not_break_answer_generation(store, monkeypatch, error):
+    def broken(*args, **kwargs):
+        raise error('unavailable')
     monkeypatch.setattr(store,'get',broken)
     monkeypatch.setattr(store,'set',broken)
     assert answers.read_answer('key') is None

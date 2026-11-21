@@ -128,7 +128,7 @@ async def _link_question(authorized_course_ids, query, concept_ids, course_names
 
 async def _answer_events(prompt, chunks, cache_scope=None):
     key = response_key(prompt, chunks, cache_scope)
-    cached = read_answer(key)
+    cached = await asyncio.to_thread(read_answer, key)
     if cached is not None:
         answer, indices = filter_citations(cached, len(chunks))
         for offset in range(0, len(answer), 256):
@@ -150,7 +150,7 @@ async def _answer_events(prompt, chunks, cache_scope=None):
         answer, indices = filter_citations("".join(accumulated_tokens), len(chunks))
         yield format_sse("answer", {"content": answer})
         yield format_sse("sources", build_sources_payload(indices, chunks))
-        save_answer(key, answer)
+        await asyncio.to_thread(save_answer, key, answer)
     yield format_sse("done", {})
 
 

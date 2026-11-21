@@ -35,6 +35,7 @@ ON CREATE SET r.status = 'CONFIRMED', r.score = edge.score,
 WITH r, edge
 WHERE r.status = 'AUTO'
 SET r.status = 'CONFIRMED', r.score = edge.score, r.evidence = edge.evidence,
+    r.source = edge.source, r.source_type = edge.source,
     r.embedding_score = edge.embedding_score, r.llm_score = edge.llm_score, r.rule_score = edge.rule_score,
     r.reviewed_by = $owner_id, r.reviewed_at = timestamp()
 """

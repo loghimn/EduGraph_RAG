@@ -16,7 +16,8 @@ def test_embedding_gate_rejects_unrelated_or_missing_vectors_and_preserves_direc
            {"id": "missing", "confidence": .99}]
     result = fuse_scores("target", llm, {}, {"related": .9, "unrelated": 0, "missing": None})
     assert len(result) == 1
-    assert result[0]["source_id"] == "related" and result[0]["target_id"] == "target"
+    assert result[0]["source_id"] == "related"
+    assert result[0]["target_id"] == "target"
     assert result[0]["embedding_score"] == .9
     assert result[0]["source"] == "HYBRID"
     assert fuse_scores("target", [], {}, {"related": 1}) == []

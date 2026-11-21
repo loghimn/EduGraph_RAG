@@ -3,6 +3,8 @@ import hashlib
 import json
 import logging
 import sqlite3
+
+from diskcache import Timeout
 from app.config import settings
 from app.core.cache import cache
 
@@ -24,7 +26,7 @@ def read_answer(key):
     try:
         value = cache.get(key)
         return value if isinstance(value, str) else None
-    except (OSError, sqlite3.Error):
+    except (OSError, sqlite3.Error, Timeout):
         logger.warning("Answer cache unavailable; generating from current evidence")
         return None
 
@@ -33,5 +35,5 @@ def save_answer(key, answer):
     if key and answer.strip() and len(answer) <= 100_000:
         try:
             cache.set(key, answer, expire=settings.CHAT_ANSWER_CACHE_TTL_SECONDS)
-        except (OSError, sqlite3.Error):
+        except (OSError, sqlite3.Error, Timeout):
             logger.warning("Answer cache write skipped")

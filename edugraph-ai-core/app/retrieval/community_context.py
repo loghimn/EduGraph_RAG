@@ -29,6 +29,20 @@ def summarize_graph(graph):
     return summaries
 
 
+async def _course_summaries(course, graph, version):
+    cached = _SUMMARIES.get(course)
+    now = time.monotonic()
+    ttl = settings.CHAT_SUMMARY_CACHE_TTL_SECONDS
+    if cached is None or cached[0] != version or cached[1] <= now:
+        summaries = await asyncio.to_thread(summarize_graph, graph)
+        cached = (version, now + ttl, summaries)
+        _SUMMARIES[course] = cached
+    _SUMMARIES.move_to_end(course)
+    while len(_SUMMARIES) > _MAX_COURSES:
+        _SUMMARIES.popitem(last=False)
+    return cached[2]
+
+
 async def retrieve_community_context(concept_ids, authorized_courses, chunks):
     if not concept_ids:
         return []
@@ -37,19 +51,10 @@ async def retrieve_community_context(concept_ids, authorized_courses, chunks):
     result = []
     for course in courses:
         graph, version, _, _ = await get_course_graph(course)
-        cached = _SUMMARIES.get(course)
-        now = time.monotonic()
-        ttl = settings.CHAT_SUMMARY_CACHE_TTL_SECONDS
-        if cached is None or cached[0] != version or cached[1] <= now:
-            summaries = await asyncio.to_thread(summarize_graph, graph)
-            cached = (version, now + ttl, summaries)
-            _SUMMARIES[course] = cached
-        _SUMMARIES.move_to_end(course)
-        while len(_SUMMARIES) > _MAX_COURSES:
-            _SUMMARIES.popitem(last=False)
+        summaries = await _course_summaries(course, graph, version)
         seen = set()
         for cid in concept_ids:
-            summary = cached[2].get(cid)
+            summary = summaries.get(cid)
             if summary is None or id(summary) in seen:
                 continue
             seen.add(id(summary))
