@@ -37,7 +37,7 @@ public class OpenApiConfig {
 
         return new OpenAPI()
                 .info(new Info()
-                        .title("EduGraph RAG API")
+                        .title("EduGraph-RAG API")
                         .version("1.0"))
                 .addSecurityItem(new SecurityRequirement().addList("bearerAuth"))
                 .addSecurityItem(new SecurityRequirement().addList("googleOAuth2"))
