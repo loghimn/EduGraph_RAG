@@ -23,6 +23,8 @@ from app.chat.intent import classify_chat_intent
 from app.services.chat_paths import build_chat_path
 from app.retrieval.prerequisite_context import retrieve_prerequisite_context, merge_prerequisite_chunks
 from app.services.course_discovery import discover_courses, invitation
+from app.retrieval.community_context import retrieve_community_context
+from app.chat.response_cache import response_key, read_answer, save_answer
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +126,17 @@ async def _link_question(authorized_course_ids, query, concept_ids, course_names
     return result.get("concept_ids", []), result.get("clarify")
 
 
-async def _answer_events(prompt, chunks):
+async def _answer_events(prompt, chunks, cache_scope=None):
+    key = response_key(prompt, chunks, cache_scope)
+    cached = await asyncio.to_thread(read_answer, key)
+    if cached is not None:
+        answer, indices = filter_citations(cached, len(chunks))
+        for offset in range(0, len(answer), 256):
+            yield format_sse("token", {"token": answer[offset:offset + 256]})
+        yield format_sse("answer", {"content": answer})
+        yield format_sse("sources", build_sources_payload(indices, chunks))
+        yield format_sse("done", {})
+        return
     accumulated_tokens = []
     has_error = False
     async for token in llm_client.generate_stream(prompt, priority=True):
@@ -138,6 +150,7 @@ async def _answer_events(prompt, chunks):
         answer, indices = filter_citations("".join(accumulated_tokens), len(chunks))
         yield format_sse("answer", {"content": answer})
         yield format_sse("sources", build_sources_payload(indices, chunks))
+        await asyncio.to_thread(save_answer, key, answer)
     yield format_sse("done", {})
 
 
@@ -189,6 +202,15 @@ def _prompt_arguments(course_id, query, chunks, configs, conversation, relations
     return arguments
 
 
+async def _optional_community_context(concept_ids, courses, chunks):
+    try:
+        return await asyncio.wait_for(retrieve_community_context(concept_ids, courses, chunks), timeout=1.0)
+    except Exception as error:
+        # Optional orientation metadata must never prevent a source-backed answer.
+        logger.warning("Community context unavailable; error_type=%s", type(error).__name__)
+        return []
+
+
 async def _explain_events(course_id, message, query, concept_ids, authorized_course_ids, course_names, conversation):
     relationship = conversation['graph_relationship']
     relationship_context = None
@@ -229,8 +251,11 @@ async def _explain_events(course_id, message, query, concept_ids, authorized_cou
             yield event
         return
     prompt_args = _prompt_arguments(course_id, query, chunks, configs, conversation, relationship_context, prerequisite_context)
+    community_context = await _optional_community_context(linked_ids, authorized_course_ids, chunks)
+    if community_context:
+        prompt_args['community_context'] = community_context
     prompt = build_explain_prompt(message, chunks, **prompt_args)
-    async for event in _answer_events(prompt, chunks):
+    async for event in _answer_events(prompt, chunks, cache_scope=authorized_course_ids):
         yield event
 
 

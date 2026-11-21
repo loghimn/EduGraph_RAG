@@ -116,7 +116,7 @@ async def infer_edges(course_id, payload):
         texts = evidence.get(tid, [])
         result = await judge_prerequisites(target, cands, texts)
         rules = {c["id"]: evaluate_rule_signals(target["name"], c["name"], texts) for c in cands}
-        return fuse_scores(tid, result, rules)
+        return fuse_scores(tid, result, rules, {c["id"]: c.get("embedding_score") for c in cands})
     results = await gather_owned(*(judge(tid, cands) for tid, cands in candidates.items()
                                    if tid in touched or any(c["id"] in touched for c in cands)))
     graph = nx.DiGraph()
