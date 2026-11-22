@@ -12,6 +12,21 @@ import java.util.List;
 
 @Repository
 public interface LearningPathStepRepository extends JpaRepository<LearningPathStep, Long> {
+    interface ConceptName {
+        String getConceptId();
+        String getName();
+    }
+
+    @Query("""
+            select s.neo4jConceptId as conceptId, s.conceptLabel as name
+            from LearningPathStep s
+            where s.plan.course.courseId = :courseId and s.neo4jConceptId in :conceptIds
+              and s.plan.learner.role = fu.coreservice.entity.UserRole.STUDENT
+            order by s.plan.generatedAt desc, s.stepId desc
+            """)
+    List<ConceptName> findConceptNamesForCourse(@Param("courseId") Long courseId,
+                                              @Param("conceptIds") java.util.Collection<String> conceptIds);
+
     interface PlanStepCounts {
         Long getPlanId();
         Long getTotal();
