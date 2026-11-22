@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     W_LLM: float = 0.8
     W_RULE: float = 0.2
     EDGE_MIN_SCORE: float = 0.4
+    W_EMBEDDING: float = Field(default=0.2, ge=0)
+    PREREQ_MIN_EMBEDDING_SCORE: float = Field(default=0.15, ge=-1, le=1)
 
     # Chat Constants
     GRAPH_VERSION_CHECK_INTERVAL: float = 10.0
@@ -77,6 +79,8 @@ class Settings(BaseSettings):
     VECTOR_OVERFETCH_STEP: int = 4
     VECTOR_OVERFETCH_MAX: int = 2000
     CHAT_MAX_CHUNKS: int = 6
+    CHAT_ANSWER_CACHE_TTL_SECONDS: int = Field(default=300, ge=0, le=3600)
+    CHAT_SUMMARY_CACHE_TTL_SECONDS: int = Field(default=300, ge=0, le=3600)
     CHAT_INTENT_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
     CHAT_MIN_VECTOR_SCORE: float = Field(default=0.35, ge=0, le=1)
     MIN_CHARS_PER_PAGE: int = 100

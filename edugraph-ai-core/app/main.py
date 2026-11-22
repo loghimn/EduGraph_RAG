@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
         finally:
             await neo4j_client.close()
 
-app = FastAPI(title="EduGraph AI Core", lifespan=lifespan)
+app = FastAPI(title="EduGraph-RAG AI Core", lifespan=lifespan)
 
 @app.get("/health")
 async def health_check():

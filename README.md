@@ -34,3 +34,11 @@ Xem [hướng dẫn CI/CD cho edugraph-rag.io.vn](deploy/README.md): kiểm tra 
 - Java: `http://localhost:8080/swagger-ui/index.html`.
 - Python: `http://localhost:8082/docs`.
 - [API trạng thái kiến thức người học](core-service/MASTERY_API.md).
+
+## Mastery, phản hồi và cache hỏi đáp
+
+- Trang **Kiến thức của tôi** cho phép tự đánh giá các concept đã được ghi nhận trong lộ trình: **Đã nắm vững**, **Đang học**, **Chưa học**. Chuyển về Chưa học có xác nhận; lịch sử cho biết trạng thái trước/sau, thời điểm và nguồn cập nhật. Thay đổi hồ sơ không viết lại tiến độ của lộ trình đã lưu.
+- Câu trả lời hoàn tất ở **Hỏi AI** hỗ trợ like/dislike, thêm/sửa bình luận (tối đa 2.000 ký tự) và bỏ đánh giá. Thao tác lưu được khóa để tránh gửi lặp.
+- Cạnh tự sinh được kiểm chứng bằng cosine đã chuẩn hóa, sau đó kết hợp điểm LLM, rule và embedding. `PREREQ_MIN_EMBEDDING_SCORE` mặc định `0.15`, `W_EMBEDDING` mặc định `0.2`; trọng số được chuẩn hóa khi kết hợp. Embedding chỉ kiểm tra mức liên quan, LLM vẫn quyết định chiều tiên quyết. Áp dụng cho lần trích xuất tiếp theo, giữ các quan hệ đã duyệt.
+- Chat cache câu trả lời khớp chính xác sau khi đã kiểm tra phạm vi truy cập và lấy nguồn hiện tại. Khóa gồm prompt đầy đủ (ngữ cảnh, mastery, hướng dẫn), nội dung/định danh nguồn, phạm vi môn và model. Không cache lỗi hoặc luồng bị dừng. `CHAT_ANSWER_CACHE_TTL_SECONDS` mặc định `300`, đặt `0` để tắt.
+- Tóm tắt cụm concept là metadata trích từ đồ thị, không phải nguồn trích dẫn. Cache theo môn và phiên bản đồ thị, tối đa 64 môn, TTL `CHAT_SUMMARY_CACHE_TTL_SECONDS` mặc định `300`. Chat chỉ dùng tối đa 3 cụm từ các môn đã cung cấp nguồn hợp lệ; lỗi hoặc quá thời gian lấy tóm tắt sẽ tiếp tục trả lời bằng các đoạn nguồn.
