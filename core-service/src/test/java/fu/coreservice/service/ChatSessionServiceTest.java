@@ -45,7 +45,7 @@ class ChatSessionServiceTest {
     @Mock MessageCitationRepository messageCitationRepository;
     @InjectMocks ChatSessionServiceImpl service;
 
-    private final User learner = User.builder().userId(2L).email("learner@example.com").build();
+    private final User learner = User.builder().userId(2L).email("learner@example.com").role(UserRole.STUDENT).build();
     private final Course course = Course.builder().courseId(7L)
             .user(User.builder().userId(1L).build()).isPublic(true).build();
 

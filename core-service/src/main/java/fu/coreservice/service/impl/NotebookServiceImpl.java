@@ -5,6 +5,7 @@ import fu.coreservice.dto.notebook.NotebookRequest;
 import fu.coreservice.dto.notebook.NotebookResponse;
 import fu.coreservice.entity.Course;
 import fu.coreservice.entity.User;
+import fu.coreservice.entity.UserRole;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.CourseRepository;
@@ -30,7 +31,9 @@ public class NotebookServiceImpl implements NotebookService {
     }
     @Override
     public boolean owns(Long id) {
-        return courseRepository.findByCourseIdAndUser(id, currentUser()).filter(Course::isNotebook).isPresent();
+        User user = currentUser();
+        return user.getRole() == UserRole.STUDENT
+                && courseRepository.findByCourseIdAndUser(id, user).filter(Course::isNotebook).isPresent();
     }
     @Override
     public boolean isNotebook(Long id) {

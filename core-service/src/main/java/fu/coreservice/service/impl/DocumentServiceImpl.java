@@ -119,10 +119,7 @@ public class DocumentServiceImpl implements DocumentService {
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         if (course.isNotebook()) {
-            User currentUser = getCurrentUser();
-            if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-                throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-            }
+            CourseAccessPolicy.requireOwner(course, getCurrentUser());
         }
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortDirection, "uploadAt"));
@@ -165,10 +162,7 @@ public class DocumentServiceImpl implements DocumentService {
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
 
         if (course.isNotebook()) {
-            User currentUser = getCurrentUser();
-            if (!course.getUser().getUserId().equals(currentUser.getUserId())) {
-                throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
-            }
+            CourseAccessPolicy.requireOwner(course, getCurrentUser());
         }
 
         Document document = documentRepository.findByDocumentIdAndCourseCourseId(documentId,courseId)
