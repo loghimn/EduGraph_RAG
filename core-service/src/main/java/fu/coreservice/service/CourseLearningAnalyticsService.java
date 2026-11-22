@@ -15,6 +15,7 @@ public class CourseLearningAnalyticsService {
     private final ChatMessageRepository messages;
     private final CourseRepository courses;
     private final LearnerMasteryRepository masteries;
+    private final LearningPathStepRepository steps;
     private final CourseAiSettingsService access;
 
     public record Target(String id, String name, String courseId) {}
@@ -51,14 +52,33 @@ public class CourseLearningAnalyticsService {
             stats[3] += count.getNegativeFeedback(); names.put(count.getConceptId(), count.getName());
         }
         for (var count : masteries.courseStatusCounts(courseId)) {
+            // A NOT_STARTED row is initialized by a path, not evidence of learning activity.
+            if (count.getStatus() != MasteryStatus.IN_PROGRESS && count.getStatus() != MasteryStatus.MASTERED) continue;
             long[] stats = totals.computeIfAbsent(count.getConceptId(), key -> new long[6]);
             if (count.getStatus() == MasteryStatus.IN_PROGRESS) stats[4] = count.getTotal();
             if (count.getStatus() == MasteryStatus.MASTERED) stats[5] = count.getTotal();
         }
+        Set<String> unresolved = totals.keySet().stream()
+                .filter(id -> !readableName(names.get(id), id)).collect(java.util.stream.Collectors.toSet());
+        if (!unresolved.isEmpty()) {
+            // Saved paths carry labels even when the concept has never been asked about.
+            // Resolve in one course-scoped query, preferring the newest saved label.
+            for (var label : steps.findConceptNamesForCourse(courseId, new ArrayList<>(unresolved))) {
+                if (unresolved.contains(label.getConceptId()) && readableName(label.getName(), label.getConceptId())) {
+                    names.put(label.getConceptId(), label.getName());
+                    unresolved.remove(label.getConceptId());
+                }
+            }
+        }
         List<ConceptStats> result = totals.entrySet().stream().map(e -> {
             long[] s = e.getValue();
-            return new ConceptStats(e.getKey(), names.getOrDefault(e.getKey(), e.getKey()), s[0], s[1], s[2], s[3], s[4], s[5]);
+            String name = names.get(e.getKey());
+            return new ConceptStats(e.getKey(), readableName(name, e.getKey()) ? name : e.getKey(), s[0], s[1], s[2], s[3], s[4], s[5]);
         }).sorted(Comparator.comparingLong(ConceptStats::queries).reversed().thenComparing(ConceptStats::conceptId)).toList();
         return new Report(days, now, result);
+    }
+
+    private boolean readableName(String name, String id) {
+        return name != null && !name.isBlank() && !name.equals(id);
     }
 }

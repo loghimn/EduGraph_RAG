@@ -88,6 +88,8 @@ public class CourseServiceImpl implements CourseService {
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
+        if (course.isNotebook()) throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+
         course.setPublic(false);
 
         courseRepository.save(course);
@@ -134,6 +136,8 @@ public class CourseServiceImpl implements CourseService {
 
         Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
+
+        if (course.isNotebook()) throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
 
         return mapToCourseResponse(course);
     }

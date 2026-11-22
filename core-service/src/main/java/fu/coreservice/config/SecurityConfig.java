@@ -67,6 +67,15 @@ public class SecurityConfig {
                                 "/error"
                         ).permitAll()
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers(
+                                "/api/notebooks/**",
+                                "/api/chat/**",
+                                "/api/courses/*/chat/**",
+                                "/api/courses/*/learning-path/**",
+                                "/api/courses/*/learning-paths/**",
+                                "/api/learning-paths/**",
+                                "/api/courses/*/masteries/**"
+                        ).hasRole("STUDENT")
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(exceptions -> exceptions

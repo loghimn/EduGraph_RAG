@@ -34,6 +34,8 @@ class TeachingToolsIntegrationTest {
     @Autowired ChatMessageRepository messages;
     @Autowired MessageFeedbackRepository feedback;
     @Autowired LearnerMasteryRepository masteries;
+    @Autowired LearningPathPlanRepository plans;
+    @Autowired LearningPathStepRepository steps;
     @Autowired ConceptQueryRepository queries;
     @Autowired Validator validator;
     @Autowired ChatSessionService chatSessions;
@@ -118,6 +120,64 @@ class TeachingToolsIntegrationTest {
         assertThat(queries.existsByMessage_MessageId(answer.getMessageId())).isFalse();
     }
 
+    @Test void notStartedConceptsDoNotCreateEmptyReportRowsButTheirQuestionsRemainVisible() {
+        masteries.saveAndFlush(LearnerMastery.builder().learner(student).course(course)
+                .neo4jConceptId("not-started-only").masteryStatus(MasteryStatus.NOT_STARTED).build());
+        assertThat(analytics.report(course.getCourseId(), 30).concepts()).isEmpty();
+
+        ChatMessage message = answer(student);
+        analytics.record(new ChatTurn(message.getSession().getSessionId(), student.getUserId(), 1L, message.getMessageId()),
+                List.of(new CourseLearningAnalyticsService.Target("asked", "Conditionals", course.getCourseId().toString())),
+                List.of(course.getCourseId().toString()));
+        masteries.saveAndFlush(LearnerMastery.builder().learner(student).course(course)
+                .neo4jConceptId("asked").masteryStatus(MasteryStatus.NOT_STARTED).build());
+        var report = analytics.report(course.getCourseId(), 30);
+        assertThat(report.concepts()).hasSize(1);
+        assertThat(report.concepts().getFirst().conceptId()).isEqualTo("asked");
+        assertThat(report.concepts().getFirst().queries()).isEqualTo(1);
+        assertThat(masteries.findByLearnerAndCourse(student, course)).hasSize(2);
+    }
+
+    @Test void masteryOnlyRowsUseNewestSavedPathLabelsFromTheSameCourse() {
+        String active = UUID.randomUUID().toString(), mastered = UUID.randomUUID().toString();
+        savedLabel(course, active, "Old label");
+        savedLabel(course, active, "Inheritance");
+        savedLabel(course, mastered, "Interfaces");
+        Course another = courses.saveAndFlush(Course.builder().user(other).courseName("Another course")
+                .description("Test").domain("CS").language("en").build());
+        savedLabel(another, active, "Wrong course label");
+        masteries.saveAndFlush(LearnerMastery.builder().learner(student).course(course)
+                .neo4jConceptId(active).masteryStatus(MasteryStatus.IN_PROGRESS).build());
+        masteries.saveAndFlush(LearnerMastery.builder().learner(student).course(course)
+                .neo4jConceptId(mastered).masteryStatus(MasteryStatus.MASTERED).build());
+
+        for (int days : List.of(7, 30, 90)) {
+            var report = analytics.report(course.getCourseId(), days);
+            assertThat(report.concepts()).hasSize(2);
+            var activeRow = report.concepts().stream().filter(row -> row.conceptId().equals(active)).findFirst().orElseThrow();
+            assertThat(activeRow.name()).isEqualTo("Inheritance");
+            assertThat(activeRow.inProgress()).isEqualTo(1);
+            assertThat(activeRow.queries()).isZero();
+            var masteredRow = report.concepts().stream().filter(row -> row.conceptId().equals(mastered)).findFirst().orElseThrow();
+            assertThat(masteredRow.name()).isEqualTo("Interfaces");
+            assertThat(masteredRow.mastered()).isEqualTo(1);
+        }
+        org.mockito.Mockito.verifyNoInteractions(ai);
+    }
+
+    @Test void unresolvedActivityIsNotLostOrNamedUsingAnotherCoursesMetadata() {
+        String id = UUID.randomUUID().toString();
+        Course another = courses.saveAndFlush(Course.builder().user(other).courseName("Another course")
+                .description("Test").domain("CS").language("en").build());
+        savedLabel(another, id, "Private other-course concept");
+        masteries.saveAndFlush(LearnerMastery.builder().learner(student).course(course)
+                .neo4jConceptId(id).masteryStatus(MasteryStatus.MASTERED).build());
+        var row = analytics.report(course.getCourseId(), 30).concepts().getFirst();
+        assertThat(row.conceptId()).isEqualTo(id);
+        assertThat(row.name()).isEqualTo(id);
+        assertThat(row.mastered()).isEqualTo(1);
+    }
+
     @Test void publicSuggestionsPersistAndRecheckVisibilityNameAndEnrollmentOnHistoryReload() {
         course.setPublic(true); courses.saveAndFlush(course);
         Course hidden = courses.saveAndFlush(Course.builder().user(owner).courseName("Private")
@@ -148,6 +208,12 @@ class TeachingToolsIntegrationTest {
         String id = UUID.randomUUID().toString();
         return users.saveAndFlush(User.builder().username(id).email(id + "@test.local").passwordHash("test")
                 .role(role).approvalStatus(role == UserRole.INSTRUCTOR ? ApprovalStatus.APPROVED : ApprovalStatus.NOT_REQUIRED).build());
+    }
+
+    private void savedLabel(Course source, String id, String label) {
+        LearningPathPlan plan = plans.saveAndFlush(LearningPathPlan.builder().learner(student).course(source)
+                .mode(LearningPathMode.COURSE).planName("Label snapshot").graphVersion(1L).build());
+        steps.saveAndFlush(LearningPathStep.builder().plan(plan).neo4jConceptId(id).conceptLabel(label).stepOrder(1).build());
     }
     private void signIn(User user) {
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(user.getEmail(), null, List.of()));

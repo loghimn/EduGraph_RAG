@@ -16,6 +16,7 @@ public final class CourseAccessPolicy {
     }
 
     public static void requireOwner(Course course, User user) {
+        requireNotebookRole(course, user);
         if (!isOwner(course, user)) throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
     }
 
@@ -24,6 +25,7 @@ public final class CourseAccessPolicy {
     }
 
     public static void requireReadAccess(Course course, User user, BooleanSupplier enrolled) {
+        requireNotebookRole(course, user);
         if (!isOwner(course, user) && (course.isNotebook() || !enrolled.getAsBoolean())) {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
@@ -32,6 +34,12 @@ public final class CourseAccessPolicy {
     public static void requireGraphWriteAccess(Course course, User user) {
         requireOwner(course, user);
         if (!course.isNotebook() && user.getRole() != UserRole.INSTRUCTOR) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+    }
+
+    private static void requireNotebookRole(Course course, User user) {
+        if (course.isNotebook() && user.getRole() != UserRole.STUDENT) {
             throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
         }
     }
