@@ -4,11 +4,13 @@ import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.auth.InstructorRegistrationResponse;
 import fu.coreservice.entity.ApprovalStatus;
 import fu.coreservice.entity.UserRole;
+import fu.coreservice.event.InstructorReviewedEvent;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.UserRepository;
 import fu.coreservice.service.InstructorApprovalService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class InstructorApprovalServiceImpl implements InstructorApprovalService {
     private final UserRepository users;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional(readOnly = true)
@@ -51,6 +54,8 @@ public class InstructorApprovalServiceImpl implements InstructorApprovalService 
         user.setReviewedAt(LocalDateTime.now());
         user.setRejectionReason(approve || reason == null || reason.isBlank() ? null : reason.trim());
         users.save(user);
+        events.publishEvent(new InstructorReviewedEvent(user.getUserId(), user.getEmail(), user.getUsername(),
+                approve, Boolean.TRUE.equals(user.getIsActive()), user.getRejectionReason()));
         return InstructorRegistrationResponse.from(user);
     }
 }
