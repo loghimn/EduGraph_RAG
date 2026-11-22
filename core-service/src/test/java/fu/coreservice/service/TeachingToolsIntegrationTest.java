@@ -53,7 +53,8 @@ class TeachingToolsIntegrationTest {
     }
     @AfterEach void clear() { SecurityContextHolder.clearContext(); }
 
-    @Test void settingsPersistAndOnlyOwnerOrAdminCanManageThem() {
+    @Test void settingsPersistAndOnlyAdminCanManageThem() {
+        signIn(admin);
         assertThat(settings.get(course.getCourseId())).isEqualTo(CourseAiSettings.defaults());
         var request = new CourseAiSettings(.81, 5, "Explain using diagrams");
         settings.save(course.getCourseId(), request);
@@ -64,7 +65,12 @@ class TeachingToolsIntegrationTest {
         signIn(other);
         assertThatThrownBy(() -> settings.get(course.getCourseId())).isInstanceOf(AppException.class);
         assertThatThrownBy(() -> settings.save(course.getCourseId(), request)).isInstanceOf(AppException.class);
-        assertThat(settings.listCourses(0).getContent()).isEmpty();
+        assertThatThrownBy(() -> settings.listCourses(0)).isInstanceOf(AppException.class);
+        signIn(owner);
+        assertThatThrownBy(() -> settings.get(course.getCourseId())).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.save(course.getCourseId(), request)).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.listCourses(0)).isInstanceOf(AppException.class);
+        assertThat(analytics.report(course.getCourseId(), 30)).isNotNull();
         signIn(student);
         assertThatThrownBy(() -> settings.listCourses(0)).isInstanceOf(AppException.class);
         assertThatThrownBy(() -> analytics.report(course.getCourseId(), 30)).isInstanceOf(AppException.class);
@@ -72,6 +78,52 @@ class TeachingToolsIntegrationTest {
         assertThat(settings.get(course.getCourseId())).isEqualTo(request);
         assertThat(settings.listCourses(0).getContent()).extracting(CourseAiSettingsService.CourseOption::courseId)
                 .contains(course.getCourseId());
+    }
+
+
+    @Autowired SystemSettingsRepository settingsRows;
+
+    @Test void adminSeesPrivateAndPublicCoursesWithInstructorsButNotPersonalNotebooks() {
+        Course publicCourse = courses.saveAndFlush(Course.builder().user(other).courseName("Public Java")
+                .description("Test").domain("CS").language("en").isPublic(true).build());
+        Course notebook = courses.saveAndFlush(Course.builder().user(student).courseName("Personal")
+                .description("Test").domain("CS").language("en").notebook(true).build());
+        signIn(admin);
+        var rows = settings.listCourses(0);
+        assertThat(rows.getContent()).extracting(CourseAiSettingsService.CourseOption::courseId)
+                .contains(course.getCourseId(), publicCourse.getCourseId()).doesNotContain(notebook.getCourseId());
+        var row = rows.getContent().stream().filter(c -> c.courseId().equals(course.getCourseId())).findFirst().orElseThrow();
+        assertThat(row.instructorId()).isEqualTo(owner.getUserId());
+        assertThat(row.instructorName()).isEqualTo(owner.getUsername());
+        assertThat(row.instructorEmail()).isEqualTo(owner.getEmail());
+        assertThat(row.isPublic()).isFalse();
+        assertThatThrownBy(() -> settings.get(notebook.getCourseId())).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.save(notebook.getCourseId(), CourseAiSettings.defaults())).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.listCourses(-1)).isInstanceOf(AppException.class);
+    }
+
+    @Test void settingsSaveUpdatesOneRowTracksAdminAndRemainsAvailableToStudentChat() {
+        signIn(admin);
+        settings.save(course.getCourseId(), new CourseAiSettings(.6, 0, "  Explain simply  "));
+        var first = settingsRows.findByCourse_CourseId(course.getCourseId()).orElseThrow();
+        Long id = first.getSettingId();
+        assertThat(first.getUpdatedBy().getUserId()).isEqualTo(admin.getUserId());
+        assertThat(first.getUpdatedAt()).isNotNull();
+        assertThat(first.getPromptTemplate()).isEqualTo("Explain simply");
+        var next = new CourseAiSettings(.8, 6, "");
+        settings.save(course.getCourseId(), next);
+        assertThat(settingsRows.findByCourse_CourseId(course.getCourseId()).orElseThrow().getSettingId()).isEqualTo(id);
+        signIn(student);
+        assertThat(settings.forChat(List.of(course.getCourseId().toString()))).containsEntry(course.getCourseId().toString(), next);
+        assertThatThrownBy(() -> settings.get(course.getCourseId())).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.save(course.getCourseId(), next)).isInstanceOf(AppException.class);
+    }
+
+    @Test void inactiveAdminCannotListReadOrSaveSettings() {
+        admin.setIsActive(false); users.saveAndFlush(admin); signIn(admin);
+        assertThatThrownBy(() -> settings.listCourses(0)).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.get(course.getCourseId())).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> settings.save(course.getCourseId(), CourseAiSettings.defaults())).isInstanceOf(AppException.class);
     }
 
     @Test void invalidSettingsAreRejectedByTheHttpValidationContract() {

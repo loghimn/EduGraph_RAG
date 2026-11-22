@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/courses/{courseId}/ai-settings")
+@org.springframework.security.access.prepost.PreAuthorize("hasRole('ADMIN')")
 public class CourseAiSettingsController {
     private final CourseAiSettingsService service;
     @GetMapping

@@ -19,21 +19,35 @@ public class CourseAiSettingsService {
 
     public void requireManager(Long courseId) { manager(courseId); }
 
-    public record CourseOption(Long courseId, String courseName) {}
+    public record CourseOption(Long courseId, String courseName, Long instructorId,
+                               String instructorName, String instructorEmail, boolean isPublic) {}
 
     @Transactional(readOnly = true)
     public fu.coreservice.dto.PageResponse<CourseOption> listCourses(int page) {
-        User user = users.findByEmail(SecurityUtils.getCurrentUserEmail())
-                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        User user = requireAdmin();
         if (page < 0) throw new AppException(ErrorCode.INVALID_REQUEST);
-        if (!Boolean.TRUE.equals(user.getIsActive()) || !user.isApprovalSatisfied() || user.getRole() != UserRole.ADMIN && user.getRole() != UserRole.INSTRUCTOR)
-            throw new AppException(ErrorCode.ACCESS_DENIED);
-        var result = courses.findTeachingCourses(user.getUserId(), user.getRole() == UserRole.ADMIN,
+        var result = courses.findTeachingCourses(user.getUserId(), true,
                 org.springframework.data.domain.PageRequest.of(page, 50, org.springframework.data.domain.Sort.by("courseId")));
         return fu.coreservice.dto.PageResponse.<CourseOption>builder()
-                .content(result.map(c -> new CourseOption(c.getCourseId(), c.getCourseName())).getContent())
+                .content(result.map(c -> new CourseOption(c.getCourseId(), c.getCourseName(),
+                        c.getUser().getUserId(), c.getUser().getUsername(), c.getUser().getEmail(), c.isPublic())).getContent())
                 .page(page).size(50).totalElements(result.getTotalElements()).totalPages(result.getTotalPages())
                 .first(result.isFirst()).last(result.isLast()).build();
+    }
+
+    private User requireAdmin() {
+        User user = users.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        if (!Boolean.TRUE.equals(user.getIsActive()) || !user.isApprovalSatisfied() || user.getRole() != UserRole.ADMIN)
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        return user;
+    }
+
+    private User settingsAdmin(Long courseId) {
+        User actor = requireAdmin();
+        Course course = courses.findById(courseId).orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
+        if (course.isNotebook()) throw new AppException(ErrorCode.ACCESS_DENIED);
+        return actor;
     }
 
     private User manager(Long courseId) {
@@ -49,13 +63,13 @@ public class CourseAiSettingsService {
 
     @Transactional(readOnly = true)
     public CourseAiSettings get(Long courseId) {
-        manager(courseId);
+        settingsAdmin(courseId);
         return settings.findByCourse_CourseId(courseId).map(this::view).orElse(CourseAiSettings.defaults());
     }
 
     @Transactional
     public CourseAiSettings save(Long courseId, CourseAiSettings request) {
-        User actor = manager(courseId);
+        User actor = settingsAdmin(courseId);
         // Serialize first-time creation as well as updates for the same course.
         Course course = courses.findLockedSettingsCourse(courseId).orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
         SystemSettings row = settings.findByCourse_CourseId(courseId).orElseGet(() -> SystemSettings.builder().course(course).build());

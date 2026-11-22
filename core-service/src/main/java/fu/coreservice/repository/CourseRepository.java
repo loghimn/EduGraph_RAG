@@ -18,6 +18,7 @@ public interface CourseRepository extends JpaRepository<Course, Long> {
     @org.springframework.data.jpa.repository.Query("select c from Course c where c.courseId = :id")
     Optional<Course> findLockedSettingsCourse(@org.springframework.data.repository.query.Param("id") Long id);
     @Query("select c from Course c where c.notebook = false and (:admin = true or c.user.userId = :owner)")
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = "user")
     Page<Course> findTeachingCourses(@Param("owner") Long owner, @Param("admin") boolean admin, Pageable pageable);
     long countByNotebook(boolean notebook);
 
