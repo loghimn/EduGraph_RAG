@@ -1,6 +1,7 @@
 package fu.coreservice.service;
 
 import fu.coreservice.entity.*;
+import fu.coreservice.event.InstructorReviewedEvent;
 import fu.coreservice.exception.AppException;
 import fu.coreservice.exception.ErrorCode;
 import fu.coreservice.repository.UserRepository;
@@ -9,13 +10,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.context.ApplicationEventPublisher;
 import java.util.Optional;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class InstructorApprovalServiceTest {
     private final UserRepository users = mock(UserRepository.class);
-    private final InstructorApprovalService service = new InstructorApprovalServiceImpl(users);
+    private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final InstructorApprovalService service = new InstructorApprovalServiceImpl(users, events);
     private User user;
 
     @BeforeEach void setup() {
@@ -35,6 +38,7 @@ class InstructorApprovalServiceTest {
         assertThat(user.isApprovalSatisfied()).isTrue();
         assertThat(user.getIsActive()).isFalse(); // Approval must not unlock an account.
         verify(users).save(user);
+        verify(events).publishEvent(new InstructorReviewedEvent(1L, "teacher@test.local", null, true, false, null));
     }
 
     @Test void rejectRecordsReasonAndKeepsAuthenticationBlocked() {
@@ -43,6 +47,7 @@ class InstructorApprovalServiceTest {
         assertThat(result.rejectionReason()).isEqualTo("Invalid credentials");
         assertThat(result.reviewedBy()).isEqualTo(5L);
         assertThat(user.isApprovalSatisfied()).isFalse();
+        verify(events).publishEvent(new InstructorReviewedEvent(1L, "teacher@test.local", null, false, true, "Invalid credentials"));
     }
 
     @ParameterizedTest
@@ -53,6 +58,7 @@ class InstructorApprovalServiceTest {
                 .isInstanceOfSatisfying(AppException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INSTRUCTOR_REVIEW_NOT_PENDING));
         verify(users, never()).save(any());
+        verifyNoInteractions(events);
     }
 
     @Test void studentCannotBeApprovedAsInstructor() {
@@ -72,6 +78,13 @@ class InstructorApprovalServiceTest {
         when(users.findByEmail("admin@test.local")).thenReturn(Optional.of(User.builder().role(UserRole.ADMIN).isActive(false).build()));
         assertThatThrownBy(() -> service.review(1L, "admin@test.local", false, null)).isInstanceOf(AppException.class);
         verify(users, never()).save(any());
+    }
+
+    @Test void failedSaveDoesNotPublishNotification() {
+        doThrow(new IllegalStateException("database unavailable")).when(users).save(user);
+        assertThatThrownBy(() -> service.review(1L, "admin@test.local", true, null))
+                .isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(events);
     }
 
     @Test void listRejectsInvalidPagination() {

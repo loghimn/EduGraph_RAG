@@ -44,6 +44,37 @@ public final class EmailTemplates {
         return new EmailContent(subject, text, html);
     }
 
+    public static EmailContent instructorReview(String username, boolean approved, boolean active, String reason) {
+        String subject = approved ? "EduGraph-RAG - Đăng ký giảng viên đã được phê duyệt"
+                : "EduGraph-RAG - Kết quả xét duyệt đăng ký giảng viên";
+        String greeting = "Xin chào " + (username == null || username.isBlank() ? "bạn" : username) + ",";
+        String result = approved ? "Đăng ký tài khoản giảng viên của bạn đã được quản trị viên phê duyệt."
+                : "Đăng ký tài khoản giảng viên của bạn đã bị quản trị viên từ chối.";
+        String nextStep = approved
+                ? active ? "Bạn có thể đăng nhập EduGraph-RAG bằng tài khoản đã đăng ký và sử dụng các chức năng dành cho giảng viên."
+                         : "Tài khoản của bạn hiện đang bị khóa. Vui lòng liên hệ quản trị viên để được hỗ trợ trước khi đăng nhập."
+                : "Bạn chưa thể đăng nhập bằng tài khoản này. Nếu cần giải đáp về kết quả xét duyệt, vui lòng liên hệ quản trị viên.";
+        String rejection = !approved && reason != null && !reason.isBlank() ? reason.strip() : null;
+        String content = "<p style=\"margin:0 0 16px;font-weight:700;\">" + HtmlUtils.htmlEscape(greeting) + "</p>"
+                + "<p style=\"margin:0 0 20px;\">" + result + "</p>"
+                + (rejection == null ? "" : "<div style=\"padding:16px;background-color:#fff8eb;border:1px solid #f3dfb7;border-radius:12px;\">"
+                    + "<p style=\"margin:0 0 8px;font-weight:700;\">Lý do từ chối</p>"
+                    + "<p style=\"margin:0;white-space:pre-wrap;overflow-wrap:anywhere;\">" + HtmlUtils.htmlEscape(rejection) + "</p></div>")
+                + "<p style=\"margin:20px 0 0;\">" + nextStep + "</p>";
+        // Insert escaped user content last; it must not be interpreted as layout placeholders.
+        String html = template("layout.html")
+                .replace("{{title}}", subject)
+                .replace("{{preheader}}", result)
+                .replace("{{eyebrow}}", "ĐĂNG KÝ GIẢNG VIÊN")
+                .replace("{{heading}}", approved ? "Đăng ký đã được phê duyệt" : "Kết quả xét duyệt đăng ký")
+                .replace("{{intro}}", "Thông báo từ quản trị viên EduGraph-RAG.")
+                .replace("{{content}}", content);
+        String text = greeting + "\n\n" + result + "\n\n"
+                + (rejection == null ? "" : "Lý do từ chối:\n" + rejection + "\n\n")
+                + nextStep + "\n\nEmail tự động từ EduGraph-RAG. Vui lòng không trả lời email này.\n";
+        return new EmailContent(subject, text, html);
+    }
+
     private static String template(String name) {
         try (var input = new ClassPathResource("mail/" + name).getInputStream()) {
             return new String(input.readAllBytes(), StandardCharsets.UTF_8);
