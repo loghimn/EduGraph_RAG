@@ -18,7 +18,7 @@ public interface AuthService {
 
     void logout(String refreshToken);
 
-    void logoutAllSessions(Long userId);
+    void logoutAllSessions();
 
     UserInfoResponse getCurrentUser(String email);
 }

@@ -194,12 +194,14 @@ class OAuth2ApprovalTest {
         var user = User.builder().userId(1L).email("teacher@test.local").passwordHash("hash")
                 .role(UserRole.INSTRUCTOR).approvalStatus(ApprovalStatus.APPROVED).build();
         when(users.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(users.findLockedByEmail(user.getEmail())).thenReturn(Optional.of(user));
         when(jwt.generateAccessToken(any(), any(), any())).thenReturn("access");
         when(jwt.generateRefreshToken(any(), any(), any())).thenReturn("refresh");
     }
 
     private void checkBlocked(User user) throws Exception {
         when(users.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(users.findLockedByEmail(user.getEmail())).thenReturn(Optional.of(user));
         var request = new MockHttpServletRequest();
         var session = request.getSession();
         var response = new MockHttpServletResponse();

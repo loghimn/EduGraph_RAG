@@ -47,6 +47,10 @@ public class User {
     @Column(nullable = false, unique = true, length = 100)
     private String username;
 
+    @Column(name = "session_version", nullable = false, columnDefinition = "bigint default 0")
+    @Builder.Default
+    private long sessionVersion = 0;
+
     @Column(name = "password_hash", nullable = false, length = 255)
     private String passwordHash;
 

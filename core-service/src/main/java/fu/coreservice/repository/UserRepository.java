@@ -42,6 +42,10 @@ public interface UserRepository extends JpaRepository<User, Long>, org.springfra
 
     Optional<User> findByEmail(String email);
 
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update User u set u.sessionVersion = u.sessionVersion + 1 where u.userId = :id")
+    void revokeAccessTokens(@Param("id") Long id);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select u from User u where u.email = :email")
     Optional<User> findLockedByEmail(@Param("email") String email);

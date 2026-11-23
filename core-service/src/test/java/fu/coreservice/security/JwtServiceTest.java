@@ -127,4 +127,12 @@ class JwtServiceTest {
                 .signWith(Keys.hmacShaKeyFor(Decoders.BASE64.decode(SECRET)))
                 .compact();
     }
+
+ @Test void sessionVersionRevokesAccessWithoutChangingPassword() {
+  var v0=new SessionUserDetails(EMAIL,"password",true,userDetails.getAuthorities(),0);
+  var old=jwtService.generateAccessToken(v0,1L,"STUDENT");
+  var v1=new SessionUserDetails(EMAIL,"password",true,userDetails.getAuthorities(),1);
+  assertThat(jwtService.isTokenValid(old,v0)).isTrue();assertThat(jwtService.isTokenValid(old,v1)).isFalse();
+  assertThat(jwtService.isTokenValid(jwtService.generateAccessToken(v1,1L,"STUDENT"),v1)).isTrue();
+ }
 }

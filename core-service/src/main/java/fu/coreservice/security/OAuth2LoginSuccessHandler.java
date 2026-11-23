@@ -58,6 +58,7 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
     private String frontendSuccessUrl;
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void onAuthenticationSuccess(
             HttpServletRequest request,
             HttpServletResponse response,
@@ -70,8 +71,8 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
 
         log.info("OAuth2 login successful for email: {}", email);
 
-        // Create or find existing user
-        User user = userRepository.findByEmail(email)
+        // Lock before loading account state, serializing issuance with logout-all.
+        User user = userRepository.findLockedByEmail(email)
                 .orElseGet(() -> createOAuth2User(email, name));
 
         // OAuth authentication must not bypass account approval or leave a usable session.
@@ -100,6 +101,12 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
                 .expiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000))
                 .build();
         userSessionRepository.save(session);
+        // Bind cookie authentication to the account state at OAuth2 sign-in.
+        request.getSession().setAttribute(SessionUserDetails.OAUTH2_SESSION_ACCOUNT,
+                new SessionUserDetails(user.getEmail(), user.getPasswordHash(), true,
+                        java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + user.getRole().name())),
+                        user.getSessionVersion()));
+
 
         log.info("JWT tokens generated for OAuth2 user: {}", email);
 

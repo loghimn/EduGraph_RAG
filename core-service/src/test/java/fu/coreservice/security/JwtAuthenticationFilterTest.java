@@ -45,6 +45,9 @@ class JwtAuthenticationFilterTest {
         var principal = new DefaultOAuth2User(authorities, Map.of("email", "session@example.com"), "email");
         sessionAuth = new OAuth2AuthenticationToken(principal, authorities, "google");
         SecurityContextHolder.getContext().setAuthentication(sessionAuth);
+        var saved = new SessionUserDetails("session@example.com", "hash", true, authorities, 0);
+        request.getSession().setAttribute(SessionUserDetails.OAUTH2_SESSION_ACCOUNT, saved);
+        when(users.loadUserByUsername("session@example.com")).thenReturn(saved);
     }
 
     @AfterEach void cleanup() { SecurityContextHolder.clearContext(); }
@@ -52,7 +55,7 @@ class JwtAuthenticationFilterTest {
     @Test void noBearerPreservesOAuth2SessionAuthentication() throws Exception {
         filter.doFilter(request, response, chain);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(sessionAuth);
-        verifyNoInteractions(jwtService, users);
+        verifyNoInteractions(jwtService);
         verify(chain).doFilter(request, response);
     }
 
@@ -60,7 +63,7 @@ class JwtAuthenticationFilterTest {
         request.addHeader("Authorization", "Basic ignored");
         filter.doFilter(request, response, chain);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(sessionAuth);
-        verifyNoInteractions(jwtService, users);
+        verifyNoInteractions(jwtService);
     }
 
     @Test void validBearerReplacesOAuth2Authentication() throws Exception {
@@ -81,5 +84,44 @@ class JwtAuthenticationFilterTest {
         filter.doFilter(request, response, chain);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
         verify(chain).doFilter(request, response);
+    }
+
+    @Test void revokedCookieSessionCannotAuthenticateWithoutBearer() throws Exception {
+        var session = request.getSession();
+        when(users.loadUserByUsername("session@example.com")).thenReturn(new SessionUserDetails(
+                "session@example.com", "hash", true, sessionAuth.getAuthorities(), 1));
+        filter.doFilter(request, response, chain);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        assertThat(((org.springframework.mock.web.MockHttpSession) session).isInvalid()).isTrue();
+        verify(chain).doFilter(request, response);
+    }
+
+    @Test void legacyOAuthCookieWithoutAccountSnapshotIsRejected() throws Exception {
+        request.getSession().removeAttribute(SessionUserDetails.OAUTH2_SESSION_ACCOUNT);
+        filter.doFilter(request, response, chain);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test void cookieSessionsCannotBypassPasswordRoleOrAccountChanges() throws Exception {
+        for (var current : List.of(
+                new SessionUserDetails("session@example.com", "changed", true, sessionAuth.getAuthorities(), 0),
+                new SessionUserDetails("session@example.com", "hash", false, sessionAuth.getAuthorities(), 0),
+                new SessionUserDetails("session@example.com", "hash", true, List.of(new SimpleGrantedAuthority("ROLE_STUDENT")), 0))) {
+            var req = new MockHttpServletRequest("GET", "/api/courses/my"); req.setServletPath("/api/courses/my");
+            req.getSession().setAttribute(SessionUserDetails.OAUTH2_SESSION_ACCOUNT,
+                    new SessionUserDetails("session@example.com", "hash", true, sessionAuth.getAuthorities(), 0));
+            SecurityContextHolder.getContext().setAuthentication(sessionAuth);
+            when(users.loadUserByUsername("session@example.com")).thenReturn(current);
+            filter.doFilter(req, new MockHttpServletResponse(), chain);
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        }
+    }
+
+    @Test void nonApiOAuthFlowDoesNotRequireAnAccountSnapshot() throws Exception {
+        request.setServletPath("/oauth2/authorization/google");
+        request.getSession().removeAttribute(SessionUserDetails.OAUTH2_SESSION_ACCOUNT);
+        filter.doFilter(request, response, chain);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(sessionAuth);
+        verifyNoInteractions(jwtService, users);
     }
 }
