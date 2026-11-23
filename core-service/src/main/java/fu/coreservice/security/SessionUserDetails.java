@@ -5,6 +5,8 @@ import org.springframework.security.core.GrantedAuthority;
 
 /** Carries the current account session generation loaded from the database. */
 public class SessionUserDetails extends org.springframework.security.core.userdetails.User {
+    public static final String OAUTH2_SESSION_ACCOUNT = SessionUserDetails.class.getName() + ".oauth2Account";
+
     private final long sessionVersion;
 
     public SessionUserDetails(String email, String password, boolean enabled,

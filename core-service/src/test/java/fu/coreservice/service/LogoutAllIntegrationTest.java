@@ -65,6 +65,30 @@ class LogoutAllIntegrationTest {
    .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{\"refreshToken\":\""+phone.getRefreshToken()+"\"}"))
    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isUnauthorized());
  }
+
+ @Autowired fu.coreservice.security.OAuth2LoginSuccessHandler oauthSuccess;
+ @Test void preExistingOAuthCookieIsRejectedAfterLogoutAll() throws Exception {
+  User user=account();var laptop=login(user);
+  var principal=new org.springframework.security.oauth2.core.user.DefaultOAuth2User(
+   java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_STUDENT")),
+   java.util.Map.of("email",user.getEmail(),"name",user.getUsername()),"email");
+  var oauth=new org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken(principal,principal.getAuthorities(),"google");
+  var cookieSession=new org.springframework.mock.web.MockHttpSession();
+  cookieSession.setAttribute(org.springframework.security.web.context.HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY,
+   new org.springframework.security.core.context.SecurityContextImpl(oauth));
+  var callback=new org.springframework.mock.web.MockHttpServletRequest();callback.setSession(cookieSession);
+  oauthSuccess.onAuthenticationSuccess(callback,new org.springframework.mock.web.MockHttpServletResponse(),oauth);
+  assertThat(cookieSession.getAttribute(fu.coreservice.security.SessionUserDetails.OAUTH2_SESSION_ACCOUNT)).isNotNull();
+  var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(web)
+   .addFilters(web.getBean("springSecurityFilterChain",jakarta.servlet.Filter.class)).build();
+  mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/courses/public").servletPath("/api/courses/public").session(cookieSession))
+   .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+  mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/auth/logout-all").servletPath("/api/auth/logout-all")
+   .header("Authorization","Bearer "+laptop.getAccessToken())).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+  mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/courses/public").servletPath("/api/courses/public").session(cookieSession))
+   .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isUnauthorized());
+  assertThat(cookieSession.isInvalid()).isTrue();
+ }
  private User account(){String id=UUID.randomUUID().toString();return users.saveAndFlush(User.builder().email(id+"@test.local").username(id).role(UserRole.STUDENT).passwordHash(encoder.encode("test-password")).build());}
  private AuthResponse login(User user){return auth.login(new LoginRequest(user.getEmail(),"test-password"),new MockHttpServletRequest());}
  private void signIn(User user){var principal=details.loadUserByUsername(user.getEmail());SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(principal,null,principal.getAuthorities()));}

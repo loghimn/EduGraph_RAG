@@ -101,6 +101,12 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
                 .expiresAt(LocalDateTime.now().plusSeconds(jwtService.getRefreshTokenExpiration() / 1000))
                 .build();
         userSessionRepository.save(session);
+        // Bind cookie authentication to the account state at OAuth2 sign-in.
+        request.getSession().setAttribute(SessionUserDetails.OAUTH2_SESSION_ACCOUNT,
+                new SessionUserDetails(user.getEmail(), user.getPasswordHash(), true,
+                        java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + user.getRole().name())),
+                        user.getSessionVersion()));
+
 
         log.info("JWT tokens generated for OAuth2 user: {}", email);
 
