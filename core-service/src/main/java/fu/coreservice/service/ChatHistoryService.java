@@ -4,6 +4,7 @@ import fu.coreservice.dto.PageResponse;
 import fu.coreservice.dto.chat.*;
 
 public interface ChatHistoryService {
+    java.util.List<ChatCourseOption> courses();
     PageResponse<ChatSessionResponse> search(Long courseId, String query, int page, int size);
     ChatSessionResponse get(Long courseId, Long sessionId);
     ChatSessionResponse rename(Long courseId, Long sessionId, String title);

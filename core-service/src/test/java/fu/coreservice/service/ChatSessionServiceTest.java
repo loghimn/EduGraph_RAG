@@ -60,6 +60,11 @@ class ChatSessionServiceTest {
         SecurityContextHolder.clearContext();
     }
 
+    private void allowHistory() {
+        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+    }
+
     private void allowLearner() {
         when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
         when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
@@ -410,7 +415,7 @@ class ChatSessionServiceTest {
 
     @Test
     void rejectsMissingForeignOrWrongCourseSessionBeforeReadingMessages() {
-        allowLearner();
+        allowHistory();
         when(chatSessionRepository.findBySessionIdAndCourseAndLearner(99L, course, learner))
                 .thenReturn(Optional.empty());
         assertEquals(ErrorCode.CHAT_SESSION_NOT_FOUND, assertThrows(AppException.class,
@@ -432,7 +437,7 @@ class ChatSessionServiceTest {
 
     @Test
     void returnsMessageHistoryWithCitationsAttachedToCorrectMessage() {
-        allowLearner();
+        allowHistory();
         ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();
         when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, learner))
                 .thenReturn(Optional.of(session));
@@ -457,7 +462,7 @@ class ChatSessionServiceTest {
 
     @Test
     void emptyHistoryDoesNotQueryCitations() {
-        allowLearner();
+        allowHistory();
         ChatSession session = ChatSession.builder().sessionId(10L).course(course).learner(learner).build();
         when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, learner))
                 .thenReturn(Optional.of(session));
@@ -476,8 +481,6 @@ class ChatSessionServiceTest {
             when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
             if (access.equals("owner")) {
                 course.setUser(learner);
-            } else {
-                when(courseEnrollmentRepository.existsByCourse_CourseIdAndUser(7L, learner)).thenReturn(true);
             }
         }
         ChatSession session = ChatSession.builder().sessionId(10L).learner(learner)
@@ -505,35 +508,28 @@ class ChatSessionServiceTest {
         }
     }
 
-    @Test
-    void globalRouteDeniesCourseHistoryAfterLearnerLeavesPublicCourse() {
-        when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
-        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
-        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).course(course).build();
-        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
-        // No enrollment remains. Match the course history route's decision.
-        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
-                () -> service.getGlobalMessages(10L, 0, 20)).getErrorCode());
-        assertEquals(ErrorCode.COURSE_ACCESS_DENIED, assertThrows(AppException.class,
-                () -> service.getMessages(7L, 10L, 0, 20)).getErrorCode());
-        verifyNoInteractions(chatMessageRepository, messageCitationRepository);
-    }
-
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void globalHistoryKeepsMissingForeignAndPrivateSessionsNotFound(boolean privateSession) {
+    void formerLearnerCanReadOwnHistoryForPublicAndPrivateCourses(boolean isPublic) {
+        allowHistory();
+        course.setPublic(isPublic);
+        ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).course(course).build();
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
+        when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, learner)).thenReturn(Optional.of(session));
+        when(chatMessageRepository.findBySession(eq(session), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        assertTrue(service.getGlobalMessages(10L, 0, 20).getContent().isEmpty());
+        assertTrue(service.getMessages(7L, 10L, 0, 20).getContent().isEmpty());
+        verifyNoInteractions(courseEnrollmentRepository);
+    }
+
+    @Test
+    void globalHistoryKeepsMissingForeignSessionsNotFound() {
         when(userRepository.findByEmail(learner.getEmail())).thenReturn(Optional.of(learner));
-        if (privateSession) {
-            course.setPublic(false);
-            ChatSession session = ChatSession.builder().sessionId(10L).learner(learner).course(course).build();
-            when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.of(session));
-        } else {
-            when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.empty());
-        }
+        when(chatSessionRepository.findBySessionIdAndLearner(10L, learner)).thenReturn(Optional.empty());
         assertEquals(ErrorCode.CHAT_SESSION_NOT_FOUND, assertThrows(AppException.class,
                 () -> service.getGlobalMessages(10L, 0, 20)).getErrorCode());
-        verifyNoInteractions(courseRepository, courseEnrollmentRepository,
-                chatMessageRepository, messageCitationRepository);
+        verifyNoInteractions(courseRepository, courseEnrollmentRepository, chatMessageRepository, messageCitationRepository);
     }
 
     @Test

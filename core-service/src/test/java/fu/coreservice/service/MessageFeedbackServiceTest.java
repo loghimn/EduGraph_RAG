@@ -92,7 +92,9 @@ class MessageFeedbackServiceTest {
 
     @Test
     void getWithoutFeedbackReturnsNull() {
-        allowSession();
+        when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+        when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, user)).thenReturn(Optional.of(session));
         when(chatMessageRepository.findByMessageIdAndSession(21L, session)).thenReturn(Optional.of(message));
         when(messageFeedbackRepository.findByMessage(message)).thenReturn(Optional.empty());
         assertNull(service.getFeedback(7L, 10L, 21L));
@@ -113,7 +115,9 @@ class MessageFeedbackServiceTest {
 
     @Test
     void foreignSessionCannotBeUsedForFeedback() {
-        allowSession();
+        when(userRepository.findByEmail(user.getEmail())).thenReturn(Optional.of(user));
+        when(courseRepository.findById(7L)).thenReturn(Optional.of(course));
+        when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, user)).thenReturn(Optional.of(session));
         when(chatSessionRepository.findBySessionIdAndCourseAndLearner(10L, course, user)).thenReturn(Optional.empty());
         assertEquals(ErrorCode.CHAT_SESSION_NOT_FOUND, assertThrows(AppException.class,
                 () -> service.getFeedback(7L, 10L, 21L)).getErrorCode());

@@ -39,7 +39,8 @@ public class CourseEnrollmentServiceImpl implements CourseEnrollmentService {
         User currentUser = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
-        Course course = courseRepository.findByCourseIdAndIsPublicTrue(courseId)
+        Course course = courseRepository.findLockedSettingsCourse(courseId)
+                .filter(item -> item.isPublic() && !item.isNotebook())
                 .orElseThrow(() -> new AppException(ErrorCode.PUBLIC_COURSE_NOT_FOUND));
 
         boolean alreadyEnrolled = courseEnrollmentRepository.existsByCourseAndUser(course, currentUser);

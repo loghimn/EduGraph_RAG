@@ -29,6 +29,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Generated email previews (templates live in core-service/src/main/resources/mail)
+/outputs/mail-preview/
+
 # Python-generated caches
 **/__pycache__/
 **/.pytest_cache/

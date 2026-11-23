@@ -170,10 +170,10 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         ChatSession session = chatSessionRepository.findBySessionIdAndLearner(sessionId, user)
-                .filter(item -> item.getCourse() == null || item.getCourse().isPublic())
+                .filter(item -> item.getCourse() == null || !item.getCourse().isNotebook())
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
         if (session.getCourse() != null) {
-            requireCourseAccess(session.getCourse().getCourseId());
+            requireHistoryAccess(session.getCourse().getCourseId());
         }
         Page<ChatMessage> messages = chatMessageRepository.findBySession(session,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt", "messageId")));
@@ -181,8 +181,6 @@ public class ChatSessionServiceImpl implements ChatSessionService {
         Map<Long, List<ChatCitationResponse>> citations = ids.isEmpty() ? Map.of()
                 : messageCitationRepository.findByMessage_MessageIdInOrderByCitationNumberAscCitationIdAsc(ids)
                         .stream()
-                        .filter(citation -> citation.getMessage().getSession().getCourse() == null
-                                || citation.getMessage().getSession().getCourse().isPublic())
                         .collect(Collectors.groupingBy(c -> c.getMessage().getMessageId(),
                                 Collectors.mapping(this::toCitationResponse, Collectors.toList())));
         return toPageResponse(messages, message -> ChatMessageResponse.builder()
@@ -262,7 +260,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     @Transactional(readOnly = true)
     public PageResponse<ChatSessionResponse> getMySessions(Long courseId, int page, int size) {
         validatePage(page, size);
-        CourseAccess access = requireCourseAccess(courseId);
+        CourseAccess access = requireHistoryAccess(courseId);
         Page<ChatSession> sessions = chatSessionRepository.findByLearnerAndCourse(
                 access.user(), access.course(), PageRequest.of(page, size,
                         Sort.by(Sort.Direction.DESC, "lastActive", "sessionId")));
@@ -273,7 +271,7 @@ public class ChatSessionServiceImpl implements ChatSessionService {
     @Transactional(readOnly = true)
     public PageResponse<ChatMessageResponse> getMessages(Long courseId, Long sessionId, int page, int size) {
         validatePage(page, size);
-        CourseAccess access = requireCourseAccess(courseId);
+        CourseAccess access = requireHistoryAccess(courseId);
         ChatSession session = chatSessionRepository.findBySessionIdAndCourseAndLearner(
                 sessionId, access.course(), access.user())
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));
@@ -294,6 +292,15 @@ public class ChatSessionServiceImpl implements ChatSessionService {
                 .clarificationCandidates(fu.coreservice.utils.ClarificationCodec.decode(message.getClarificationOptions()))
                 .courseSuggestions(fu.coreservice.utils.CourseSuggestionCodec.visible(message.getCourseSuggestions(), courseRepository, courseEnrollmentRepository, session.getLearner()))
                 .citations(citations.getOrDefault(message.getMessageId(), List.of())).build());
+    }
+
+    private CourseAccess requireHistoryAccess(Long courseId) {
+        User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        Course course = courseRepository.findById(courseId)
+                .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
+        CourseAccessPolicy.requireHistoryAccess(course, user);
+        return new CourseAccess(user, course);
     }
 
     private CourseAccess requireCourseAccess(Long courseId) {
@@ -329,6 +336,8 @@ public class ChatSessionServiceImpl implements ChatSessionService {
 
     private ChatSessionResponse toSessionResponse(ChatSession session) {
         return ChatSessionResponse.builder().sessionId(session.getSessionId())
+                .readOnly(session.getCourse() != null && !CourseAccessPolicy.canChat(session.getCourse(), session.getLearner(),
+                    () -> courseEnrollmentRepository.existsByCourse_CourseIdAndUser(session.getCourse().getCourseId(), session.getLearner())))
                 .courseId(session.getCourse() == null ? null : session.getCourse().getCourseId())
                 .planId(session.getPlan() == null ? null : session.getPlan().getPlanId())
                 .title(session.getTitle()).startedAt(session.getStartedAt())

@@ -8,6 +8,7 @@ import java.time.LocalDateTime;
 @Builder
 public class ChatSessionResponse {
     private Long sessionId;
+    private boolean readOnly;
     private Long courseId;
     private Long planId;
     private String title;

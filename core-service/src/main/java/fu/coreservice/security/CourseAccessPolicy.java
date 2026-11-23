@@ -31,6 +31,17 @@ public final class CourseAccessPolicy {
         }
     }
 
+    public static void requireHistoryAccess(Course course, User user) {
+        requireNotebookRole(course, user);
+        if (course.isNotebook() && !isOwner(course, user)) {
+            throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
+        }
+    }
+
+    public static boolean canChat(Course course, User user, BooleanSupplier enrolled) {
+        return isOwner(course, user) || (!course.isNotebook() && enrolled.getAsBoolean());
+    }
+
     public static void requireGraphWriteAccess(Course course, User user) {
         requireOwner(course, user);
         if (!course.isNotebook() && user.getRole() != UserRole.INSTRUCTOR) {
