@@ -37,6 +37,15 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private final ActivityAlertService alerts;
 
     @Override
+    public List<ChatCourseOption> courses() {
+        User user = currentUser();
+        Set<Long> joined = new HashSet<>(enrollments.findCourseIdsByUser(user));
+        return sessions.findHistoryCourses(user).stream().map(course -> new ChatCourseOption(
+                course.getCourseId(), course.getCourseName(),
+                !CourseAccessPolicy.isOwner(course, user) && !joined.contains(course.getCourseId()))).toList();
+    }
+
+    @Override
     public PageResponse<ChatSessionResponse> search(Long courseId, String query, int page, int size) {
         validatePage(page, size);
         if (query == null || query.length() > 255) throw new AppException(ErrorCode.INVALID_PARAMETER);
@@ -118,7 +127,9 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private boolean accessibleDocument(ChatSession session, Document document) {
         Course course = document.getCourse();
         if (session.getCourse() == null) return course.isPublic() && !course.isNotebook();
-        return course.getCourseId().equals(session.getCourse().getCourseId());
+        return course.getCourseId().equals(session.getCourse().getCourseId())
+                && CourseAccessPolicy.canChat(course, session.getLearner(),
+                    () -> enrollments.existsByCourse_CourseIdAndUser(course.getCourseId(), session.getLearner()));
     }
 
     private ChatCitationResponse toCitation(MessageCitation citation, Document doc) {
@@ -141,7 +152,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private void requireScope(Long courseId, User user) {
         if (courseId != null) {
             Course course = courses.findById(courseId).orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-            CourseAccessPolicy.requireReadAccess(course, user, () -> enrollments.existsByCourse_CourseIdAndUser(courseId, user));
+            CourseAccessPolicy.requireHistoryAccess(course, user);
         }
     }
 
@@ -155,6 +166,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
 
     private ChatSessionResponse toSession(ChatSession session) {
         return ChatSessionResponse.builder().sessionId(session.getSessionId()).title(session.getTitle())
+                .readOnly(session.getCourse() != null && !CourseAccessPolicy.canChat(session.getCourse(), session.getLearner(),
+                    () -> enrollments.existsByCourse_CourseIdAndUser(session.getCourse().getCourseId(), session.getLearner())))
                 .courseId(session.getCourse() == null ? null : session.getCourse().getCourseId())
                 .planId(session.getPlan() == null ? null : session.getPlan().getPlanId())
                 .startedAt(session.getStartedAt()).lastActive(session.getLastActive()).build();

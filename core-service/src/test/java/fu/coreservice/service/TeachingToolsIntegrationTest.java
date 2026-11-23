@@ -41,6 +41,11 @@ class TeachingToolsIntegrationTest {
     @Autowired ChatSessionService chatSessions;
     @Autowired ChatHistoryService chatHistory;
     @Autowired CourseEnrollmentRepository enrollments;
+    @Autowired CourseService courseService;
+    @Autowired CourseEnrollmentService enrollmentService;
+    @Autowired CoursePrivacyMailRepository privacyMail;
+    @Autowired DocumentRepository documents;
+    @Autowired MessageCitationRepository citations;
     private User owner, student, other, admin;
     private Course course;
 
@@ -254,6 +259,105 @@ class TeachingToolsIntegrationTest {
         assertThat(joined.getFirst().enrolled()).isTrue();
         course.setPublic(false); courses.saveAndFlush(course);
         assertThat(chatHistory.recent(null, session.getSessionId(), null, 20).messages().getLast().getCourseSuggestions()).isEmpty();
+    }
+
+    @Test void privateCourseRemovesEnrollmentButPreservesHistoryAndLearningData() {
+        course.setPublic(true); courses.saveAndFlush(course);
+        enrollments.saveAndFlush(CourseEnrollment.builder().course(course).user(student).build());
+        var bot = answer(student);
+        var doc = documents.saveAndFlush(Document.builder().course(course).user(owner).fileName("private.pdf")
+                .fileUrlPath("private.pdf").docStatus(UploadStatus.COMPLETED).build());
+        var citation = citations.saveAndFlush(MessageCitation.builder().message(bot).citationNumber(1)
+                .documentId(doc.getDocumentId()).citationType(CitationType.ANSWER_CONCEPT).snippetText("Previously received excerpt").build());
+        var mastery = masteries.saveAndFlush(LearnerMastery.builder().learner(student).course(course)
+                .neo4jConceptId("privacy-test").masteryStatus(MasteryStatus.MASTERED).build());
+        savedLabel(course, "privacy-test", "Saved label");
+        long planCount = plans.count();
+        long mailCount = privacyMail.count();
+        var update = fu.coreservice.dto.course.CourseUpdateRequest.builder().courseName(course.getCourseName())
+                .description("Test").domain("CS").language("en").isPublic(false).build();
+        courseService.updateCourse(course.getCourseId(), update);
+        assertThat(course.isPublic()).isFalse();
+        assertThat(enrollments.existsByCourseAndUser(course, student)).isFalse();
+        assertThat(privacyMail.count()).isEqualTo(mailCount + 1);
+        assertThat(privacyMail.findAll()).anySatisfy(item -> {
+            assertThat(item.getEmail()).isEqualTo(student.getEmail());
+            assertThat(item.getCourseName()).isEqualTo(course.getCourseName());
+        });
+        assertThat(masteries.existsById(mastery.getMasteryId())).isTrue();
+        assertThat(plans.count()).isEqualTo(planCount);
+        courseService.updateCourse(course.getCourseId(), update);
+        assertThat(privacyMail.count()).isEqualTo(mailCount + 1);
+
+        signIn(student);
+        var id = bot.getSession().getSessionId();
+        assertThat(chatHistory.courses()).anySatisfy(item -> {
+            assertThat(item.courseId()).isEqualTo(course.getCourseId()); assertThat(item.readOnly()).isTrue();
+        });
+        assertThat(chatSessions.getMySessions(course.getCourseId(), 0, 20).getContent())
+                .anySatisfy(item -> { assertThat(item.getSessionId()).isEqualTo(id); assertThat(item.isReadOnly()).isTrue(); });
+        assertThat(chatHistory.get(course.getCourseId(), id).isReadOnly()).isTrue();
+        var historicCitation = chatHistory.recent(course.getCourseId(), id, null, 20).messages().getFirst().getCitations().getFirst();
+        assertThat(historicCitation.getSnippetText()).isEqualTo("Previously received excerpt");
+        assertThat(historicCitation.getFileName()).isNull();
+        assertThatThrownBy(() -> chatHistory.source(course.getCourseId(), id, citation.getCitationId())).isInstanceOf(AppException.class);
+        assertThat(chatHistory.search(course.getCourseId(), "Answer", 0, 20).getContent()).hasSize(1);
+        assertThat(chatHistory.recent(course.getCourseId(), id, null, 20).messages()).hasSize(1);
+        assertThat(chatSessions.getMessages(course.getCourseId(), id, 0, 20).getContent()).hasSize(1);
+        assertThatThrownBy(() -> chatSessions.beginTurn(course.getCourseId(), id,
+                fu.coreservice.dto.chat.ChatRequest.builder().message("New question").build())).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> chatSessions.createSession(course.getCourseId(), new fu.coreservice.dto.chat.ChatSessionCreateRequest()))
+                .isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> enrollmentService.enrollCourse(course.getCourseId())).isInstanceOf(AppException.class);
+        signIn(other);
+        assertThat(chatHistory.courses()).isEmpty();
+        assertThatThrownBy(() -> chatHistory.get(course.getCourseId(), id)).isInstanceOf(AppException.class);
+        signIn(owner);
+        update.setIsPublic(true); courseService.updateCourse(course.getCourseId(), update);
+        signIn(student);
+        enrollmentService.enrollCourse(course.getCourseId());
+        assertThat(chatHistory.get(course.getCourseId(), id).isReadOnly()).isFalse();
+        assertThat(chatSessions.beginTurn(course.getCourseId(), id,
+                fu.coreservice.dto.chat.ChatRequest.builder().message("Continue").build())).isNotNull();
+        assertThat(masteries.existsById(mastery.getMasteryId())).isTrue();
+    }
+
+    @Test void voluntarilyLeavingAlsoKeepsPersonalChatHistoryReadOnly() {
+        course.setPublic(true); courses.saveAndFlush(course);
+        enrollments.saveAndFlush(CourseEnrollment.builder().course(course).user(student).build());
+        var bot = answer(student);
+        signIn(student);
+        enrollmentService.leaveCourse(course.getCourseId());
+        assertThat(chatHistory.get(course.getCourseId(), bot.getSession().getSessionId()).isReadOnly()).isTrue();
+        assertThat(chatHistory.recent(course.getCourseId(), bot.getSession().getSessionId(), null, 20).messages()).hasSize(1);
+    }
+
+    @Test void publicUpdatesKeepEnrollmentAndOnlyOwnerCanMakePrivate() {
+        course.setPublic(true); courses.saveAndFlush(course);
+        enrollments.saveAndFlush(CourseEnrollment.builder().course(course).user(student).build());
+        var update = fu.coreservice.dto.course.CourseUpdateRequest.builder().courseName("Updated course")
+                .description("Test").domain("CS").language("en").isPublic(true).build();
+        long pending = privacyMail.count();
+        courseService.updateCourse(course.getCourseId(), update);
+        assertThat(enrollments.existsByCourseAndUser(course, student)).isTrue();
+        assertThat(privacyMail.count()).isEqualTo(pending);
+        signIn(other); update.setIsPublic(false);
+        assertThatThrownBy(() -> courseService.updateCourse(course.getCourseId(), update)).isInstanceOf(AppException.class);
+        assertThat(course.isPublic()).isTrue();
+        assertThat(enrollments.existsByCourseAndUser(course, student)).isTrue();
+        assertThat(privacyMail.count()).isEqualTo(pending);
+    }
+
+    @Test void hideEndpointAlsoRemovesLearnersAndQueuesEmailWithoutDeletingChat() {
+        course.setPublic(true); courses.saveAndFlush(course);
+        enrollments.saveAndFlush(CourseEnrollment.builder().course(course).user(student).build());
+        var bot = answer(student);
+        long pending = privacyMail.count();
+        courseService.deleteCourse(course.getCourseId());
+        assertThat(course.isPublic()).isFalse();
+        assertThat(enrollments.existsByCourseAndUser(course, student)).isFalse();
+        assertThat(privacyMail.count()).isEqualTo(pending + 1);
+        assertThat(messages.existsById(bot.getMessageId())).isTrue();
     }
 
     private User user(UserRole role) {

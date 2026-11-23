@@ -28,6 +28,8 @@ public interface ChatSessionRepository extends JpaRepository<ChatSession, Long> 
     @org.springframework.data.jpa.repository.Query("select s from ChatSession s where s.sessionId = :id and s.learner = :user")
     Optional<ChatSession> findOwnedForUpdate(@org.springframework.data.repository.query.Param("id") Long id,
                                            @org.springframework.data.repository.query.Param("user") User user);
+    @org.springframework.data.jpa.repository.Query("select distinct s.course from ChatSession s where s.learner = :user and s.course.notebook = false order by s.course.courseName")
+    List<Course> findHistoryCourses(@org.springframework.data.repository.query.Param("user") User user);
     Page<ChatSession> findByLearnerAndCourse(User learner, Course course, Pageable pageable);
     Page<ChatSession> findByLearnerAndCourseIsNull(User learner, Pageable pageable);
     Page<ChatSession> findByLearnerAndCourseIsPublic(User learner, Boolean isPublic, Pageable pageable);

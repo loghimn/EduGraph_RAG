@@ -32,7 +32,7 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
                 || (request.getComment() != null && request.getComment().length() > 2000)) {
             throw new AppException(ErrorCode.INVALID_REQUEST);
         }
-        OwnedSession owned = requireOwnedSession(courseId, sessionId);
+        OwnedSession owned = requireOwnedSession(courseId, sessionId, false);
         ChatMessage message = requireMessage(owned.session(), messageId, true);
         MessageFeedback feedback = findFeedback(message, owned.user());
         if (feedback == null) {
@@ -47,7 +47,7 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
     @Override
     @Transactional(readOnly = true)
     public MessageFeedbackResponse getFeedback(Long courseId, Long sessionId, Long messageId) {
-        OwnedSession owned = requireOwnedSession(courseId, sessionId);
+        OwnedSession owned = requireOwnedSession(courseId, sessionId, true);
         ChatMessage message = requireMessage(owned.session(), messageId, false);
         MessageFeedback feedback = findFeedback(message, owned.user());
         return feedback == null ? null : toResponse(feedback);
@@ -56,13 +56,13 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
     @Override
     @Transactional
     public void deleteFeedback(Long courseId, Long sessionId, Long messageId) {
-        OwnedSession owned = requireOwnedSession(courseId, sessionId);
+        OwnedSession owned = requireOwnedSession(courseId, sessionId, false);
         ChatMessage message = requireMessage(owned.session(), messageId, true);
         MessageFeedback feedback = findFeedback(message, owned.user());
         if (feedback != null) messageFeedbackRepository.delete(feedback);
     }
 
-    private OwnedSession requireOwnedSession(Long courseId, Long sessionId) {
+    private OwnedSession requireOwnedSession(Long courseId, Long sessionId, boolean historyOnly) {
         User user = userRepository.findByEmail(SecurityUtils.getCurrentUserEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         if (courseId == null) {
@@ -73,7 +73,8 @@ public class MessageFeedbackServiceImpl implements MessageFeedbackService {
         }
         Course course = courseRepository.findById(courseId)
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_NOT_FOUND));
-        CourseAccessPolicy.requireReadAccess(course, user,
+        if (historyOnly) CourseAccessPolicy.requireHistoryAccess(course, user);
+        else CourseAccessPolicy.requireReadAccess(course, user,
                 () -> courseEnrollmentRepository.existsByCourse_CourseIdAndUser(courseId, user));
         ChatSession session = chatSessionRepository.findBySessionIdAndCourseAndLearner(sessionId, course, user)
                 .orElseThrow(() -> new AppException(ErrorCode.CHAT_SESSION_NOT_FOUND));

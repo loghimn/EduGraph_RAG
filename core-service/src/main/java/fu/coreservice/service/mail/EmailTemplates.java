@@ -75,6 +75,36 @@ public final class EmailTemplates {
         return new EmailContent(subject, text, html);
     }
 
+    public static EmailContent coursePrivacy(String courseName) {
+        String subject = "EduGraph-RAG - Thông báo thay đổi quyền truy cập khóa học";
+        String html = template("layout.html")
+                .replace("{{title}}", subject)
+                .replace("{{preheader}}", "Khóa học đã chuyển sang riêng tư. Lịch sử hội thoại và dữ liệu học tập của bạn vẫn được giữ nguyên.")
+                .replace("{{eyebrow}}", "CẬP NHẬT KHÓA HỌC")
+                .replace("{{heading}}", "Khóa học đã chuyển<br>sang riêng tư")
+                .replace("{{intro}}", "Thông tin về quyền truy cập và dữ liệu học tập của bạn.")
+                .replace("{{content}}", template("course-privacy.html"))
+                // Course names are user content, never HTML or template instructions.
+                .replace("{{courseName}}", HtmlUtils.htmlEscape(courseName));
+        String text = """
+                Xin chào bạn,
+
+                Giảng viên đã chuyển khóa học "%s" sang chế độ riêng tư và gỡ quyền tham gia của bạn.
+
+                BẠN VẪN CÓ THỂ
+                Xem lịch sử hội thoại của mình trong mục AI. Dữ liệu học tập của bạn vẫn được giữ nguyên.
+
+                QUYỀN TRUY CẬP ĐÃ TẠM DỪNG
+                Bạn không thể gửi câu hỏi mới, tạo hội thoại mới hoặc truy cập tài liệu và đồ thị của khóa học.
+
+                Để xem lại hội thoại: mở EduGraph-RAG, vào mục AI và chọn khóa học có nhãn "Chỉ xem lịch sử".
+                Nếu khóa học được công khai trở lại, bạn có thể đăng ký lại để tiếp tục học và trò chuyện.
+
+                Email tự động từ EduGraph-RAG. Vui lòng không trả lời email này.
+                """.formatted(courseName);
+        return new EmailContent(subject, text, html);
+    }
+
     private static String template(String name) {
         try (var input = new ClassPathResource("mail/" + name).getInputStream()) {
             return new String(input.readAllBytes(), StandardCharsets.UTF_8);

@@ -28,6 +28,7 @@ public class CourseServiceImpl implements CourseService {
 
     private final CourseRepository courseRepository;
     private final UserRepository userRepository;
+    private final CoursePrivacyService privacy;
 
     @Override
     @Transactional
@@ -59,7 +60,8 @@ public class CourseServiceImpl implements CourseService {
         User currentUser = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
-        Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
+        Course course = courseRepository.findLockedSettingsCourse(courseId)
+                .filter(item -> item.getUser().getUserId().equals(currentUser.getUserId()))
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
         if (course.isNotebook()) {
@@ -70,7 +72,8 @@ public class CourseServiceImpl implements CourseService {
         course.setDescription(request.getDescription().trim());
         course.setDomain(request.getDomain().trim());
         course.setLanguage(request.getLanguage().trim());
-        course.setPublic(request.getIsPublic());
+        if (course.isPublic() && !request.getIsPublic()) privacy.makePrivate(course);
+        else course.setPublic(request.getIsPublic());
 
         Course updatedCourse = courseRepository.save(course);
 
@@ -85,12 +88,13 @@ public class CourseServiceImpl implements CourseService {
         User currentUser = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
-        Course course = courseRepository.findByCourseIdAndUser(courseId, currentUser)
+        Course course = courseRepository.findLockedSettingsCourse(courseId)
+                .filter(item -> item.getUser().getUserId().equals(currentUser.getUserId()))
                 .orElseThrow(() -> new AppException(ErrorCode.COURSE_ACCESS_DENIED));
 
         if (course.isNotebook()) throw new AppException(ErrorCode.COURSE_ACCESS_DENIED);
 
-        course.setPublic(false);
+        privacy.makePrivate(course);
 
         courseRepository.save(course);
     }
