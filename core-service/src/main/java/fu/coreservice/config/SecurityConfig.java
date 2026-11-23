@@ -52,6 +52,7 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/logout-all").authenticated()
                         .requestMatchers(
                                 "/actuator/health",
                                 "/actuator/health/**",

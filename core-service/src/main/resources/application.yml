@@ -68,7 +68,7 @@ jwt:
   # Bắt buộc cung cấp qua env (core-service/env hoặc environment variable) — không có default.
   secret: ${JWT_SECRET}
   access-token:
-    expiration: 3600000    # 1 hour in milliseconds
+    expiration: 1800000    # 30 minutes in milliseconds
   refresh-token:
     expiration: 604800000  # 7 days in milliseconds
 

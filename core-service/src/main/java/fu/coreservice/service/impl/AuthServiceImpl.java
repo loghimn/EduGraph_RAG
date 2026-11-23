@@ -177,9 +177,13 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public void logoutAllSessions(Long userId) {
-        User user = userRepository.findById(userId)
+    public void logoutAllSessions() {
+        String email = fu.coreservice.utils.SecurityUtils.getCurrentUserEmail();
+        User user = userRepository.findLockedByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
+        user.requireCanAuthenticate();
+        // Increment in the database so simultaneous requests cannot reuse a stale generation.
+        userRepository.revokeAccessTokens(user.getUserId());
         userSessionRepository.deleteAllByUser(user);
     }
 

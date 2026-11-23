@@ -119,16 +119,14 @@ public class AuthController {
 
     @Operation(
             summary = "Logout all sessions",
-            description = "Invalidate all sessions for a given user ID",
+            description = "Revoke every session and access token for the authenticated account, including this device",
             responses = {
                     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "All sessions logged out")
             }
     )
     @PostMapping("/logout-all")
-    public ResponseEntity<ApiResponse<Void>> logoutAll(
-            @Parameter(description = "User ID to logout all sessions") @RequestParam Long userId
-    ) {
-        authService.logoutAllSessions(userId);
+    public ResponseEntity<ApiResponse<Void>> logoutAll() {
+        authService.logoutAllSessions();
         return ResponseEntity.ok(
                 ApiResponse.<Void>builder()
                         .success(true)

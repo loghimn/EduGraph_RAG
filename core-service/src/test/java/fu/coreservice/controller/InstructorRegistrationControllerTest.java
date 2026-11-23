@@ -49,6 +49,13 @@ class InstructorRegistrationControllerTest {
 
     @AfterEach void cleanup() { SecurityContextHolder.clearContext(); context.close(); }
 
+
+    @Test void logoutAllRequiresAuthenticationAndNeverForwardsAnArbitraryUserId() throws Exception {
+        mvc.perform(post("/api/auth/logout-all").servletPath("/api/auth/logout-all")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(auth);
+        mvc.perform(as(post("/api/auth/logout-all").param("userId", "999"), "STUDENT")).andExpect(status().isOk());
+        verify(auth).logoutAllSessions();
+    }
     @Test void adminCanListApproveAndReject() throws Exception {
         mvc.perform(as(get(BASE), "ADMIN")).andExpect(status().isOk());
         mvc.perform(as(post(BASE + "/1/approve"), "ADMIN")).andExpect(status().isOk());

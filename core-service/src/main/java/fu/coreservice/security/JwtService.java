@@ -50,6 +50,7 @@ public class JwtService {
     public String generateAccessToken(UserDetails userDetails, Long userId, String role) {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put(TOKEN_TYPE_CLAIM, TOKEN_TYPE_ACCESS);
+        extraClaims.put("sessionVersion", sessionVersion(userDetails));
         extraClaims.put("credential", TokenHashUtils.hash(userDetails.getPassword()));
         extraClaims.put("userId", userId);
         extraClaims.put("role", role);
@@ -67,6 +68,7 @@ public class JwtService {
     private String generateToken(Map<String, Object> extraClaims, UserDetails userDetails, long expiration) {
         return Jwts.builder()
                 .claims(extraClaims)
+                .id(java.util.UUID.randomUUID().toString())
                 .subject(userDetails.getUsername())
                 .issuedAt(new Date(System.currentTimeMillis()))
                 .expiration(new Date(System.currentTimeMillis() + expiration))
@@ -82,7 +84,9 @@ public class JwtService {
     public boolean isTokenValid(String token, UserDetails userDetails) {
         try {
             final String username = extractUsername(token);
-            return userDetails.isEnabled()
+            Number issuedVersion = extractClaim(token, claims -> claims.get("sessionVersion", Number.class));
+            return (issuedVersion == null ? 0 : issuedVersion.longValue()) == sessionVersion(userDetails)
+                    && userDetails.isEnabled()
                     && TokenHashUtils.hash(userDetails.getPassword()).equals(
                         extractClaim(token, claims -> claims.get("credential", String.class)))
                     && isAccessToken(token)
@@ -91,6 +95,10 @@ public class JwtService {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private long sessionVersion(UserDetails details) {
+        return details instanceof SessionUserDetails session ? session.getSessionVersion() : 0;
     }
 
     /**
